@@ -1,0 +1,14 @@
+# Local scratch and run output
+logs/
+*.log
+.env
+.env.*
+
+# Per-machine editor and OS files
+.DS_Store
+.vscode/
+.idea/
+
+# Claude Code local settings and memory (checked-in settings.json stays)
+.claude/settings.local.json
+.claude/memory/
