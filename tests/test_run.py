@@ -487,3 +487,101 @@ class RetryBlocked(RunCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnexpectedFailures(RunCase):
+    """Every stop is supposed to be a named class carrying evidence. Before these fixes an
+    unexpected exception, a git failure, or an unreadable card produced a traceback, a stuck
+    record, or a launched task with no task text in its brief (review findings #4, #13, #8)."""
+
+    def test_an_unexpected_exception_becomes_a_named_halt_not_a_traceback(self):
+        class Exploding:
+            def __getattr__(self, name):
+                raise RuntimeError("the adapter blew up on %s" % name)
+
+        outcome = self.go(adapter=Exploding())
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
+        self.assertEqual(outcome.halt_class, contracts.HALT_UNEXPECTED_ERROR)
+        self.assertIn("RuntimeError", outcome.message)
+        record = self.store().get("T-1")
+        self.assertEqual(record["status"], contracts.STATUS_HALTED)
+        self.assertEqual(record["halt_evidence"]["error_type"], "RuntimeError")
+        self.assertEqual(self.store().terminal()["run_status"], contracts.RUN_HALTED)
+        self.assertIsNone(self.store().lease())
+
+    def test_a_git_failure_becomes_a_named_halt_carrying_the_git_evidence(self):
+        original = gitread.rev_parse
+
+        def explode(repo, ref):
+            if ref == "main":
+                raise gitread.GitError(["git", "rev-parse", "main"], 128, "bad object main")
+            return original(repo, ref)
+
+        gitread.rev_parse = explode
+        try:
+            outcome = self.go()
+        finally:
+            gitread.rev_parse = original
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
+        self.assertEqual(outcome.halt_class, contracts.HALT_UNCLEAN_EXIT)
+        self.assertIn("bad object main", self.store().get("T-1")["halt_evidence"]["stderr"])
+
+    def test_an_unreadable_tracker_card_excludes_the_task_instead_of_launching_it(self):
+        class Unreadable:
+            def __init__(self, real): self.real = real
+            def read(self, task_id):
+                if task_id == "T-1":
+                    return {"id": task_id, "title": "", "description": "", "status": None,
+                            "skipped": "gh exited 1: not authenticated"}
+                return self.real.read(task_id)
+            def __getattr__(self, name): return getattr(self.real, name)
+
+        from relay import adapters
+        self.task_success("T-2")
+        self.closeout_landed("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+        outcome = self.go(adapter=Unreadable(adapters.build(self.manifest)))
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        record = self.store().get("T-1")
+        self.assertEqual(record["status"], contracts.STATUS_EXCLUDED)
+        self.assertIn("not authenticated", record["excluded_reason"])
+        self.assertIsNone(record["session_id"], "a process was launched on an unreadable card")
+        self.assertEqual(self.store().get("T-2")["status"], contracts.STATUS_LANDED)
+
+
+class LeaseOwnership(RunCase):
+    """Two runners must never merge the same repo. The gate can outlast the lease TTL, so the
+    tail carries its own heartbeat and refuses once the lease is gone (review findings #6, #1)."""
+
+    def test_a_lease_lost_during_the_tail_refuses_to_merge(self):
+        self.task_success("T-1")
+        store = self.store()
+        store.acquire()
+        # Another runner takes the repo lease while this one is between steps.
+        other = state.StateStore(os.path.join(self.tmp.name, "other.toml"), self.repo,
+                                 home=self.home, pid=424242)
+        with open(os.path.join(self.tmp.name, "other.toml"), "w") as handle:
+            handle.write("# a second manifest naming the same repo\n")
+        store.release()
+        self.assertTrue(other.acquire().ok)
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_LEASE)
+        self.assertEqual(gitread.rev_parse(self.repo, "origin/main"),
+                         gitread.rev_parse(self.repo, "main"),
+                         "a merge reached the remote while another runner held the repo lease")
+        other.release()
+
+    def test_the_tail_refuses_to_merge_once_the_heartbeat_reports_the_lease_is_gone(self):
+        from relay import gitwrite as gw
+        from test_gitwrite import commit_on_branch
+
+        commit_on_branch(self.repo, "relay/T-1", {"src/t1.py": "value = 1\n"}, "T-1", base="main")
+        _repo.git(self.repo, "checkout", "-q", "main")
+        result = gw.local_merge_tail(
+            self.repo, "T-1", "main", gitread.rev_parse(self.repo, "origin/main"),
+            ["true"], os.path.join(self.tmp.name, "gate.log"), still_ours=lambda: False)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.halt_class, contracts.HALT_RUNNER_CRASHED)
+        self.assertEqual(gitread.rev_parse(self.repo, "origin/main"),
+                         gitread.rev_parse(self.repo, "main"))

@@ -49,6 +49,7 @@ class _Run:
     overrides: dict
     launch_kwargs: dict
     now: object
+    allowed_paths: tuple
 
 
 @dataclass
@@ -138,28 +139,63 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
                % ((acquired.previous_holder or {}).get("holder_pid"),
                   len(acquired.reclaimed_ids), contracts.HALT_RUNNER_CRASHED))
 
+    # Resolved once, here, from the repo as it stands before any task has touched it. Reading
+    # it per closeout would let a task's own merge move the bound its closeout is checked
+    # against (R53, KTD15).
+    allowed_paths = tuple(manifest_module.completed_allowed_paths(
+        manifest, manifest_module.docs_root_for(repo)))
     config = _Run(manifest, adapter, store, repo, default, env, base_env, home, stream,
-                  retry_blocked, overrides, launch_kwargs, now)
+                  retry_blocked, overrides, launch_kwargs, now, allowed_paths)
     outcome = RunOutcome(EXIT_OK, store=store)
+    wrote_terminal = False
     try:
         store.validate()
         verify.startup_reverify(manifest, store, adapter, env=env, now=now)
         for index, task in enumerate(manifest.tasks):
             try:
                 _one_task(config, task)
-            except _Halt as halt:
-                store.upsert(halt.task_id, status=contracts.STATUS_HALTED,
-                             halt_class=halt.halt_class, halt_evidence=halt.evidence)
-                store.write_terminal(contracts.RUN_HALTED, halt.task_id, halt.halt_class,
-                                     contracts.CLI_VERSION_TESTED)
-                outcome = RunOutcome(EXIT_HALTED, halt.task_id, halt.halt_class, halt.message,
-                                     store, store.records())
-                return outcome
-            store.set_cursor(index + 1)
+            except _Halt as exc:
+                # Rebound deliberately: Python unbinds the `as` name at the end of an except
+                # block, so the handler below could not see it.
+                halt = exc
+            except gitread.GitError as exc:
+                halt = _Halt(task.id, contracts.HALT_UNCLEAN_EXIT,
+                             "a git command failed while handling %s: %s" % (task.id, exc),
+                             {"task": task.id, "branch": gitwrite.task_branch_for(task.id),
+                              "args": exc.args_list, "returncode": exc.returncode,
+                              "stderr": (exc.stderr or "")[-2000:]})
+            except Exception as exc:
+                # A defect or an unanticipated library error. It still stops the way every
+                # other stop does, because an operator cannot act on a traceback.
+                halt = _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR,
+                             "the runner hit an unexpected %s on %s: %s"
+                             % (type(exc).__name__, task.id, exc),
+                             {"task": task.id, "error_type": type(exc).__name__,
+                              "error": str(exc)[:500]})
+            else:
+                store.set_cursor(index + 1)
+                continue
+            store.upsert(halt.task_id, status=contracts.STATUS_HALTED,
+                         halt_class=halt.halt_class, halt_evidence=halt.evidence)
+            store.write_terminal(contracts.RUN_HALTED, halt.task_id, halt.halt_class,
+                                 contracts.CLI_VERSION_TESTED)
+            wrote_terminal = True
+            return RunOutcome(EXIT_HALTED, halt.task_id, halt.halt_class, halt.message,
+                              store, store.records())
         store.write_terminal(contracts.RUN_COMPLETED, cli_version=contracts.CLI_VERSION_TESTED)
+        wrote_terminal = True
         outcome.records = store.records()
         return outcome
     finally:
+        # The lease is released on the way out either way, and status_word reads a crash from a
+        # surviving lease. So a run that reached neither terminal write has to say so itself,
+        # or `relay status` reports the previous run's outcome as if it were this one.
+        if not wrote_terminal:
+            try:
+                store.write_terminal(contracts.RUN_CRASHED,
+                                     cli_version=contracts.CLI_VERSION_TESTED)
+            except Exception:
+                pass
         store.release()
 
 
@@ -195,6 +231,12 @@ def _one_task(cfg, task):
 
     # Baseline (R17): what the runner will compare against when it decides landing.
     card = adapter.read(task.id)
+    if card.get("skipped"):
+        reason = "the tracker card could not be read: %s" % card["skipped"]
+        store.upsert(task.id, status=contracts.STATUS_EXCLUDED, excluded_reason=reason)
+        if stream is not None:
+            stream("%s skipped: %s" % (task.id, reason))
+        return
     baseline_sha = gitread.rev_parse(repo, default)
     card_status = adapter.status(task.id)
     baseline_comment_id = _baseline_comment_id(adapter, task.id)
@@ -233,6 +275,11 @@ def _one_task(cfg, task):
     context = _Context(task=task, card=card, branch=branch, baseline_sha=baseline_sha,
                        baseline_comment_id=baseline_comment_id, digest=digest,
                        launched=launched, findings=findings, **vars(cfg))
+
+    if launched.launch_error:
+        raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR,
+                    "%s could not be launched: %s" % (task.id, launched.launch_error),
+                    {"task": task.id, "error": launched.launch_error, "error_type": "launch failure"})
 
     if launched.lease_lost:
         raise _Halt(task.id, contracts.HALT_RUNNER_CRASHED,
@@ -313,10 +360,21 @@ def _merge_route(ctx):
                     "pr_terminal mode is not wired into the run loop yet")
 
     ctx.store.upsert(ctx.task.id, status=contracts.STATUS_MERGING)
-    tail = gitwrite.local_merge_tail(
-        ctx.repo, ctx.task.id, ctx.default, ctx.baseline_sha, list(ctx.manifest.gate.command),
-        ctx.store.path("gate", ctx.task.id + ".log"), ops=ctx.store, env=ctx.env,
-        gate_timeout_seconds=ctx.overrides.get("gate_seconds"))
+    # The gate is the longest thing the runner does without a child process to heartbeat for
+    # it, so the tail carries its own heartbeat and refuses to merge or push once the lease is
+    # no longer ours (R31, R47).
+    beat = launch._Heartbeat(ctx.store.heartbeat,
+                             ctx.launch_kwargs.get("heartbeat_interval",
+                                                   contracts.LEASE_HEARTBEAT_SECONDS))
+    beat.start()
+    try:
+        tail = gitwrite.local_merge_tail(
+            ctx.repo, ctx.task.id, ctx.default, ctx.baseline_sha, list(ctx.manifest.gate.command),
+            ctx.store.path("gate", ctx.task.id + ".log"), ops=ctx.store, env=ctx.env,
+            gate_timeout_seconds=ctx.overrides.get("gate_seconds"),
+            still_ours=lambda: not beat.lost)
+    finally:
+        beat.stop()
     if not tail.ok:
         ctx.store.upsert(ctx.task.id, halt_evidence=tail.evidence)
         raise _Halt(ctx.task.id, tail.halt_class,
@@ -384,8 +442,7 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
     The order matters: the check runs against the local head before the push, so a commit
     outside the allowed paths is reset rather than reported after the fact (KTD15).
     """
-    docs_root = manifest_module.docs_root_for(ctx.repo)
-    allowed_paths = manifest_module.completed_allowed_paths(ctx.manifest, docs_root)
+    allowed_paths = list(ctx.allowed_paths)
     pre_closeout_head = gitread.rev_parse(ctx.repo, "HEAD")
     try:
         comments = ctx.adapter.comments_since(ctx.task.id, ctx.baseline_comment_id)
@@ -403,6 +460,12 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
         on_release=ctx.store.release, **ctx.launch_kwargs)
     ctx.findings.extend(result.findings)
     ctx.store.upsert(ctx.task.id, closeout=result.result, findings=ctx.findings)
+
+    if getattr(result.launch_result, "lease_lost", False):
+        raise _Halt(ctx.task.id, contracts.HALT_RUNNER_CRASHED,
+                    "the lease was lost while the closeout for %s was running; nothing was "
+                    "pushed" % ctx.task.id,
+                    {"stage": "closeout", "status": "merging", "branch": ctx.branch})
 
     scope = gitwrite.closeout_scope_check(ctx.repo, pre_closeout_head, allowed_paths,
                                           ops=ctx.store, task_id=ctx.task.id, env=ctx.env)

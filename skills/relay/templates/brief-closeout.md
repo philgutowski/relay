@@ -13,19 +13,7 @@ Plan: $plan_path
 Timing: $timing
 Gate: $gate
 
-Blockers the task process reported:
-
-$blockers
-
-Denied tool calls the runner recorded in the task's transcript:
-
-$denials
-
-Other findings:
-
-$findings
-
-## The task, and what its card already says
+## What the task and its card say
 
 $data_header
 
@@ -37,6 +25,18 @@ $description
 Comments on the card since this run started:
 
 $comments
+
+Blockers the task process reported:
+
+$blockers
+
+Denied tool calls the runner recorded in the task's transcript:
+
+$denials
+
+Other findings:
+
+$findings
 $data_end
 
 ## Duty one: record the outcome on the tracker

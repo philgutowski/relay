@@ -129,8 +129,6 @@ class MarkdownAdapter:
     def closing_reference(self, task_id, ref):
         """The line's own reference is the closing reference, so the id it returns is the task
         id rather than a comment id: this tracker has one place to write the landing."""
-        from .jira import reference_hit
-
         tasks, _ = self._tasks()
         entry = tasks.get(task_id)
         if entry is None or not entry["closed"] or not entry["reference"]:

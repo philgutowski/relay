@@ -6,6 +6,7 @@ run callable and an injected clock.
 """
 import os
 import tempfile
+import time
 import unittest
 
 import _paths
@@ -335,3 +336,41 @@ class PrMode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GateProcessGroup(TailBase):
+    """The gate builds, so it spawns compilers and test runners. Killing only the process the
+    manifest names left those running into the next task (review finding #14)."""
+
+    def test_a_gate_that_hangs_is_killed_with_its_whole_process_group(self):
+        marker = os.path.join(self.tmp.name, "child.pid")
+        script = (
+            "import os, subprocess, sys, time\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+            "open(%r, 'w').write(str(child.pid))\n"
+            "time.sleep(120)\n" % marker
+        )
+        path = os.path.join(self.tmp.name, "slow_gate.py")
+        with open(path, "w") as handle:
+            handle.write(script)
+        result = gitwrite.run_gate(self.repo, ["python3", path], self.gate_log, timeout_seconds=2)
+        self.assertFalse(result.ok)
+        self.assertTrue(result.timed_out)
+        with open(marker) as handle:
+            child_pid = int(handle.read().strip())
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except (ProcessLookupError, PermissionError):
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("the gate's child outlived the gate timeout")
+
+    def test_a_passing_gate_still_captures_its_output(self):
+        result = gitwrite.run_gate(self.repo, ["bash", "-c", "echo gate ran fine"], self.gate_log)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.returncode, 0)
+        with open(self.gate_log) as handle:
+            self.assertIn("gate ran fine", handle.read())
