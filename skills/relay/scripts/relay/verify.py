@@ -169,7 +169,7 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
                                         {"ci": probe.get("ci"), "url": probe.get("url")})
 
     if scope == SCOPE_CODE:
-        return _finish(Verdict(scope, checks, at=_stamp(now)), record, scope)
+        return _finish(Verdict(scope, checks, at=_stamp(now)), record)
 
     # Mirror (R6, R50: pushed only after the closeout, so it is a full scope check).
     target = gitwrite.mirror_target(manifest.project.mirror)
@@ -178,10 +178,9 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
     else:
         remote, destination = target
         mirror_sha = gitread.rev_parse(repo, "%s/%s" % (remote, destination))
-        head_sha = gitread.rev_parse(repo, default)
         checks["mirror_equals_head"] = _check(
-            PASS if mirror_sha and mirror_sha == head_sha else FAIL,
-            {"mirror_sha": mirror_sha, "head_sha": head_sha, "mirror": list(manifest.project.mirror)},
+            PASS if mirror_sha and mirror_sha == local_sha else FAIL,
+            {"mirror_sha": mirror_sha, "head_sha": local_sha, "mirror": list(manifest.project.mirror)},
         )
 
     # Tracker checks (R22). Both halves are required: code that merged while the card stayed put
@@ -191,7 +190,7 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
     except Exception as exc:
         card = {"skipped": "adapter.status raised: %s" % exc}
     if card.get("skipped"):
-        checks["card_terminal"] = _check(SKIPPED, {"skipped": card["skipped"]}, blocking=True)
+        checks["card_terminal"] = _skip(card["skipped"], blocking=True)
     else:
         checks["card_terminal"] = _check(PASS if card.get("terminal") else FAIL,
                                          {"status": card.get("status"), "terminal": bool(card.get("terminal"))})
@@ -205,17 +204,17 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
             checks["closing_reference"] = _check(PASS if comment_id else FAIL,
                                                  {"ref": landing_ref, "comment_id": comment_id})
         except Exception as exc:
-            checks["closing_reference"] = _check(
-                SKIPPED, {"skipped": "adapter.closing_reference raised: %s" % exc}, blocking=True)
+            checks["closing_reference"] = _skip(
+                "adapter.closing_reference raised: %s" % exc, blocking=True)
 
-    return _finish(Verdict(scope, checks, at=_stamp(now)), record, scope)
+    return _finish(Verdict(scope, checks, at=_stamp(now)), record)
 
 
 def _stamp(now):
     return datetime.fromtimestamp(now(), tz=timezone.utc).isoformat()
 
 
-def _finish(verdict, record, scope):
+def _finish(verdict, record):
     """Landing and the halt class, from the checks alone.
 
     Landed means every applicable full check passed and both tracker halves passed. A code side
@@ -229,7 +228,7 @@ def _finish(verdict, record, scope):
         "baseline_sha": record.get("baseline_sha"),
         "findings": _tracker_findings(record),
     }
-    if scope != SCOPE_FULL:
+    if verdict.scope != SCOPE_FULL:
         return verdict
     failed = verdict.failed()
     blocking = verdict.blocking_skips()

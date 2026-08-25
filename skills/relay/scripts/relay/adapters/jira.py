@@ -10,12 +10,12 @@ or push ever sees the token.
 """
 import base64
 import json
-import re
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import ConfigurationError, NETWORK_TIMEOUT_SECONDS, OUTCOME_LANDED, skipped
+from . import (ConfigurationError, NETWORK_TIMEOUT_SECONDS, OUTCOME_LANDED, reference_hit,
+               skipped)
 
 ISSUE_FIELDS = "summary,description,status,comment"
 # The issue endpoint is the one the plan pins. Enhanced search is the current Jira Cloud path for
@@ -23,8 +23,6 @@ ISSUE_FIELDS = "summary,description,status,comment"
 # rather than a wrong landing verdict.
 ISSUE_PATH = "/rest/api/3/issue/%s"
 SEARCH_PATH = "/rest/api/3/search/jql"
-
-SHA_TOKEN_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 
 WRITE_TOOL_PREFIX = "mcp__atlassian__"
 CLOSEOUT_TOOLS = (
@@ -55,16 +53,6 @@ def _adf_text(node):
             return inner + "\n"
         return inner
     return ""
-
-
-def reference_hit(body, ref):
-    """True when a comment body names a landing reference: the full string (a PR URL), or a
-    commit sha the body abbreviated (`abc1234` in the body for a full sha on the record)."""
-    if not ref or not body:
-        return False
-    if ref in body:
-        return True
-    return any(ref.startswith(token) for token in SHA_TOKEN_RE.findall(body))
 
 
 class JiraAdapter:
