@@ -121,6 +121,30 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(r["halt_class"], contracts.HALT_NO_ENVELOPE)
 
 
+class DenialTargets(unittest.TestCase):
+    def test_bash_command_naming_claude_dir_stays_denied_tool(self):
+        """KTD6 promotes to path_gate from input.file_path only; a denied Bash command that
+        merely mentions the directory is a plain denial with the command as its target."""
+        import json
+        import tempfile
+        lines = [
+            {"type": "assistant", "isSidechain": False, "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git checkout -- /repo/.claude/x"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+                 "content": "Permission to use Bash has been denied because Claude Code is running in don't ask mode."}]}},
+            {"type": "assistant", "isSidechain": False, "message": {"role": "assistant", "content": [{"type": "text", "text": "stopped"}]}},
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+            for line in lines:
+                handle.write(json.dumps(line) + "\n")
+        r = classify.classify(handle.name, EXITED)
+        os.unlink(handle.name)
+        self.assertEqual([f["class"] for f in r["findings"]], [contracts.HALT_DENIED_TOOL, contracts.HALT_NO_ENVELOPE])
+        self.assertEqual(r["findings"][0]["target"], "git checkout -- /repo/.claude/x")
+        self.assertEqual(r["halt_class"], contracts.HALT_NO_ENVELOPE)
+
+
 class EnvelopeParsing(unittest.TestCase):
     def test_unfenced_last_match_wins(self):
         text = "Earlier I wrote status: blocked while waiting.\n\nFinal:\n- status: complete\n- blockers: none\n"

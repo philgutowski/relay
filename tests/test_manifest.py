@@ -140,6 +140,20 @@ class NegativeManifests(ManifestCase):
             mf.load(self.write(drop_table(self.base, "qualifying")))
         self.assertIn("qualifying", str(ctx.exception))
 
+    def test_single_tasks_table_raises_manifest_error(self):
+        text = self.base.replace("[[tasks]]", "[tasks]", 1)
+        text = text[: text.rindex("[[tasks]]")]
+        with self.assertRaises(mf.ManifestError) as ctx:
+            mf.load(self.write(text))
+        self.assertIn("[[tasks]]", str(ctx.exception))
+
+    def test_non_list_allowed_is_reported_not_raised(self):
+        self.assert_error(self.edit(r"^allowed = \[.*$", 'allowed = "Bash,Read"'), "permissions.allowed must be a non-empty array")
+
+    def test_explicit_zero_timeout_is_rejected_not_defaulted(self):
+        result = self.assert_error(self.edit(r"^closeout_minutes = 15", "closeout_minutes = 0"), "timeouts.closeout_minutes must be a positive integer")
+        self.assertFalse(any("closeout_minutes" in d for d in result.defaults_applied))
+
     def test_bad_toml_raises(self):
         with self.assertRaises(mf.ManifestError):
             mf.load(self.write("this is = not [toml"))

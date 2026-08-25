@@ -16,3 +16,4 @@ logs/
 # Python bytecode
 __pycache__/
 *.pyc
+.coverage

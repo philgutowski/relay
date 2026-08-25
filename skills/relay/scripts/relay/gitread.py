@@ -93,9 +93,9 @@ def diff_name_only(repo, base, head):
     return [line for line in text.splitlines() if line]
 
 
-def config_get(repo, key):
+def config_get(repo, key, env=None):
     """A git config value as seen from inside the repo, or None when unset."""
-    proc = run(repo, ["config", "--get", key], check=False)
+    proc = run(repo, ["config", "--get", key], check=False, env=env)
     if proc.returncode != 0:
         return None
     return proc.stdout.strip()
