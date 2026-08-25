@@ -35,8 +35,57 @@ next one. Relay is that outer loop and nothing more.
 - **Skill:** `/relay`. Writes the manifest from a conversation, checks the three properties
   above, launches the runner.
 
-## Status
+## Install
 
-Pre-brainstorm. The design was proved by hand on 2026-08-25 with a shell script against a
-Jira-tracked repo (headless `dontAsk` permission mode plus an MCP allowlist lets tracker writes
-through with no prompt). `docs/` holds the pipeline artifacts as they are produced.
+Relay is a Claude Code plugin. Nothing in it needs editing to run against a new project: every
+project specific fact lives in a manifest outside the target repo.
+
+1. Install the plugin from this repo, alongside the `compound-engineering` plugin version 3.23.4
+   or later, which owns the per task pipeline Relay calls.
+2. Confirm the runner works. It is Python 3 standard library only, so there is nothing to install:
+
+   ```bash
+   python3 skills/relay/scripts/relay_cli.py validate docs/examples/manifest-markdown.toml
+   ```
+
+   It will refuse until `project.repo` points at a real checkout, and it names what is missing.
+3. For a Jira project, set the two environment variables the manifest names, by default
+   `JIRA_API_TOKEN` and `JIRA_EMAIL`. For GitHub Projects, be logged in to `gh`.
+
+## Use
+
+Copy the example that matches your tracker from `docs/examples/`, point it at your repo, and
+answer the four qualifying sentences in it. Then, in a Claude Code session in any repo, run
+`/relay` and it will read the tracker, confirm the list with you, validate, and launch the runner
+detached. Everything the skill does is a runner subcommand you can also run yourself:
+
+```bash
+python3 skills/relay/scripts/relay_cli.py validate <manifest> --list
+python3 skills/relay/scripts/relay_cli.py run <manifest>
+python3 skills/relay/scripts/relay_cli.py status <manifest>
+python3 skills/relay/scripts/relay_cli.py summary <manifest>
+```
+
+The run halts rather than continuing past an outcome it cannot confirm, and the summary names the
+halt class, its cause, and what a human still has to check. Repair by hand, then run again: the
+runner re-verifies what halted and resumes at the first task that did not land.
+
+## Where things are
+
+- `CONCEPTS.md`: the vocabulary. Runner, Manifest, Task process, Closeout process, Halt class,
+  Verify-landed. Read this first.
+- `docs/plans/2026-08-25-1346-feat-relay-outer-loop-plan.md`: the implementation plan, including
+  the requirements, the key technical decisions, and the halt class table.
+- `docs/examples/`: one manifest per adapter.
+- `docs/solutions/`: learnings, starting with the `.claude/` permission gate that shaped the
+  pre-flight scan.
+- `skills/relay/scripts/relay/`: the runner package.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Every test runs against a stub `claude` on the PATH with a temporary `HOME`. Nothing in the suite
+launches a real model, touches a network, or invokes `gh`.
