@@ -1,0 +1,64 @@
+# Relay manifest: a project whose tracker is a markdown file in the repo itself. The smallest
+# setup that works, and the one to try Relay with first.
+#
+# The tracker file's grammar:
+#
+#   - [ ] T-1 Add the parser          an open task
+#     - 2026-08-25 blocked on X       a comment, indented under its task
+#   - [x] T-2 Wire the loop (abc1234) a closed task and its landing reference
+#
+# The closeout process edits the line and commits it; the runner pushes that commit under the
+# gate and then confirms the close by reading the file at the remote default branch.
+
+[project]
+repo = "~/code/example-tool"
+default_branch = "main"
+mirror = []
+
+[tracker]
+adapter = "markdown"
+file = "tasks.md"
+done_statuses = ["closed"]
+in_review_status = "in review"
+
+[shipping]
+mode = "local_merge"
+
+[permissions]
+allowed = ["Bash", "Read", "Edit", "Write", "Grep", "Glob", "Skill", "TodoWrite"]
+disallowed = []
+
+[timeouts]
+task_minutes = 90
+closeout_minutes = 15
+ci_poll_minutes = 30
+
+[closeout]
+model = "sonnet"
+effort = "medium"
+allowed_tools = []
+allowed_paths = []
+
+[gate]
+command = ["python3", "-m", "unittest", "discover", "-s", "tests"]
+description = "the unittest suite, run locally before the merge and again by the pre push hook"
+
+[qualifying]
+gate = "A pre push hook runs the unittest suite and refuses the push when it fails."
+durable_state = "Merge commits on main and the lines in tasks.md are the only state carried between tasks."
+independence = "Each listed task touches a separate module and none depends on another's outcome."
+editors = "Only the operator's own account edits tasks.md, and it is reviewed on every push."
+
+[on_blocked]
+merge_partial = true
+open_followup = false
+
+[[tasks]]
+id = "T-1"
+model = "sonnet"
+effort = "medium"
+
+[[tasks]]
+id = "T-2"
+model = "sonnet"
+effort = "medium"

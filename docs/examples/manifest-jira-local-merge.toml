@@ -1,0 +1,80 @@
+# Relay manifest: a Jira tracked project where the runner merges and pushes.
+#
+# Copy this next to your other operator files, not into the target repo. Relay adds nothing to a
+# project it runs against. Point `repo` at your checkout, then run:
+#
+#   python3 <relay>/skills/relay/scripts/relay_cli.py validate this-file.toml --list
+
+[project]
+repo = "~/code/example-project"
+default_branch = "main"
+# A mirror rule is an argument list for git push, run after the closeout so a compound doc never
+# leaves the mirror a commit behind. Empty means no mirror.
+mirror = []
+
+[tracker]
+adapter = "jira"
+site = "example.atlassian.net"
+project_key = "ABC"
+# The runner reads Jira over REST with these environment variables. It never reads a tracker
+# through a model, and it never passes these to a child process.
+token_env = "JIRA_API_TOKEN"
+email_env = "JIRA_EMAIL"
+# A card in one of these statuses counts as terminal for verify-landed.
+done_statuses = ["Done", "Closed"]
+# The status the task process moves a card to before it exits. The runner uses it to route a task
+# that finished its work but did not print a return envelope.
+in_review_status = "In Review"
+
+[shipping]
+mode = "local_merge"
+
+[permissions]
+allowed = ["Bash", "Read", "Edit", "Write", "Grep", "Glob", "Skill", "Agent", "TodoWrite", "mcp__atlassian__*"]
+# Relay fills in every pattern it requires (force push, hard reset, recursive delete, clean) and
+# warns about each one it added. Add project specific patterns here.
+disallowed = []
+
+[timeouts]
+task_minutes = 120
+closeout_minutes = 20
+ci_poll_minutes = 30
+
+[closeout]
+model = "sonnet"
+effort = "medium"
+allowed_tools = []
+# The closeout may always touch the CE artifact root, CONCEPTS.md, and the markdown tracker file
+# when that adapter is in use. Add more here if your project keeps docs elsewhere.
+allowed_paths = []
+
+[gate]
+command = ["bin/test"]
+description = "the full test suite, run locally before the merge and again by the pre push hook"
+
+[qualifying]
+gate = "A pre push hook runs bin/test and refuses the push when it fails."
+durable_state = "Merge commits on main and the Jira cards are the only state carried between tasks."
+independence = "Each listed card touches a separate module and none depends on another's outcome."
+editors = "Only the engineering team's own Atlassian accounts can edit these cards or comment on them."
+
+[on_blocked]
+merge_partial = true
+open_followup = false
+
+[[tasks]]
+id = "ABC-101"
+model = "opus"
+effort = "high"
+
+[[tasks]]
+id = "ABC-102"
+model = "sonnet"
+effort = "medium"
+
+[[tasks]]
+id = "ABC-103"
+model = "sonnet"
+effort = "medium"
+excluded = true
+reason = "the acceptance criterion needs an operator decision, so it must be run attended"
