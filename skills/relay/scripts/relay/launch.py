@@ -64,17 +64,19 @@ def child_env(manifest, base_env=None, home=None):
     return env
 
 
-def build_args(manifest, task, brief_text, session_id):
-    """The argument list, never a shell string (R9). The allowlist comes from the manifest and
-    the disallow list is the manifest's plus every R10 variant validate filled in."""
+def build_args(manifest, task, brief_text, session_id, allowed=None):
+    """The argument list, never a shell string (R9). The allowlist defaults to the manifest's
+    and is overridden for the closeout, which gets a narrower one (U9). The disallow list is the
+    manifest's plus every R10 variant validate filled in, for both."""
     disallowed = manifest_module.resolved_disallowed(manifest)
+    allowed = manifest.permissions.allowed if allowed is None else allowed
     return [
         "claude", "-p", brief_text,
         "--session-id", session_id,
         "--model", task.model,
         "--effort", task.effort,
         "--permission-mode", contracts.PERMISSION_MODE,
-        "--allowedTools", ",".join(manifest.permissions.allowed),
+        "--allowedTools", ",".join(allowed),
         "--disallowedTools", ",".join(disallowed),
         "--output-format", contracts.OUTPUT_FORMAT,
         "--verbose",
@@ -179,7 +181,7 @@ def _kill_group(proc, grace_seconds):
 def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=None, home=None,
            base_env=None, heartbeat=None, heartbeat_interval=contracts.LEASE_HEARTBEAT_SECONDS,
            stream=print, sigkill_grace_seconds=SIGKILL_GRACE_SECONDS, popen=subprocess.Popen,
-           on_release=None):
+           on_release=None, allowed=None):
     """Run one task or closeout process to completion, a timeout, or a lost lease.
 
     `active_seconds` is measured on the monotonic clock, which does not advance while the host
@@ -194,7 +196,7 @@ def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=Non
     result = LaunchResult(session_id=session_id, log_path=log_path)
 
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
-    args = build_args(manifest, task, brief_text, session_id)
+    args = build_args(manifest, task, brief_text, session_id, allowed)
 
     started_wall = time.time()
     started = time.monotonic()

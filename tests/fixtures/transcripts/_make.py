@@ -217,6 +217,72 @@ def multi_end_turn():
     return finish(lines, ENVELOPE_COMPLETE)
 
 
+CLOSEOUT_PROMPT = (
+    "Relay closeout for T-1. Outcome landed at abc1234def. Two duties, in order: record the "
+    "outcome on the tracker, then the compound judgment."
+)
+CLOSEOUT_COMPLETE_TEXT = (
+    "Closed the card and named the merge commit. The task turned on a gate that only fires at "
+    "push time, which is worth keeping, so I ran the compound skill and committed the doc.\n\n"
+    "Documentation complete"
+)
+CLOSEOUT_SKIPPED_TEXT = (
+    "Closed the card and named the merge commit. Nothing here a future session would get wrong "
+    "without a note: the work was routine and the code says what it does.\n\n"
+    "Documentation skipped"
+)
+CLOSEOUT_UNFINISHED_TEXT = (
+    "Closed the card and named the merge commit. I started the compound judgment and the"
+)
+
+
+def build_closeout_prefix(tracker_write="tracker.md"):
+    """The closeout's own shape: one tracker write, then a decision. The tracker write is a Bash
+    edit of the markdown tracker, which is what the markdown adapter's write patterns name."""
+    lines = []
+    p = user_prompt(None, CLOSEOUT_PROMPT)
+    lines.append(p)
+    a1 = assistant(p["uuid"], [tool_use("toolu_01TRACK", "Edit", {
+        "file_path": CWD + "/" + tracker_write, "replace_all": False,
+        "old_string": "- [ ] T-1", "new_string": "- [x] T-1"})], "tool_use")
+    lines.append(a1)
+    lines.append(tool_result(a1["uuid"], "toolu_01TRACK", "Edited " + tracker_write))
+    return lines
+
+
+def closeout_complete():
+    lines = build_closeout_prefix()
+    a = assistant(lines[-1]["uuid"], [tool_use("toolu_01COMP", "Skill", {
+        "skill": "compound-engineering:ce-compound",
+        "args": "mode:non-interactive depth:full the gate fires only at push time"})], "tool_use")
+    lines.append(a)
+    lines.append(tool_result(a["uuid"], "toolu_01COMP", "Documentation complete"))
+    return finish(lines, CLOSEOUT_COMPLETE_TEXT)
+
+
+def closeout_skipped():
+    return finish(build_closeout_prefix(), CLOSEOUT_SKIPPED_TEXT)
+
+
+def closeout_unfinished():
+    return finish(build_closeout_prefix(), CLOSEOUT_UNFINISHED_TEXT)
+
+
+def closeout_tracker_denied():
+    """AE1 happens here more often than in the task process: the card write is refused after the
+    code has already merged."""
+    lines = []
+    p = user_prompt(None, CLOSEOUT_PROMPT)
+    lines.append(p)
+    a = assistant(p["uuid"], [tool_use("toolu_01DENY", "mcp__atlassian__transitionJiraIssue", {
+        "cloudId": "00000000-0000-0000-0000-000000000000", "issueIdOrKey": "T-1",
+        "transition": {"id": "31"}})], "tool_use")
+    lines.append(a)
+    lines.append(tool_result(a["uuid"], "toolu_01DENY",
+                             DENIAL_TEXT.format(tool="mcp__atlassian__transitionJiraIssue"), is_error=True))
+    return finish(lines, CLOSEOUT_SKIPPED_TEXT)
+
+
 if __name__ == "__main__":
     write("success.jsonl", success)
     write("blocked.jsonl", blocked)
@@ -226,4 +292,8 @@ if __name__ == "__main__":
     write("tracker_denied.jsonl", tracker_denied)
     write("multi_end_turn.jsonl", multi_end_turn)
     write("malformed.jsonl", success, extra_raw=(2, '{"type": "assistant", "message": {this is not json'))
+    write("closeout_complete.jsonl", closeout_complete)
+    write("closeout_skipped.jsonl", closeout_skipped)
+    write("closeout_unfinished.jsonl", closeout_unfinished)
+    write("closeout_tracker_denied.jsonl", closeout_tracker_denied)
     print("fixtures written to", HERE)
