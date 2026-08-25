@@ -1,0 +1,68 @@
+# A complete Relay manifest. Tests replace __REPO__ with a temp repo path.
+
+[project]
+repo = "__REPO__"
+default_branch = "main"
+mirror = []
+
+[tracker]
+adapter = "markdown"
+file = "tracker.md"
+done_statuses = ["done"]
+in_review_status = "in review"
+
+[shipping]
+mode = "local_merge"
+
+[permissions]
+allowed = ["Bash", "Read", "Edit", "Write", "Grep", "Glob", "Skill", "Agent", "TodoWrite"]
+disallowed = [
+  "Bash(git push --force*)",
+  "Bash(git push -f*)",
+  "Bash(git push --force-with-lease*)",
+  "Bash(git push * +*)",
+  "Bash(git reset --hard*)",
+  "Bash(git checkout -- .*)",
+  "Bash(git clean*)",
+  "Bash(rm -rf*)",
+  "Bash(rm -fr*)",
+  "Bash(rm -r *)",
+  "Bash(rm -R *)",
+]
+
+[timeouts]
+task_minutes = 90
+closeout_minutes = 15
+ci_poll_minutes = 20
+
+[closeout]
+model = "sonnet"
+effort = "medium"
+allowed_tools = []
+allowed_paths = []
+
+[gate]
+command = ["true"]
+description = "the test suite, run locally before merge and again by the pre push hook"
+
+[qualifying]
+gate = "A pre push hook runs the full test suite and refuses the push on failure."
+durable_state = "Merge commits on main and the tracker.md lines are the only state between tasks."
+independence = "Each listed task touches a separate module and none depends on another's outcome."
+editors = "Only the operator's own account edits tracker.md."
+
+[on_blocked]
+merge_partial = true
+open_followup = false
+
+[[tasks]]
+id = "T-1"
+model = "opus"
+effort = "high"
+
+[[tasks]]
+id = "T-2"
+model = "sonnet"
+effort = "medium"
+excluded = true
+reason = "brief says stop and ask on the schema question"
