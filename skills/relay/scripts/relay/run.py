@@ -1,0 +1,416 @@
+"""The run loop (U10): one manifest, one task at a time, in the fixed sequence of R50.
+
+Everything else in Relay is a piece; this is where they are ordered, and the order is the
+product. The sequence after a task process exits is not negotiable and not conditional on what
+that process said about itself: classify the exit from the transcript, gate the branch head,
+merge, push, verify the code scope, run the closeout, check what it committed, push that, mirror,
+verify the full scope, and only then delete the branch and move on. A task is landed when the
+runner's own verify says so and never before (R20).
+
+Three properties of the loop are worth naming because they are easy to lose in a refactor.
+
+Nothing crosses between tasks except the manifest, git, and the tracker (R15). No transcript, no
+summary, and no memory of a prior task reaches a later brief, and there is no variable in this
+module that carries one.
+
+Every stop is a named class with evidence, not an exception (R25, R44). The operator repairs by
+hand and re-runs; the loop resumes at the first record that did not land (R32) and re-verifies
+the ones that halted (R48), so a repair made between runs is picked up rather than redone.
+
+The runner never writes to the tracker (R19). Every tracker write in this file happens inside a
+closeout process the runner launched; the runner reads the result back and decides from it.
+"""
+import os
+import time
+from dataclasses import dataclass, field
+
+from . import (adapters, brief, classify, closeout, contracts, gitread, gitwrite, launch,
+               manifest as manifest_module, state, summary, verify)
+
+EXIT_OK = 0
+EXIT_CONFIG = 1
+EXIT_HALTED = 2
+EXIT_LEASE = 3
+
+
+@dataclass
+class RunOutcome:
+    exit_code: int
+    halt_task: str | None = None
+    halt_class: str | None = None
+    message: str | None = None
+    store: object = None
+    records: dict = field(default_factory=dict)
+
+
+class _Halt(Exception):
+    """A named stop. Carries the task, the class, and the line the summary prints."""
+
+    def __init__(self, task_id, halt_class, message, evidence=None):
+        super().__init__(message)
+        self.task_id = task_id
+        self.halt_class = halt_class
+        self.message = message
+        self.evidence = evidence or {}
+
+
+def _default_branch(manifest):
+    return verify.default_branch_of(manifest)
+
+
+def _baseline_comment_id(adapter, task_id):
+    """R17: the newest comment id, which is what `comments_since` measures from. The markdown
+    adapter numbers its comments from one, so its newest id is also its count and the same rule
+    works for all three adapters."""
+    try:
+        comments = adapter.comments_since(task_id, None)
+    except Exception:
+        return None
+    return comments[-1]["id"] if comments else None
+
+
+def _routable(manifest, adapter, digest, repo, branch, baseline_sha):
+    """KTD6's second route: a missing envelope is still routable when git and the tracker carry
+    a stronger completion signal than the last paragraph of a long context, which is commits on
+    the task branch plus the card sitting in the manifest's in review status. A missing envelope
+    with an unmoved card is stranded, never merged."""
+    has_commits = (gitread.branch_exists(repo, branch)
+                   and bool(gitread.log_oneline(repo, baseline_sha, branch)))
+    if digest.get("routable"):
+        # A complete envelope is still only a claim (R20). With nothing on the branch there is
+        # nothing to merge, and the runner says so rather than trusting the claim.
+        return has_commits, (None if has_commits else
+                             "the envelope read complete but the branch carries no commits")
+    if digest.get("halt_class") != contracts.HALT_NO_ENVELOPE:
+        return False, None
+    if not has_commits:
+        return False, "no envelope and no commits on the branch"
+    wanted = manifest.tracker.in_review_status
+    try:
+        card = adapter.status(digest.get("task_id") or "") or {}
+    except Exception:
+        card = {}
+    if wanted and str(card.get("status") or "").lower() == str(wanted).lower():
+        return True, "no envelope, routed on commits plus the card in %s" % wanted
+    return False, "no envelope and the card did not move"
+
+
+def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=print,
+        retry_blocked=False, timeout_overrides=None, launch_kwargs=None, now=time.time):
+    """Drive one manifest to completion or to a named halt. Returns a RunOutcome; never raises
+    for a task level failure, because every one of those is a class an operator can act on."""
+    repo = manifest.project.repo
+    default = _default_branch(manifest)
+    overrides = timeout_overrides or {}
+    launch_kwargs = dict(launch_kwargs or {})
+    env = launch.child_env(manifest, base_env, home)
+
+    try:
+        adapter = adapter or adapters.build(manifest, env=base_env)
+    except adapters.ConfigurationError as exc:
+        return RunOutcome(EXIT_CONFIG, message=str(exc))
+    store = store or state.StateStore(manifest.path, repo, home=home)
+
+    acquired = store.acquire()
+    if acquired.code == state.LOCKED:
+        holder = acquired.holder or {}
+        where = acquired.other_manifest or holder.get("manifest")
+        return RunOutcome(EXIT_LEASE, message=(
+            "another runner holds the lease: pid %s on %s, manifest %s, heartbeat %.0f seconds old"
+            % (holder.get("holder_pid"), holder.get("hostname"), where, acquired.age_seconds or 0)))
+
+    if stream is not None and acquired.code == state.STALE_RECLAIMED:
+        stream("reclaimed a stale lease from pid %s; %d record(s) marked %s"
+               % ((acquired.previous_holder or {}).get("holder_pid"),
+                  len(acquired.reclaimed_ids), contracts.HALT_RUNNER_CRASHED))
+
+    outcome = RunOutcome(EXIT_OK, store=store)
+    try:
+        store.validate()
+        verify.startup_reverify(manifest, store, adapter, env=env, now=now)
+        for index, task in enumerate(manifest.tasks):
+            try:
+                _one_task(manifest, task, index, adapter, store, repo, default, env, base_env,
+                          home, stream, retry_blocked, overrides, launch_kwargs, now)
+            except _Halt as halt:
+                store.upsert(halt.task_id, status=contracts.STATUS_HALTED,
+                             halt_class=halt.halt_class, halt_evidence=halt.evidence)
+                store.write_terminal(contracts.RUN_HALTED, halt.task_id, halt.halt_class,
+                                     contracts.CLI_VERSION_TESTED)
+                outcome = RunOutcome(EXIT_HALTED, halt.task_id, halt.halt_class, halt.message,
+                                     store, store.records())
+                return outcome
+            store.set_cursor(index + 1)
+        store.write_terminal(contracts.RUN_COMPLETED, cli_version=contracts.CLI_VERSION_TESTED)
+        outcome.records = store.records()
+        return outcome
+    finally:
+        store.release()
+
+
+def _one_task(manifest, task, index, adapter, store, repo, default, env, base_env, home, stream,
+              retry_blocked, overrides, launch_kwargs, now):
+    record = store.get(task.id) or state.new_record(task.id)
+    status = record.get("status")
+
+    if task.excluded:
+        store.upsert(task.id, status=contracts.STATUS_EXCLUDED, excluded_reason=task.reason)
+        return
+    if status == contracts.STATUS_LANDED:
+        return
+    if status == contracts.STATUS_EXCLUDED and record.get("excluded_reason"):
+        return
+    if status == contracts.STATUS_BLOCKED:
+        if not retry_blocked:
+            return
+        _clear_blocked_branch(store, task, repo, record, env)
+
+    branch = gitwrite.task_branch_for(task.id)
+
+    # Pre-flight (R16). A failure here is a halt: the repo is not in the state a task process
+    # can start from, and no launch may happen until the operator has looked.
+    preflight = gitwrite.preflight(repo, default, branch, env=env)
+    if not preflight.ok:
+        raise _Halt(task.id, contracts.HALT_UNCLEAN_EXIT,
+                    "pre flight refused before launching %s on check %s"
+                    % (task.id, preflight.failed),
+                    {"check": preflight.failed, "evidence": preflight.evidence})
+
+    # Baseline (R17): what the runner will compare against when it decides landing.
+    card = adapter.read(task.id)
+    baseline_sha = gitread.rev_parse(repo, default)
+    card_status = adapter.status(task.id)
+    baseline_comment_id = _baseline_comment_id(adapter, task.id)
+
+    # Brief and the pre-flight scan (R7, R41, R43).
+    brief_text = brief.render(manifest, task, card)
+    hits = brief.scan(card, brief_text)
+    if hits:
+        store.upsert(task.id, status=contracts.STATUS_EXCLUDED,
+                     excluded_reason=brief.exclusion_reason(hits))
+        if stream is not None:
+            stream("%s skipped: %s" % (task.id, brief.exclusion_reason(hits)))
+        return
+    brief_path, brief_sha = brief.write(store, task.id, brief_text)
+
+    store.upsert(task.id, status=contracts.STATUS_RUNNING, baseline_sha=baseline_sha,
+                 baseline_tracker_status=card_status.get("status"),
+                 baseline_comment_id=baseline_comment_id, branch=branch,
+                 brief_sha256=brief_sha, started_at=None, halt_class=None, findings=[])
+
+    launched = launch.launch(
+        manifest, task, brief_text, store.path("logs", task.id + ".stdout.log"),
+        overrides.get("task_seconds") or manifest.timeouts.task_minutes * 60,
+        home=home, base_env=base_env, stream=stream,
+        heartbeat=store.heartbeat, on_release=store.release, **launch_kwargs)
+
+    digest = classify.classify(launched.transcript_path, launched,
+                               adapter.write_tool_patterns())
+    digest["task_id"] = task.id
+    classify.write_digest(digest, store.path("digests", task.id + ".json"))
+    findings = list(digest.get("findings") or [])
+    store.upsert(task.id, session_id=launched.session_id,
+                 transcript_path=launched.transcript_path, wall_seconds=launched.wall_seconds,
+                 active_seconds=launched.active_seconds, findings=findings)
+
+    context = _Context(manifest, task, card, adapter, store, repo, default, env, base_env, home,
+                       stream, overrides, launch_kwargs, branch, baseline_sha,
+                       baseline_comment_id, digest, launched, findings, now)
+
+    if launched.lease_lost:
+        raise _Halt(task.id, contracts.HALT_RUNNER_CRASHED,
+                    "the lease was lost while %s was running; another runner may hold it" % task.id)
+
+    if digest.get("halt_class") == contracts.HALT_TIMEOUT:
+        return _timeout_route(context)
+
+    routable, note = _routable(manifest, adapter, digest, repo, branch, baseline_sha)
+    if note and stream is not None:
+        stream("%s: %s" % (task.id, note))
+    if routable:
+        return _merge_route(context)
+    if digest.get("routable"):
+        # The process claimed complete and produced nothing the runner can merge. That is not a
+        # blocked task, which leaves the repo as it found it deliberately; it is an exit the
+        # runner cannot act on, so it halts for a human.
+        raise _Halt(task.id, contracts.HALT_UNCLEAN_EXIT,
+                    "%s reported status complete but left no commits on %s" % (task.id, branch),
+                    {"branch": branch, "baseline_sha": baseline_sha})
+    return _blocked_route(context, digest.get("halt_class") or contracts.HALT_BLOCKED_ENVELOPE)
+
+
+@dataclass
+class _Context:
+    """Everything one task's tail needs, gathered once so the routes read as a sequence."""
+    manifest: object
+    task: object
+    card: dict
+    adapter: object
+    store: object
+    repo: str
+    default: str
+    env: dict
+    base_env: dict
+    home: str
+    stream: object
+    overrides: dict
+    launch_kwargs: dict
+    branch: str
+    baseline_sha: str
+    baseline_comment_id: object
+    digest: dict
+    launched: object
+    findings: list
+    now: object
+
+
+def _clear_blocked_branch(store, task, repo, record, env):
+    """R48: `--retry-blocked` may delete a stranded branch only when it carries nothing past the
+    baseline. Work that exists only on that branch is the operator's to keep or discard."""
+    branch = gitwrite.task_branch_for(task.id)
+    if not gitread.branch_exists(repo, branch):
+        return
+    baseline = record.get("baseline_sha")
+    if baseline and gitread.log_oneline(repo, baseline, branch):
+        raise _Halt(task.id, contracts.HALT_UNCLEAN_EXIT,
+                    "retry refused: %s carries commits past the baseline; keep or discard them "
+                    "by hand first" % branch,
+                    {"branch": branch, "baseline_sha": baseline})
+    gitwrite.delete_branch(repo, branch, ops=store, task_id=task.id, env=env)
+
+
+def _timeout_route(ctx):
+    """R35 and R50. A clean tree takes the blocked path with a digest naming the timeout, so the
+    run continues past a task that ran long. A dirty tree halts, because nobody can tell from
+    here whether the half written state is safe to build on."""
+    disposition = gitwrite.timeout_disposition(ctx.repo, ctx.default, ctx.branch)
+    ctx.digest["timeout"] = {
+        "tree": disposition.tree, "branch": disposition.branch,
+        "active_seconds": ctx.launched.active_seconds, "wall_seconds": ctx.launched.wall_seconds,
+    }
+    if disposition.action == "halt":
+        verdict = verify.verify(ctx.manifest, ctx.store.get(ctx.task.id), ctx.adapter,
+                                scope=verify.SCOPE_CODE, env=ctx.env, now=ctx.now)
+        ctx.store.upsert(ctx.task.id, verify=verdict.as_dict())
+        raise _Halt(ctx.task.id, contracts.HALT_TIMEOUT,
+                    "%s timed out after %.0f active seconds and left the tree dirty on %s"
+                    % (ctx.task.id, ctx.launched.active_seconds, disposition.branch),
+                    ctx.digest["timeout"])
+    return _blocked_route(ctx, contracts.HALT_TIMEOUT)
+
+
+def _merge_route(ctx):
+    """R50, local merge, routable to merge. Every step before the closeout is the runner's own,
+    and every one of them can refuse."""
+    if ctx.manifest.shipping_mode == "pr_terminal":
+        raise _Halt(ctx.task.id, contracts.HALT_CI_UNDECIDED,
+                    "pr_terminal mode is not wired into the run loop yet")
+
+    ctx.store.upsert(ctx.task.id, status=contracts.STATUS_MERGING)
+    tail = gitwrite.local_merge_tail(
+        ctx.repo, ctx.task.id, ctx.default, ctx.baseline_sha, list(ctx.manifest.gate.command),
+        ctx.store.path("gate", ctx.task.id + ".log"), ops=ctx.store, env=ctx.env,
+        gate_timeout_seconds=ctx.overrides.get("gate_seconds"))
+    if not tail.ok:
+        ctx.store.upsert(ctx.task.id, halt_evidence=tail.evidence)
+        raise _Halt(ctx.task.id, tail.halt_class,
+                    summary.cause_line(tail.halt_class, tail.evidence),
+                    tail.evidence)
+
+    ctx.store.upsert(ctx.task.id, landing_ref=tail.merge_sha)
+    verdict = verify.verify(ctx.manifest, ctx.store.get(ctx.task.id), ctx.adapter,
+                            scope=verify.SCOPE_CODE, env=ctx.env, now=ctx.now)
+    ctx.store.upsert(ctx.task.id, verify=verdict.as_dict())
+    if verdict.failed():
+        raise _Halt(ctx.task.id, contracts.HALT_GATE_REFUSED,
+                    "the code scope verify failed for %s on %s"
+                    % (ctx.task.id, ", ".join(verdict.failed())),
+                    {"checks": verdict.checks})
+
+    gate_summary = {"ok": True, "returncode": 0,
+                    "log": ctx.store.path("gate", ctx.task.id + ".log")}
+    _run_closeout(ctx, closeout.OUTCOME_LANDED, landing_ref=tail.merge_sha,
+                  commit_range="%s..%s" % (ctx.baseline_sha[:7], (tail.merge_sha or "")[:7]),
+                  gate=gate_summary)
+
+    if ctx.manifest.project.mirror:
+        pushed = gitwrite.mirror_push(ctx.repo, list(ctx.manifest.project.mirror), ops=ctx.store,
+                                      task_id=ctx.task.id, env=ctx.env)
+        if not pushed.ok:
+            raise _Halt(ctx.task.id, contracts.HALT_GATE_REFUSED,
+                        "the mirror push was refused for %s" % ctx.task.id,
+                        {"push_output": pushed.output})
+
+    final = verify.verify(ctx.manifest, ctx.store.get(ctx.task.id), ctx.adapter,
+                          scope=verify.SCOPE_FULL, env=ctx.env, now=ctx.now)
+    ctx.store.upsert(ctx.task.id, verify=final.as_dict())
+    if not final.landed:
+        raise _Halt(ctx.task.id, final.halt_class or contracts.HALT_PARTIAL_LANDING,
+                    "%s did not verify as landed: %s"
+                    % (ctx.task.id, ", ".join(final.failed() + final.blocking_skips())),
+                    {"checks": final.checks})
+
+    if gitread.branch_exists(ctx.repo, ctx.branch):
+        gitwrite.delete_branch(ctx.repo, ctx.branch, ops=ctx.store, task_id=ctx.task.id,
+                               env=ctx.env)
+    ctx.store.upsert(ctx.task.id, status=contracts.STATUS_LANDED,
+                     halt_class=contracts.HALT_LANDED, branch=None)
+
+
+def _blocked_route(ctx, halt_class):
+    """R50, blocked. The branch is stranded rather than merged, the closeout comments the card,
+    and the run continues. A blocked task is a normal outcome (R23)."""
+    stranded = gitwrite.blocked_path(ctx.repo, ctx.default, ctx.branch, ops=ctx.store,
+                                     task_id=ctx.task.id)
+    _run_closeout(ctx, closeout.OUTCOME_BLOCKED, branch=stranded["branch"])
+
+    finding = closeout.confirm_blocked_comment(ctx.adapter, ctx.task.id, ctx.baseline_comment_id)
+    if finding:
+        ctx.findings.append(finding)
+    ctx.store.upsert(ctx.task.id, status=contracts.STATUS_BLOCKED, halt_class=halt_class,
+                     branch=stranded["branch"], findings=ctx.findings,
+                     halt_evidence={"stranded_head": stranded["head"]})
+
+
+def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None, gate=None):
+    """Launch the closeout, then bound what it committed before anything is pushed (R53).
+
+    The order matters: the check runs against the local head before the push, so a commit
+    outside the allowed paths is reset rather than reported after the fact (KTD15).
+    """
+    docs_root = manifest_module.docs_root_for(ctx.repo)
+    allowed_paths = manifest_module.completed_allowed_paths(ctx.manifest, docs_root)
+    pre_closeout_head = gitread.rev_parse(ctx.repo, "HEAD")
+    try:
+        comments = ctx.adapter.comments_since(ctx.task.id, ctx.baseline_comment_id)
+    except Exception:
+        comments = []
+    envelope = ctx.digest.get("envelope") or {}
+
+    result = closeout.run(
+        ctx.manifest, ctx.card, outcome, ctx.digest, comments, ctx.adapter, ctx.store,
+        allowed_paths, landing_ref=landing_ref, branch=branch or ctx.branch,
+        commit_range=commit_range, plan_path=envelope.get("plan_path"), gate=gate,
+        wall_seconds=ctx.launched.wall_seconds, active_seconds=ctx.launched.active_seconds,
+        timeout_seconds=ctx.overrides.get("closeout_seconds"),
+        home=ctx.home, base_env=ctx.base_env, stream=ctx.stream, heartbeat=ctx.store.heartbeat,
+        on_release=ctx.store.release, **ctx.launch_kwargs)
+    ctx.findings.extend(result.findings)
+    ctx.store.upsert(ctx.task.id, closeout=result.result, findings=ctx.findings)
+
+    scope = gitwrite.closeout_scope_check(ctx.repo, pre_closeout_head, allowed_paths,
+                                          ops=ctx.store, task_id=ctx.task.id, env=ctx.env)
+    if not scope.ok:
+        raise _Halt(ctx.task.id, contracts.HALT_CLOSEOUT_OUT_OF_SCOPE,
+                    contracts.HALT_LINES[contracts.HALT_CLOSEOUT_OUT_OF_SCOPE].format(
+                        path=", ".join(scope.offending), allowed=", ".join(allowed_paths)),
+                    {"offending": scope.offending, "reset_to": scope.reset_to})
+
+    if gitread.rev_parse(ctx.repo, "HEAD") != pre_closeout_head:
+        pushed = gitwrite.push(ctx.repo, ["origin", ctx.default], ops=ctx.store,
+                               task_id=ctx.task.id, env=ctx.env)
+        if not pushed.ok:
+            raise _Halt(ctx.task.id, contracts.HALT_GATE_REFUSED,
+                        "the push of the closeout commit was refused for %s" % ctx.task.id,
+                        {"push_output": pushed.output, "commit": gitread.rev_parse(ctx.repo, "HEAD")})
+    return result
