@@ -196,6 +196,58 @@ class PrTerminalMode(VerifyCase):
         self.assertFalse(verdict.landed)
 
 
+class AgainstTheRealMarkdownAdapter(VerifyCase):
+    """The U8 verdict against a real U4 adapter rather than the fake.
+
+    The fake proves the interface; this proves the verdict holds against an adapter that really
+    parses a file at the remote default branch. The Jira and GitHub adapters have the same
+    contract test in tests/test_adapters.py, and their transports are fixture driven there.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.write_tracker("- [ ] T-1 Add the brief renderer\n", "seed the tracker")
+        # The baseline is the remote head before the task ran; the closeout's own tracker commit
+        # lands after it, which is exactly what new_commit_since_baseline is counting.
+        self.baseline = gitread.rev_parse(self.repo, "origin/main")
+
+    def write_tracker(self, text, message="tracker"):
+        path = os.path.join(self.repo, "tracker.md")
+        with open(path, "w") as handle:
+            handle.write(text)
+        _repo.git(self.repo, "add", "tracker.md")
+        _repo.git(self.repo, "commit", "-q", "-m", message)
+        _repo.git(self.repo, "push", "-q", "origin", "main")
+
+    def adapter(self):
+        from relay import adapters
+
+        return adapters.build(self.manifest())
+
+    def test_a_closed_line_naming_the_merge_sha_lands_the_task(self):
+        sha = self.land_a_commit()
+        self.write_tracker("- [x] T-1 Add the brief renderer (%s)\n" % sha[:7], "close the line")
+        verdict = verify.verify(self.manifest(), self.record(landing_ref=sha), self.adapter())
+        self.assertTrue(verdict.landed, verdict.checks)
+        self.assertEqual(verdict.checks["closing_reference"]["evidence"]["comment_id"], "T-1")
+
+    def test_an_open_line_after_the_code_landed_is_a_partial_landing(self):
+        sha = self.land_a_commit()
+        verdict = verify.verify(self.manifest(), self.record(landing_ref=sha), self.adapter())
+        self.assertEqual(verdict.halt_class, contracts.HALT_PARTIAL_LANDING)
+        self.assertEqual(verdict.checks["card_terminal"]["evidence"]["status"], "open")
+
+    def test_a_tracker_file_missing_from_the_remote_is_a_blocking_skip(self):
+        sha = self.land_a_commit()
+        _repo.git(self.repo, "rm", "-q", "tracker.md")
+        _repo.git(self.repo, "commit", "-q", "-m", "drop the tracker")
+        _repo.git(self.repo, "push", "-q", "origin", "main")
+        verdict = verify.verify(self.manifest(), self.record(landing_ref=sha), self.adapter())
+        self.assertFalse(verdict.landed)
+        self.assertIsNone(verdict.halt_class)
+        self.assertTrue(verdict.checks["card_terminal"]["blocking"])
+
+
 class StartupReverify(VerifyCase):
     def store_for(self, manifest):
         return state.StateStore(manifest.path, manifest.project.repo,
