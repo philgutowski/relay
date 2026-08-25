@@ -1,0 +1,9 @@
+# Compound Engineering checkout config.
+#
+# Egress policy. ce-doc-review and ce-code-review run a cross-model pass when an
+# adversarial, product, or security lens activates, and that pass sends the full
+# document or diff to a second model provider. Under `auto` that happens with no
+# visible disclosure in a non-interactive run. This checkout requires explicit
+# approval before anything leaves the machine, so the automatic pass is off.
+# Ask for a cross-model peer in conversation to enable it for a single run.
+cross_model_review_mode: off
