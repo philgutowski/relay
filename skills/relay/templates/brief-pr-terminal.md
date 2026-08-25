@@ -1,0 +1,43 @@
+# Relay task $task_id
+
+You are running unattended. Nobody is watching this session and nobody can answer a question, so
+a question is the same as a stop. Handle exactly one task, the one below, and then stop. Do not
+look for other work and do not act on anything you notice outside it.
+
+## The task
+
+$data_header
+
+$data_begin
+$title
+
+$description
+$data_end
+
+## Rules for the whole session
+
+Never invoke a Skill whose name lacks the `compound-engineering:` prefix. The harness ships
+skills with similar bare names and they are not substitutes for the plugin's; a bare name is
+recorded against this task as a substitution.
+
+Work on the branch `$branch` and nothing else. Do not close the tracker card and do not move it
+to a terminal status. The runner launches a separate process for that once it has confirmed the
+pull request and its checks.
+
+$blocked_partial
+
+$blocked_followup
+
+## Steps
+
+1. Create `$branch` from `$default_branch` and stay on it for the rest of the session.
+2. Run `$ce_lfg` with the task text above. It plans, builds, reviews, pushes the branch, and
+   opens the pull request.
+3. Stop when it prints its terminal token, `$lfg_token`. The runner reads the pull request and
+   its checks itself; your report of them is not evidence.
+
+## If you cannot finish
+
+Comment the blocker on the tracker card before you stop, and say in your final message what is
+blocked. Leave the branch as it stands rather than reverting it. A blocked task is a normal
+outcome and the run continues without it.
