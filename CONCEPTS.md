@@ -37,10 +37,23 @@ something about it needs a human present.
 The single headless agent invocation that carries one Task from plan to landing. It starts with an
 empty context, knows nothing of any other Task, and its report of its own success is not evidence.
 
+### Closeout process
+A separate short agent invocation the Runner launches after every Task process exit except a
+timeout. It has two ordered duties: write the Task's outcome to the Tracker (the closing reference
+when Landed, a comment carrying the Runner's blocker digest when Blocked), then the Compound
+judgment. It exists because the Runner never writes to the Tracker and the Task process exits
+before the landing commit exists, so neither can name it.
+
 ### Compound process
-A separate short agent invocation that runs after a Task lands, whose only job is to judge whether
-that Task produced a learning worth keeping and to write it if so. It is separate because a Task
-process at the end of its context is the worst available judge of its own learning.
+The second duty of the Closeout process: judging whether a Task produced a learning worth keeping
+and writing it if so. It is kept out of the Task process because a Task process at the end of its
+context is the worst available judge of its own learning. Runs for Blocked Tasks too, since a
+blocker is often the learning.
+
+### Halt class
+The Runner's classification of one Task process exit, drawn from a closed set and decided from the
+session transcript plus git and Tracker evidence. Every class carries its evidence and one cause
+line for the summary, so an operator learns why a Task did not land without reading a transcript.
 
 ## Outcomes
 
