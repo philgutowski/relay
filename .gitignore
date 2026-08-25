@@ -12,3 +12,7 @@ logs/
 # Claude Code local settings and memory (checked-in settings.json stays)
 .claude/settings.local.json
 .claude/memory/
+
+# Python bytecode
+__pycache__/
+*.pyc
