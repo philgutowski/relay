@@ -1,0 +1,16 @@
+{
+  "name": "relay",
+  "version": "0.1.0",
+  "description": "Run a manifest of independent tasks through the compound-engineering pipeline, one fresh headless Claude Code process per task, serially and unattended.",
+  "author": {
+    "name": "Phillip Gutowski"
+  },
+  "repository": "https://github.com/philgutowski/relay",
+  "license": "MIT",
+  "keywords": [
+    "compound-engineering",
+    "unattended",
+    "runner",
+    "workflow-automation"
+  ]
+}
