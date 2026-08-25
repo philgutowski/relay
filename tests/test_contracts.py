@@ -31,10 +31,17 @@ class PinsTraceToSource(unittest.TestCase):
 
 
 class OwnVocabulary(unittest.TestCase):
-    def test_every_halt_class_has_a_cause_line(self):
-        for cls in contracts.HALT_CLASSES:
-            self.assertIn(cls, contracts.HALT_LINES)
-        self.assertEqual(set(contracts.HALT_LINES), set(contracts.HALT_CLASSES))
+    def test_every_class_that_can_print_has_a_cause_line_and_nothing_else_does(self):
+        self.assertEqual(set(contracts.HALT_LINES), set(contracts.LINE_CLASSES))
+
+    def test_the_halt_class_set_stays_closed_and_the_finding_classes_sit_inside_the_line_set(self):
+        """KTD6 fixes the halt class set. A closeout finding is never a record's own class, so
+        it belongs to LINE_CLASSES and not to HALT_CLASSES."""
+        for cls in (contracts.CLOSEOUT_UNFINISHED, contracts.BLOCKED_UNRECORDED):
+            self.assertNotIn(cls, contracts.HALT_CLASSES)
+            self.assertIn(cls, contracts.LINE_CLASSES)
+        for cls in contracts.FINDING_CLASSES:
+            self.assertIn(cls, contracts.LINE_CLASSES)
 
     def test_disallow_list_covers_the_four_r10_operations(self):
         joined = "\n".join(contracts.DISALLOWED_TOOLS)

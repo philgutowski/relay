@@ -157,6 +157,11 @@ HALT_TIMEOUT = "timeout"
 HALT_UNCLEAN_EXIT = "unclean_exit"
 HALT_CI_UNDECIDED = "ci_undecided"
 
+# Findings the closeout raises (U9). Neither halts a run: the runner's own verify decides
+# landing, and a card that went uncommented is a checklist line for the operator, not a stop.
+CLOSEOUT_UNFINISHED = "closeout_unfinished"
+BLOCKED_UNRECORDED = "blocked_unrecorded"
+
 HALT_CLASSES = (
     HALT_LANDED,
     HALT_BLOCKED_ENVELOPE,
@@ -182,7 +187,13 @@ FINDING_CLASSES = (
     HALT_TRACKER_WRITE_DENIED,
     HALT_SKILL_SUBSTITUTION,
     HALT_NO_ENVELOPE,
+    CLOSEOUT_UNFINISHED,
+    BLOCKED_UNRECORDED,
 )
+
+# Every class that can reach a summary line: the closed halt class set of KTD6, plus the two
+# closeout findings, which are never a record's own class but still have to print.
+LINE_CLASSES = HALT_CLASSES + (CLOSEOUT_UNFINISHED, BLOCKED_UNRECORDED)
 
 HALT_LINES = {
     HALT_LANDED: "landed at {ref}",
@@ -200,6 +211,8 @@ HALT_LINES = {
     HALT_TIMEOUT: "timed out after {active_minutes} active minutes ({wall_minutes} wall); tree {tree} on {branch}",
     HALT_UNCLEAN_EXIT: "left the tree dirty on {branch}",
     HALT_CI_UNDECIDED: "PR {url} open, CI undecided after {minutes} minutes",
+    CLOSEOUT_UNFINISHED: "the closeout ended without a terminal line; last message: {last_message}",
+    BLOCKED_UNRECORDED: "blocked and the card carries no new comment; check {task} by hand",
 }
 
 # Terminal record run statuses (R30, U3 step 6).
