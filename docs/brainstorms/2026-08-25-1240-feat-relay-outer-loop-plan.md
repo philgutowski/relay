@@ -16,7 +16,7 @@ execution: code
 - **Objective:** an operator can hand Relay a list of independent tasks and walk away, and later find each task either landed (merged or in an open PR, with the tracker card closed and named against the landing commit) or halted with a stated reason, never silently half done.
 - **Means:** a runner that launches one fresh headless `claude -p` process per task, verifies the landed state itself between tasks, and runs the compound judgment as a separate short process.
 - **Product authority:** this document. `README.md` states the three qualifying properties and is the seed; where the two differ, this document wins.
-- **Open blockers:** two assumptions remain unverified by the IW-83 experiment running on 2026-08-25, listed under Outstanding Questions as Resolve Before Planning.
+- **Open blockers:** none. The two assumptions once listed as Resolve Before Planning were both answered on 2026-08-25; see Outstanding Questions.
 
 ---
 
@@ -199,10 +199,10 @@ Outside this product's identity:
 
 ### Outstanding Questions
 
-Resolve Before Planning:
+Resolved 2026-08-25, before planning:
 
-- Does `ce-work mode:return-to-caller` in a headless `claude -p` session reach merge and push when the task process itself is told to own the tail, or must the runner perform the merge and push outside the process? The IW-83 experiment on 2026-08-25 is answering this; as of 12:38 the process was still on its feature branch with two commits and a dirty tree. The answer decides whether R13's tail lives in the task process or in the runner.
-- How does a pre-push hook that runs the full test suite behave under a headless process with no terminal? If it blocks on a tty or exceeds the task timeout, R24 and R35 need a manifest-level gate timeout separate from the task timeout. Same experiment.
+- **Where the shipping tail lives in local-merge mode: the runner owns it.** Settled by the plugin contract rather than by experiment. `ce-work/references/execution-engines.md` (plugin 3.23.4, line 155) states that return-to-caller mode "performs implementation and local verification only, then returns the structured summary in references/return-to-caller.md (standalone_shipping_skipped: true). Does not run simplify/review/PR/CI, the caller owns those." The task process therefore ends on its feature branch with commits and the structured envelope; the runner performs the merge to the default branch, the push, and the mirror push, and then runs verify-landed. The envelope shape the runner receives is defined in `ce-work/references/return-to-caller.md`: `status` (`complete`, `blocked`, `failed`), `changed_files`, `u_ids_completed`, `verification_evidence`, `blockers`, `recovery_path`, and `standalone_shipping_skipped: true`. R13 stands as written, with "owned outside the task process" now meaning owned by the runner.
+- **Pre-push hook under a headless process: it works.** support-workbench's pre-push hook ran the full 75 second gate and passed during a non-interactive push on 2026-08-25. No tty block was observed. Caveat: the push was made by a non-interactive process, not by a `claude -p` process specifically; treat the tty question as answered and keep R24 and R35 as written. The gate's runtime counts against the task timeout, so the manifest's per-task timeout must leave headroom for the gate.
 
 Deferred to Planning:
 
