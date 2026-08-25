@@ -263,6 +263,13 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
     if gate_timeout_seconds is None:
         gate_timeout_seconds = contracts.DEFAULT_GATE_TIMEOUT_MINUTES * 60
 
+    # A process can report success and leave nothing behind. The runner decides from git, so a
+    # missing branch is a named refusal here rather than an exception out of the checkout.
+    if not gitread.branch_exists(repo, branch):
+        return TailResult(False, contracts.HALT_UNCLEAN_EXIT, "branch",
+                          evidence={"branch": branch,
+                                    "reason": "the task branch does not exist; nothing to merge"})
+
     checkout(repo, branch, ops=ops, task_id=task_id, env=env)
 
     hits = claude_dir_backstop(repo, baseline_sha, branch)
