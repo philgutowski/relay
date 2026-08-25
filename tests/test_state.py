@@ -131,6 +131,20 @@ class Heartbeat(StateCase):
         self.assertEqual(self.store(pid=200).acquire().code, st.LOCKED)
         self.assertEqual(store.status_word(), "running")
 
+    def test_heartbeat_fails_after_another_manifest_reclaims_the_repo_lease(self):
+        other_manifest = os.path.join(self.tmp.name, "b.toml")
+        open(other_manifest, "w").close()
+        first = self.store(pid=100)
+        first.acquire()
+        self.clock.advance(601)
+        second = self.store(manifest=other_manifest, pid=200)
+        result = second.acquire()
+        self.assertEqual(result.code, st.OK, "manifest b has no lease of its own")
+        self.assertEqual(result.repo_lease_reclaimed_from["holder_pid"], 100)
+        self.assertFalse(first.heartbeat(), "the old holder must learn it lost the repo lease")
+        self.assertEqual(second._read_repo_lock()["holder_pid"], 200)
+        self.assertTrue(second.heartbeat())
+
     def test_release_clears_both_leases_for_the_holder_only(self):
         store = self.store(pid=100)
         store.acquire()

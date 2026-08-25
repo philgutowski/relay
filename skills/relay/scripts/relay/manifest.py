@@ -155,6 +155,11 @@ def load(path):
         defaults.append("%s.%s = %r" % (table, key, value))
         return value
 
+    def pick(table, name, key, value):
+        """The manifest's value when the key is present, even 0 or empty, else the named
+        default. Truthiness would let an explicit 0 slip past validate's positive rule."""
+        return table[key] if key in table else default(name, key, value)
+
     p = raw["project"]
     t = raw["tracker"]
     perms = raw["permissions"]
@@ -177,8 +182,8 @@ def load(path):
         project_number=t.get("project_number"),
         status_field=t.get("status_field"),
         file=t.get("file"),
-        token_env=t.get("token_env") or default("tracker", "token_env", "JIRA_API_TOKEN"),
-        email_env=t.get("email_env") or default("tracker", "email_env", "JIRA_EMAIL"),
+        token_env=pick(t, "tracker", "token_env", "JIRA_API_TOKEN"),
+        email_env=pick(t, "tracker", "email_env", "JIRA_EMAIL"),
         done_statuses=_tuple(t.get("done_statuses", [])),
         in_review_status=t.get("in_review_status"),
     )
@@ -187,22 +192,25 @@ def load(path):
         disallowed=_tuple(perms.get("disallowed", [])),
     )
     timeouts_obj = Timeouts(
-        task_minutes=timeouts.get("task_minutes") or default("timeouts", "task_minutes", contracts.DEFAULT_TASK_TIMEOUT_MINUTES),
-        closeout_minutes=timeouts.get("closeout_minutes") or default("timeouts", "closeout_minutes", contracts.DEFAULT_CLOSEOUT_TIMEOUT_MINUTES),
-        ci_poll_minutes=timeouts.get("ci_poll_minutes") or default("timeouts", "ci_poll_minutes", contracts.DEFAULT_CI_POLL_MINUTES),
+        task_minutes=pick(timeouts, "timeouts", "task_minutes", contracts.DEFAULT_TASK_TIMEOUT_MINUTES),
+        closeout_minutes=pick(timeouts, "timeouts", "closeout_minutes", contracts.DEFAULT_CLOSEOUT_TIMEOUT_MINUTES),
+        ci_poll_minutes=pick(timeouts, "timeouts", "ci_poll_minutes", contracts.DEFAULT_CI_POLL_MINUTES),
     )
     closeout_obj = Closeout(
-        model=closeout.get("model") or default("closeout", "model", contracts.DEFAULT_CLOSEOUT_MODEL),
-        effort=closeout.get("effort") or default("closeout", "effort", contracts.DEFAULT_CLOSEOUT_EFFORT),
+        model=pick(closeout, "closeout", "model", contracts.DEFAULT_CLOSEOUT_MODEL),
+        effort=pick(closeout, "closeout", "effort", contracts.DEFAULT_CLOSEOUT_EFFORT),
         allowed_tools=_tuple(closeout.get("allowed_tools", [])),
         allowed_paths=_tuple(closeout.get("allowed_paths", [])),
     )
     gate_obj = Gate(command=_tuple(gate.get("command")), description=str(gate.get("description", "")))
     qualifying = Qualifying(**{key: str(q.get(key, "")).strip() for key in QUALIFYING_KEYS})
     on_blocked = OnBlocked(
-        merge_partial=bool(ob["merge_partial"]) if "merge_partial" in ob else default("on_blocked", "merge_partial", False),
-        open_followup=bool(ob["open_followup"]) if "open_followup" in ob else default("on_blocked", "open_followup", False),
+        merge_partial=bool(pick(ob, "on_blocked", "merge_partial", False)),
+        open_followup=bool(pick(ob, "on_blocked", "open_followup", False)),
     )
+    raw_tasks = raw.get("tasks", [])
+    if not isinstance(raw_tasks, list) or not all(isinstance(entry, dict) for entry in raw_tasks):
+        raise ManifestError("tasks must be an array of tables ([[tasks]]), not a single [tasks] table")
     tasks = tuple(
         Task(
             id=str(entry.get("id", "")),
@@ -211,7 +219,7 @@ def load(path):
             excluded=bool(entry.get("excluded", False)),
             reason=entry.get("reason"),
         )
-        for entry in raw.get("tasks", [])
+        for entry in raw_tasks
     )
     return Manifest(
         path=path,
@@ -278,10 +286,10 @@ def validate(manifest, check_repo=True, env=None):
     raw_perms = manifest.raw.get("permissions", {})
     if "permission_mode" in raw_perms or "mode" in raw_perms:
         err("permissions.permission_mode is not a field; Relay always runs dontAsk (R11)")
-    if any(contracts.FORBIDDEN_PERMISSION_MODE in str(item) for item in manifest.permissions.allowed):
-        err("permissions.allowed must not name %s (R11)" % contracts.FORBIDDEN_PERMISSION_MODE)
     if not _is_string_list(manifest.permissions.allowed) or not manifest.permissions.allowed:
         err("permissions.allowed must be a non-empty array of tool names")
+    elif any(contracts.FORBIDDEN_PERMISSION_MODE in item for item in manifest.permissions.allowed):
+        err("permissions.allowed must not name %s (R11)" % contracts.FORBIDDEN_PERMISSION_MODE)
     disallowed = list(manifest.permissions.disallowed) if _is_string_list(manifest.permissions.disallowed) else []
     for pattern in contracts.DISALLOWED_TOOLS:
         if pattern not in disallowed:
@@ -352,18 +360,13 @@ def validate(manifest, check_repo=True, env=None):
         if manifest.shipping_mode == "local_merge" and "origin" not in remotes:
             err("shipping.mode local_merge requires an origin remote to push to")
         for key in ("user.name", "user.email"):
-            if not _config(repo, key, env):
+            if not gitread.config_get(repo, key, env):
                 err("git config %s does not resolve in %s; the runner's merge authors a commit" % (key, repo))
         if manifest.project.default_branch is None and gitread.default_branch(repo) is None:
             err("project.default_branch is unset and refs/remotes/origin/HEAD is not set in the repo")
         docs_root = docs_root_for(repo)
     result.allowed_paths = completed_allowed_paths(manifest, docs_root)
     return result
-
-
-def _config(repo, key, env):
-    proc = gitread.run(repo, ["config", "--get", key], check=False, env=env)
-    return proc.stdout.strip() if proc.returncode == 0 else None
 
 
 def resolved_disallowed(manifest):

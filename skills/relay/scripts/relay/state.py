@@ -45,6 +45,7 @@ class AcquireResult:
     other_manifest: str | None = None
     reclaimed_ids: tuple = ()
     previous_holder: dict | None = None
+    repo_lease_reclaimed_from: dict | None = None
 
     @property
     def ok(self):
@@ -74,28 +75,11 @@ def base_dir(home=None):
 
 
 def new_record(task_id):
-    return {
-        "id": task_id,
-        "status": contracts.STATUS_PENDING,
-        "baseline_sha": None,
-        "baseline_tracker_status": None,
-        "baseline_comment_id": None,
-        "session_id": None,
-        "branch": None,
-        "landing_ref": None,
-        "verify": None,
-        "halt_class": None,
-        "halt_evidence": None,
-        "findings": [],
-        "closeout": None,
-        "started_at": None,
-        "ended_at": None,
-        "wall_seconds": None,
-        "active_seconds": None,
-        "transcript_path": None,
-        "brief_sha256": None,
-        "excluded_reason": None,
-    }
+    """A pending record with every field from RECORD_FIELDS present, so readers never key
+    error on a record that has not reached a later stage."""
+    record = {field: None for field in RECORD_FIELDS}
+    record.update(id=task_id, status=contracts.STATUS_PENDING, findings=[])
+    return record
 
 
 class StateStore:
@@ -240,14 +224,15 @@ class StateStore:
         if result.code == LOCKED:
             return result
         repo_result = self._acquire_repo_lock()
-        if repo_result is not None:
+        if isinstance(repo_result, AcquireResult):
             self._mutate(lambda state: state.update(lease=None))
             return repo_result
+        result.repo_lease_reclaimed_from = repo_result
         return result
 
     def _acquire_repo_lock(self):
-        """Returns an AcquireResult(LOCKED) when another manifest holds a live repo lease,
-        else takes it and returns None."""
+        """Returns an AcquireResult(LOCKED) when another manifest holds a live repo lease;
+        otherwise takes it and returns the stale lease it displaced (None when it was free)."""
         fd = os.open(self.repo_lock_path + ".flock", os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -257,11 +242,12 @@ class StateStore:
                     LOCKED, holder=dict(current), age_seconds=self._age(current),
                     other_manifest=current.get("manifest"),
                 )
+            displaced = dict(current) if current and current.get("manifest") != self.manifest_path else None
             now = self.now()
             self._write_repo_lock(dict(
                 self._holder(), acquired_at=_iso(now), heartbeat_at=_iso(now), ttl_seconds=self.ttl_seconds
             ))
-            return None
+            return displaced
         finally:
             os.close(fd)
 
@@ -294,7 +280,9 @@ class StateStore:
         return tuple(ids)
 
     def heartbeat(self):
-        """Re-stamp both leases; only when this process is the holder. Returns True on success."""
+        """Re-stamp both leases; only when this process holds both. Returns False when either
+        lease is no longer ours, including a repo lease another manifest reclaimed while this
+        runner was busy, so the run loop halts instead of merging without the repo lease."""
         stamped = {"ok": False}
 
         def fn(state):
@@ -304,12 +292,19 @@ class StateStore:
                 stamped["ok"] = True
 
         self._mutate(fn)
-        if stamped["ok"]:
+        if not stamped["ok"]:
+            return False
+        fd = os.open(self.repo_lock_path + ".flock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
             current = self._read_repo_lock()
-            if current and current.get("manifest") == self.manifest_path:
-                current["heartbeat_at"] = _iso(self.now())
-                self._write_repo_lock(current)
-        return stamped["ok"]
+            if not current or not self._is_mine(current) or current.get("manifest") != self.manifest_path:
+                return False
+            current["heartbeat_at"] = _iso(self.now())
+            self._write_repo_lock(current)
+        finally:
+            os.close(fd)
+        return True
 
     def release(self):
         """Clear both leases when held by this process. Never touches another holder's lease."""

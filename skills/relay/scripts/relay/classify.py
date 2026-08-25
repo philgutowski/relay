@@ -232,7 +232,8 @@ def classify(transcript_path, launch_result, write_tool_patterns=None):
                     "line": number,
                     "tool_use_line": use.get("_line"),
                 }
-                if contracts.CLAUDE_DIR_PATH_REGEX.search(target or ""):
+                file_path = str((use.get("input") or {}).get("file_path") or (use.get("input") or {}).get("notebook_path") or "") if isinstance(use.get("input"), dict) else ""
+                if contracts.CLAUDE_DIR_PATH_REGEX.search(file_path):
                     finding["class"] = contracts.HALT_PATH_GATE
                 elif use and matches_write_pattern(use, write_tool_patterns):
                     finding["class"] = contracts.HALT_TRACKER_WRITE_DENIED
