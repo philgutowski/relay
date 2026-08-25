@@ -18,7 +18,7 @@ before launch is a count and `comments_since` is everything past it.
 import re
 
 from .. import gitread
-from . import OUTCOME_LANDED, skipped
+from . import OUTCOME_LANDED, reference_hit, skipped
 
 TASK_RE = re.compile(r"^-\s*\[(?P<mark>[ xX])\]\s+(?P<id>\S+)\s*(?P<rest>.*?)\s*$")
 COMMENT_RE = re.compile(r"^\s+-\s+(?P<body>.*?)\s*$")

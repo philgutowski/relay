@@ -4,14 +4,13 @@ Every adapter takes an injectable transport (an opener for Jira, a run callable 
 git read wrapper for markdown), so no test here touches a network or invokes `gh`, and `gh` may
 be absent from the machine entirely. The shared contract runs against all three.
 """
-import json
 import os
 import tempfile
 import unittest
 
 import _paths
 import _repo
-from relay import adapters, gitread, manifest as mf
+from relay import adapters, manifest as mf
 from relay.adapters import github as gh_adapter, jira as jira_adapter, markdown as md_adapter
 
 FIXTURE = os.path.join(_paths.FIXTURES_DIR, "manifests", "complete.toml")

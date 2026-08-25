@@ -20,7 +20,6 @@ the ones that halted (R48), so a repair made between runs is picked up rather th
 The runner never writes to the tracker (R19). Every tracker write in this file happens inside a
 closeout process the runner launched; the runner reads the result back and decides from it.
 """
-import os
 import time
 from dataclasses import dataclass, field
 
@@ -31,6 +30,25 @@ EXIT_OK = 0
 EXIT_CONFIG = 1
 EXIT_HALTED = 2
 EXIT_LEASE = 3
+
+
+@dataclass
+class _Run:
+    """The values that are fixed for a whole run. Gathered once so a per task function takes a
+    task rather than a parameter list, and so the tail's context is built by expanding this."""
+    manifest: object
+    adapter: object
+    store: object
+    repo: str
+    default: str
+    env: dict
+    base_env: dict
+    home: str
+    stream: object
+    retry_blocked: bool
+    overrides: dict
+    launch_kwargs: dict
+    now: object
 
 
 @dataclass
@@ -52,10 +70,6 @@ class _Halt(Exception):
         self.halt_class = halt_class
         self.message = message
         self.evidence = evidence or {}
-
-
-def _default_branch(manifest):
-    return verify.default_branch_of(manifest)
 
 
 def _baseline_comment_id(adapter, task_id):
@@ -100,7 +114,7 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
     """Drive one manifest to completion or to a named halt. Returns a RunOutcome; never raises
     for a task level failure, because every one of those is a class an operator can act on."""
     repo = manifest.project.repo
-    default = _default_branch(manifest)
+    default = verify.default_branch_of(manifest)
     overrides = timeout_overrides or {}
     launch_kwargs = dict(launch_kwargs or {})
     env = launch.child_env(manifest, base_env, home)
@@ -124,14 +138,15 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
                % ((acquired.previous_holder or {}).get("holder_pid"),
                   len(acquired.reclaimed_ids), contracts.HALT_RUNNER_CRASHED))
 
+    config = _Run(manifest, adapter, store, repo, default, env, base_env, home, stream,
+                  retry_blocked, overrides, launch_kwargs, now)
     outcome = RunOutcome(EXIT_OK, store=store)
     try:
         store.validate()
         verify.startup_reverify(manifest, store, adapter, env=env, now=now)
         for index, task in enumerate(manifest.tasks):
             try:
-                _one_task(manifest, task, index, adapter, store, repo, default, env, base_env,
-                          home, stream, retry_blocked, overrides, launch_kwargs, now)
+                _one_task(config, task)
             except _Halt as halt:
                 store.upsert(halt.task_id, status=contracts.STATUS_HALTED,
                              halt_class=halt.halt_class, halt_evidence=halt.evidence)
@@ -148,8 +163,10 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
         store.release()
 
 
-def _one_task(manifest, task, index, adapter, store, repo, default, env, base_env, home, stream,
-              retry_blocked, overrides, launch_kwargs, now):
+def _one_task(cfg, task):
+    manifest, adapter, store = cfg.manifest, cfg.adapter, cfg.store
+    repo, default, env = cfg.repo, cfg.default, cfg.env
+    stream = cfg.stream
     record = store.get(task.id) or state.new_record(task.id)
     status = record.get("status")
 
@@ -161,7 +178,7 @@ def _one_task(manifest, task, index, adapter, store, repo, default, env, base_en
     if status == contracts.STATUS_EXCLUDED and record.get("excluded_reason"):
         return
     if status == contracts.STATUS_BLOCKED:
-        if not retry_blocked:
+        if not cfg.retry_blocked:
             return
         _clear_blocked_branch(store, task, repo, record, env)
 
@@ -200,9 +217,9 @@ def _one_task(manifest, task, index, adapter, store, repo, default, env, base_en
 
     launched = launch.launch(
         manifest, task, brief_text, store.path("logs", task.id + ".stdout.log"),
-        overrides.get("task_seconds") or manifest.timeouts.task_minutes * 60,
-        home=home, base_env=base_env, stream=stream,
-        heartbeat=store.heartbeat, on_release=store.release, **launch_kwargs)
+        cfg.overrides.get("task_seconds") or manifest.timeouts.task_minutes * 60,
+        home=cfg.home, base_env=cfg.base_env, stream=stream,
+        heartbeat=store.heartbeat, on_release=store.release, **cfg.launch_kwargs)
 
     digest = classify.classify(launched.transcript_path, launched,
                                adapter.write_tool_patterns())
@@ -213,9 +230,9 @@ def _one_task(manifest, task, index, adapter, store, repo, default, env, base_en
                  transcript_path=launched.transcript_path, wall_seconds=launched.wall_seconds,
                  active_seconds=launched.active_seconds, findings=findings)
 
-    context = _Context(manifest, task, card, adapter, store, repo, default, env, base_env, home,
-                       stream, overrides, launch_kwargs, branch, baseline_sha,
-                       baseline_comment_id, digest, launched, findings, now)
+    context = _Context(task=task, card=card, branch=branch, baseline_sha=baseline_sha,
+                       baseline_comment_id=baseline_comment_id, digest=digest,
+                       launched=launched, findings=findings, **vars(cfg))
 
     if launched.lease_lost:
         raise _Halt(task.id, contracts.HALT_RUNNER_CRASHED,
@@ -240,28 +257,17 @@ def _one_task(manifest, task, index, adapter, store, repo, default, env, base_en
 
 
 @dataclass
-class _Context:
-    """Everything one task's tail needs, gathered once so the routes read as a sequence."""
-    manifest: object
-    task: object
-    card: dict
-    adapter: object
-    store: object
-    repo: str
-    default: str
-    env: dict
-    base_env: dict
-    home: str
-    stream: object
-    overrides: dict
-    launch_kwargs: dict
-    branch: str
-    baseline_sha: str
-    baseline_comment_id: object
-    digest: dict
-    launched: object
-    findings: list
-    now: object
+class _Context(_Run):
+    """One task's tail: the run wide values plus what this task produced, so each route below
+    reads as the sequence R50 names rather than as parameter threading."""
+    task: object = None
+    card: dict = None
+    branch: str = None
+    baseline_sha: str = None
+    baseline_comment_id: object = None
+    digest: dict = None
+    launched: object = None
+    findings: list = None
 
 
 def _clear_blocked_branch(store, task, repo, record, env):

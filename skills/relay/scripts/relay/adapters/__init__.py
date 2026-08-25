@@ -30,7 +30,12 @@ touch a network or invoke `gh`: an opener for Jira, a `run` callable for `gh`, a
 wrapper for markdown.
 """
 
+import re
+
 NETWORK_TIMEOUT_SECONDS = 30
+
+# A commit sha as a comment body abbreviates it. Seven characters is git's own short sha floor.
+SHA_TOKEN_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 
 INTERFACE = (
     "candidates",
@@ -50,6 +55,17 @@ OUTCOME_BLOCKED = "blocked"
 class ConfigurationError(ValueError):
     """A manifest or environment problem the operator must fix before any run. Raised at
     construction, before a single request, so `relay validate` names the missing variable."""
+
+
+def reference_hit(body, ref):
+    """True when a body names a landing reference: the full string (a PR URL), or a commit sha
+    the body abbreviated (`abc1234` in the body for a full sha on the record). Shared by all
+    three adapters because it is a property of git and of URLs, not of any one tracker."""
+    if not ref or not body:
+        return False
+    if ref in body:
+        return True
+    return any(ref.startswith(token) for token in SHA_TOKEN_RE.findall(body))
 
 
 def skipped(reason):

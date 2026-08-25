@@ -6,14 +6,13 @@ three, and only the blocked task's branch is left behind.
 """
 import json
 import os
-import shutil
 import tempfile
 import textwrap
 import unittest
 
 import _paths
 import _repo
-from relay import adapters, contracts, gitread, gitwrite, manifest as mf, run as runner, state
+from relay import contracts, gitread, manifest as mf, run as runner, state
 
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
 

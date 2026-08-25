@@ -11,8 +11,7 @@ project board equals the status field the manifest names. The second is what let
 import json
 import subprocess
 
-from . import NETWORK_TIMEOUT_SECONDS, OUTCOME_LANDED, skipped
-from .jira import reference_hit
+from . import NETWORK_TIMEOUT_SECONDS, OUTCOME_LANDED, reference_hit, skipped
 
 ISSUE_FIELDS = "title,body,state,comments"
 CLOSED_STATE = "CLOSED"

@@ -25,7 +25,6 @@ which keeps it testable without U4 and makes R15 structural: there is no seam he
 one task's data could reach another task's brief.
 """
 import os
-import re
 import string
 
 from . import contracts, state
@@ -71,7 +70,7 @@ class BriefError(ValueError):
     """The manifest names a shipping mode with no template, or a template is missing."""
 
 
-def _defang(text):
+def defang(text):
     """A task text cannot close its own data block: any copy of either delimiter is replaced
     before it reaches the prompt."""
     for delimiter in (DATA_BEGIN, DATA_END):
@@ -101,8 +100,8 @@ def values(manifest, task, card, branch=None):
     default_branch = manifest.project.default_branch or "the default branch"
     return {
         "task_id": task.id,
-        "title": _defang(str(card.get("title") or "")).strip(),
-        "description": _defang(str(card.get("description") or "")).strip(),
+        "title": defang(str(card.get("title") or "")).strip(),
+        "description": defang(str(card.get("description") or "")).strip(),
         "branch": branch or ("relay/" + task.id),
         "default_branch": default_branch,
         "gate_description": manifest.gate.description or "the project's own gate command",

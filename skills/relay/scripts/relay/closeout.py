@@ -25,7 +25,7 @@ import os
 import string
 from dataclasses import dataclass, field
 
-from . import brief, classify, contracts, launch, manifest as manifest_module
+from . import brief, classify, contracts, launch, manifest as manifest_module, state
 
 OUTCOME_LANDED = "landed"
 OUTCOME_BLOCKED = "blocked"
@@ -120,14 +120,10 @@ def _comment_lines(comments):
 
 
 def _gate_line(gate):
-    if gate is None:
+    if not gate:
         return "not run for this outcome"
-    if isinstance(gate, str):
-        return gate
-    ok = gate.get("ok") if isinstance(gate, dict) else None
-    code = gate.get("returncode") if isinstance(gate, dict) else None
-    log = gate.get("log") if isinstance(gate, dict) else None
-    return "%s (exit %s), output in %s" % ("passed" if ok else "refused", code, log)
+    return "%s (exit %s), output in %s" % ("passed" if gate.get("ok") else "refused",
+                                           gate.get("returncode"), gate.get("log"))
 
 
 def _timing_line(digest, wall_seconds=None, active_seconds=None):
@@ -175,9 +171,9 @@ def render(manifest, card, outcome, digest, comments, adapter, allowed_paths, la
         "data_header": DATA_HEADER,
         "data_begin": DATA_BEGIN,
         "data_end": DATA_END,
-        "title": brief._defang(str(card.get("title") or "")).strip(),
-        "description": brief._defang(str(card.get("description") or "")).strip(),
-        "comments": brief._defang(_bullets(_comment_lines(comments))),
+        "title": brief.defang(str(card.get("title") or "")).strip(),
+        "description": brief.defang(str(card.get("description") or "")).strip(),
+        "comments": brief.defang(_bullets(_comment_lines(comments))),
         "duty_one": adapter.closeout_instructions(outcome),
         "compound_command": compound_command(depth, hint),
         "compound_skill": contracts.SKILL_PREFIX + "ce-compound",
@@ -259,13 +255,7 @@ def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths
             "last_message": closeout_digest.get("last_message") or "(no final message)",
         })
     return CloseoutResult(result, findings, closeout_digest, launch_result,
-                          brief_path, brief_sha256_of(text))
-
-
-def brief_sha256_of(text):
-    from . import state
-
-    return state.sha256_of(text)
+                          brief_path, state.sha256_of(text))
 
 
 def confirm_blocked_comment(adapter, task_id, baseline_comment_id):

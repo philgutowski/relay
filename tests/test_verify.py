@@ -134,7 +134,7 @@ class FullScope(VerifyCase):
         check = verdict.checks["card_terminal"]
         self.assertEqual(check["result"], verify.SKIPPED)
         self.assertTrue(check["blocking"])
-        self.assertIn("not authenticated", check["evidence"]["skipped"])
+        self.assertIn("not authenticated", check["evidence"]["reason"])
 
 
 class Mirror(VerifyCase):
