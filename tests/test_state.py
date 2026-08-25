@@ -45,7 +45,8 @@ class Acquire(StateCase):
         store = self.store()
         result = store.acquire()
         self.assertEqual(result.code, st.OK)
-        data = json.load(open(store.state_path))
+        with open(store.state_path) as handle:
+            data = json.load(handle)
         self.assertEqual(data["schema_version"], 1)
         self.assertEqual(data["lease"]["holder_pid"], 100)
         self.assertEqual(data["tasks"], {})
@@ -112,7 +113,8 @@ class Acquire(StateCase):
         store.acquire()
         data = store.read()
         data["lease"]["heartbeat_at"] = "not a time"
-        json.dump(data, open(store.state_path, "w"))
+        with open(store.state_path, "w") as handle:
+            json.dump(data, handle)
         self.clock.advance(10_000)
         self.assertEqual(self.store(pid=200).acquire().code, st.LOCKED)
 
@@ -180,7 +182,8 @@ class Records(StateCase):
             store.upsert("T-1", baseline_sha="bbb")
         store._abort_after_write = None
         self.assertEqual(store.get("T-1")["baseline_sha"], "aaa")
-        self.assertEqual(json.load(open(store.state_path))["schema_version"], 1)
+        with open(store.state_path) as handle:
+            self.assertEqual(json.load(handle)["schema_version"], 1)
 
     def test_cursor_and_git_ops(self):
         store = self.store()
