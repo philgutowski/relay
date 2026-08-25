@@ -246,3 +246,48 @@ class Heartbeat(LaunchCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LaunchFailure(LaunchCase):
+    """A binary that is missing or unexecutable must be a result, not an exception: the reader
+    thread, the heartbeat, and the signal handlers are all installed after Popen, so a raise
+    there skips every piece of cleanup (review finding #3)."""
+
+    def test_a_missing_binary_returns_a_launch_error_rather_than_raising(self):
+        env = dict(self.base_env, PATH=os.path.join(self.tmp.name, "empty"))
+        os.makedirs(os.path.join(self.tmp.name, "empty"), exist_ok=True)
+        result = self.go(base_env=env)
+        self.assertIsNotNone(result.launch_error)
+        self.assertIn("claude", result.launch_error)
+        self.assertFalse(result.timed_out)
+        self.assertIsNone(result.exit_code)
+
+
+class TimeoutWithASurvivingGrandchild(LaunchCase):
+    """The deadline used to be conjoined with the direct child still running, so once the stub
+    exited the timeout could never fire while a grandchild held the inherited stdout pipe open
+    (review finding #15)."""
+
+    def test_a_fast_exit_with_a_grandchild_holding_the_pipe_still_times_out(self):
+        write_entry(self.queue, 1, os.path.join(TRANSCRIPTS, "success.jsonl"))
+        result = self.go(timeout_seconds=2,
+                         base_env=dict(self.base_env, RELAY_STUB_CHILD="1"))
+        self.assertTrue(result.timed_out, "the deadline never fired; the loop would have hung")
+        self.assertTrue(result.killed_group)
+        self.assertLess(result.active_seconds, 20)
+
+
+class CloseoutDisallowList(LaunchCase):
+    def test_the_closeout_extra_disallow_entries_reach_the_argument_list(self):
+        args = launch.build_args(self.manifest, self.manifest.tasks[0], BRIEF, "sid",
+                                 disallowed=contracts.CLOSEOUT_DISALLOWED_EXTRA)
+        disallowed = args[args.index("--disallowedTools") + 1]
+        for pattern in contracts.CLOSEOUT_DISALLOWED_EXTRA:
+            self.assertIn(pattern, disallowed)
+        for pattern in contracts.DISALLOWED_TOOLS:
+            self.assertIn(pattern, disallowed)
+
+    def test_a_task_launch_keeps_the_ordinary_list_so_pr_mode_can_still_push(self):
+        args = launch.build_args(self.manifest, self.manifest.tasks[0], BRIEF, "sid")
+        disallowed = args[args.index("--disallowedTools") + 1]
+        self.assertNotIn("Bash(git push*)", disallowed.split(","))

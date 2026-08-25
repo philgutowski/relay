@@ -48,6 +48,7 @@ class LaunchResult:
     transcript_path: str | None = None
     transcript_present: bool = False
     log_path: str | None = None
+    launch_error: str | None = None
 
 
 def child_env(manifest, base_env=None, home=None):
@@ -64,11 +65,15 @@ def child_env(manifest, base_env=None, home=None):
     return env
 
 
-def build_args(manifest, task, brief_text, session_id, allowed=None):
+def build_args(manifest, task, brief_text, session_id, allowed=None, disallowed=None):
     """The argument list, never a shell string (R9). The allowlist defaults to the manifest's
     and is overridden for the closeout, which gets a narrower one (U9). The disallow list is the
     manifest's plus every R10 variant validate filled in, for both."""
-    disallowed = manifest_module.resolved_disallowed(manifest)
+    resolved = manifest_module.resolved_disallowed(manifest)
+    for extra in disallowed or ():
+        if extra not in resolved:
+            resolved.append(extra)
+    disallowed = resolved
     allowed = manifest.permissions.allowed if allowed is None else allowed
     return [
         "claude", "-p", brief_text,
@@ -155,20 +160,28 @@ class _Heartbeat:
             self._timer.cancel()
 
 
-def _kill_group(proc, grace_seconds):
+def _kill_group(proc, grace_seconds, pgid=None):
     """SIGTERM the whole group, then SIGKILL what is left. The pipe usually stays open until the
-    SIGKILL because grandchildren inherited it, so nothing here waits on stdout."""
+    SIGKILL because grandchildren inherited it, so nothing here waits on stdout.
+
+    `pgid` must be the value captured at launch. Resolving it here instead would fail once the
+    leader has been reaped, which is the common case: the direct process exits, a subagent or a
+    gate keeps running, and the group is exactly what still needs killing."""
+    if pgid is None:
+        try:
+            pgid = os.getpgid(proc.pid)
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        os.killpg(pgid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError, OSError):
         return False
     try:
         proc.wait(timeout=grace_seconds)
-        return True
     except subprocess.TimeoutExpired:
         pass
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        os.killpg(pgid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
         pass
     try:
@@ -181,7 +194,7 @@ def _kill_group(proc, grace_seconds):
 def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=None, home=None,
            base_env=None, heartbeat=None, heartbeat_interval=contracts.LEASE_HEARTBEAT_SECONDS,
            stream=print, sigkill_grace_seconds=SIGKILL_GRACE_SECONDS, popen=subprocess.Popen,
-           on_release=None, allowed=None):
+           on_release=None, allowed=None, disallowed=None):
     """Run one task or closeout process to completion, a timeout, or a lost lease.
 
     `active_seconds` is measured on the monotonic clock, which does not advance while the host
@@ -196,12 +209,24 @@ def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=Non
     result = LaunchResult(session_id=session_id, log_path=log_path)
 
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
-    args = build_args(manifest, task, brief_text, session_id, allowed)
+    args = build_args(manifest, task, brief_text, session_id, allowed, disallowed)
 
     started_wall = time.time()
     started = time.monotonic()
-    proc = popen(args, cwd=repo, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                 stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
+    try:
+        proc = popen(args, cwd=repo, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                     stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
+    except OSError as exc:
+        result.launch_error = "could not start %s: %s" % (args[0], exc)
+        result.wall_seconds = time.time() - started_wall
+        result.active_seconds = time.monotonic() - started
+        result.transcript_path, result.transcript_present = find_transcript(home, repo, session_id)
+        return result
+
+    try:
+        group_id = os.getpgid(proc.pid)
+    except OSError:
+        group_id = None
 
     lines = queuemod.Queue()
     reader = _Reader(proc.stdout, lines)
@@ -220,7 +245,7 @@ def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=Non
     def handle(signum, frame):
         """R49 plus the System-Wide Impact note: the child is in its own session, so the
         operator's Ctrl+C never reaches it. The runner has to pass it on and release the lease."""
-        _kill_group(proc, sigkill_grace_seconds)
+        _kill_group(proc, sigkill_grace_seconds, group_id)
         if on_release is not None:
             on_release()
         original = previous.get(signum)
@@ -256,11 +281,14 @@ def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=Non
                             stream(line.rstrip("\n"))
                 if beat.lost:
                     result.lease_lost = True
-                    result.killed_group = _kill_group(proc, sigkill_grace_seconds)
+                    result.killed_group = _kill_group(proc, sigkill_grace_seconds, group_id)
                     break
-                if time.monotonic() >= deadline and proc.poll() is None:
+                if time.monotonic() >= deadline:
+                    # Not conditioned on the child still running. A grandchild that inherited
+                    # stdout keeps the pipe open after its parent exits, so the reader never
+                    # reaches EOF and this is the only bound left.
                     result.timed_out = True
-                    result.killed_group = _kill_group(proc, sigkill_grace_seconds)
+                    result.killed_group = _kill_group(proc, sigkill_grace_seconds, group_id)
                     break
                 if done and proc.poll() is not None:
                     break
@@ -278,11 +306,17 @@ def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=Non
                     signal.signal(signum, original)
                 except ValueError:
                     pass
-        try:
-            proc.stdout.close()
-        except (OSError, ValueError):
-            pass
-        reader.join(timeout=1)
+        # Order matters. The reader thread may be blocked inside stdout, and closing a
+        # buffered reader from this thread while that read holds its lock deadlocks. Wait for
+        # the reader to finish first, which it does as soon as the last descendant holding the
+        # inherited pipe is gone, and only then close. If a descendant survived the group kill,
+        # leave the daemon thread be rather than hanging the runner on it.
+        reader.join(timeout=max(1.0, float(sigkill_grace_seconds)))
+        if not reader.is_alive():
+            try:
+                proc.stdout.close()
+            except (OSError, ValueError):
+                pass
 
     result.exit_code = proc.poll()
     result.active_seconds = time.monotonic() - started

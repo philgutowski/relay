@@ -120,6 +120,15 @@ DISALLOWED_TOOLS = (
     "Bash(rm -R *)",
 )
 
+# The closeout commits and the runner pushes for it (KTD15). A push from inside the closeout
+# would put a commit on the remote before the runner's scope check could bound it, and a local
+# reset cannot undo that, so the closeout's disallow list refuses every push spelling. The task
+# process keeps the ordinary list, because in pr_terminal mode it has to push its own branch.
+CLOSEOUT_DISALLOWED_EXTRA = (
+    "Bash(git push*)",
+    "Bash(git -C * push*)",
+)
+
 # Task record statuses (the state machine in the plan's design section).
 STATUS_PENDING = "pending"
 STATUS_EXCLUDED = "excluded"
@@ -156,6 +165,10 @@ HALT_PARTIAL_LANDING = "partial_landing"
 HALT_TIMEOUT = "timeout"
 HALT_UNCLEAN_EXIT = "unclean_exit"
 HALT_CI_UNDECIDED = "ci_undecided"
+# The case KTD6's table did not cover: a defect or a library exception the runner did not
+# anticipate. Without a class for it the run loop had no way to stop the way it promises to,
+# so an unexpected error became a traceback and left the record reading running forever.
+HALT_UNEXPECTED_ERROR = "unexpected_error"
 
 # Findings the closeout raises (U9). Neither halts a run: the runner's own verify decides
 # landing, and a card that went uncommented is a checklist line for the operator, not a stop.
@@ -178,6 +191,7 @@ HALT_CLASSES = (
     HALT_TIMEOUT,
     HALT_UNCLEAN_EXIT,
     HALT_CI_UNDECIDED,
+    HALT_UNEXPECTED_ERROR,
 )
 
 # Classes that are findings attached to a record rather than the record's own class.
@@ -211,6 +225,7 @@ HALT_LINES = {
     HALT_TIMEOUT: "timed out after {active_minutes} active minutes ({wall_minutes} wall); tree {tree} on {branch}",
     HALT_UNCLEAN_EXIT: "left the tree dirty on {branch}",
     HALT_CI_UNDECIDED: "PR {url} open, CI undecided after {minutes} minutes",
+    HALT_UNEXPECTED_ERROR: "the runner hit an unexpected {error_type} on {task}: {error}",
     CLOSEOUT_UNFINISHED: "the closeout ended without a terminal line; last message: {last_message}",
     BLOCKED_UNRECORDED: "blocked and the card carries no new comment; check {task} by hand",
 }

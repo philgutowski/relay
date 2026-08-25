@@ -301,3 +301,37 @@ class StartupReverify(VerifyCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GitReadFailures(VerifyCase):
+    """A verdict is re-run on repaired repos days later, so a ref that no longer resolves has
+    to become a blocking skip rather than a traceback (review finding #11)."""
+
+    def test_a_baseline_that_no_longer_resolves_is_a_blocking_skip_not_a_raise(self):
+        sha = self.land_a_commit()
+        record = self.record(landing_ref=sha)
+        record["baseline_sha"] = "0" * 40
+        verdict = verify.verify(self.manifest(), record, FakeAdapter(), scope=verify.SCOPE_CODE)
+        check = verdict.checks["new_commit_since_baseline"]
+        self.assertEqual(check["result"], verify.SKIPPED)
+        self.assertTrue(check["blocking"])
+        self.assertFalse(verdict.landed)
+
+    def test_startup_reverify_survives_a_record_whose_baseline_is_gone(self):
+        manifest = self.manifest()
+        store = state.StateStore(manifest.path, manifest.project.repo,
+                                 home=os.path.join(self.tmp.name, "home"))
+        store.upsert(self.task_id, status=contracts.STATUS_HALTED, baseline_sha="0" * 40,
+                     landing_ref="deadbeef")
+        self.assertEqual(verify.startup_reverify(manifest, store, FakeAdapter()), [])
+        self.assertEqual(store.get(self.task_id)["status"], contracts.STATUS_HALTED)
+
+    def test_a_mirror_rule_the_runner_cannot_read_back_blocks_rather_than_skips(self):
+        sha = self.land_a_commit()
+        toml = self.toml.replace("mirror = []", 'mirror = ["release"]')
+        verdict = verify.verify(self.manifest(toml, name="bad-mirror.toml"),
+                                self.record(landing_ref=sha), self.landed_adapter(sha))
+        check = verdict.checks["mirror_equals_head"]
+        self.assertEqual(check["result"], verify.SKIPPED)
+        self.assertTrue(check["blocking"], "an unreadable mirror rule let the task read landed")
+        self.assertFalse(verdict.landed)

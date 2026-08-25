@@ -88,10 +88,17 @@ def allowed_tools(manifest, adapter):
 
 
 def _bullets(items, empty=NONE_LINE):
-    items = [str(item).strip() for item in items if str(item).strip()]
-    if not items:
+    """One item per line, defanged and flattened. Flattening matters: a denied Bash command or
+    a last message can contain a newline, and a bullet that spans lines is a bullet a reader
+    (or a model) can mistake for the surrounding instructions."""
+    flattened = []
+    for item in items:
+        one_line = " ".join(str(item).split())
+        if one_line:
+            flattened.append(brief.defang(one_line))
+    if not flattened:
         return empty
-    return "\n".join("- " + item for item in items)
+    return "\n".join("- " + item for item in flattened)
 
 
 def _denial_lines(digest):
@@ -239,7 +246,8 @@ def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths
     launch_result = launch.launch(
         manifest, _closeout_task(manifest, task_id), text,
         store.path("logs", task_id + ".closeout.stdout.log"), timeout_seconds,
-        allowed=allowed_tools(manifest, adapter), **launch_kwargs)
+        allowed=allowed_tools(manifest, adapter),
+        disallowed=contracts.CLOSEOUT_DISALLOWED_EXTRA, **launch_kwargs)
 
     # U7 runs over the closeout transcript too (R44). AE1's denied tracker write most often
     # happens here, after the code has already merged.

@@ -29,6 +29,32 @@ MERGE_MESSAGE = "Merge relay task {task_id} from {branch}"
 # pending, anything else a failure or an error. Pending is the only code that keeps polling.
 GH_CHECKS_PENDING = 8
 DEFAULT_CI_POLL_INTERVAL_SECONDS = 60
+SIGKILL_GRACE_SECONDS = 15
+
+
+def _kill_group(proc, grace_seconds):
+    """SIGTERM the whole group, then SIGKILL what is left."""
+    import os as _os
+    import signal as _signal
+
+    try:
+        _os.killpg(_os.getpgid(proc.pid), _signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+    try:
+        proc.wait(timeout=grace_seconds)
+        return True
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        proc.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+    return True
 
 
 def task_branch_for(task_id):
@@ -233,10 +259,26 @@ def run_gate(repo, command, log_path, timeout_seconds=contracts.DEFAULT_GATE_TIM
     summary points at. Never a shell string (R9); a nonzero exit strands the branch."""
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
     try:
-        proc = subprocess.run(list(command), cwd=repo, capture_output=True, text=True, env=env,
-                              timeout=timeout_seconds, stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired as exc:
-        text = "gate timed out after %d seconds\n%s" % (timeout_seconds, exc.stdout or "")
+        proc = subprocess.Popen(list(command), cwd=repo, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, env=env,
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as exc:
+        text = "gate command could not run: %s" % exc
+        with open(log_path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        return GateResult(False, None, log_path, text[-2000:])
+    try:
+        captured = proc.communicate(timeout=timeout_seconds)[0]
+    except subprocess.TimeoutExpired:
+        # The gate builds, so it spawns compilers and test runners. Killing only the process
+        # named in the manifest would leave those running into the next task.
+        _kill_group(proc, SIGKILL_GRACE_SECONDS)
+        captured = ""
+        try:
+            captured = proc.communicate(timeout=5)[0] or ""
+        except (subprocess.TimeoutExpired, ValueError):
+            pass
+        text = "gate timed out after %d seconds\n%s" % (timeout_seconds, captured)
         with open(log_path, "w", encoding="utf-8") as handle:
             handle.write(text)
         return GateResult(False, None, log_path, text[-2000:], timed_out=True)
@@ -245,7 +287,7 @@ def run_gate(repo, command, log_path, timeout_seconds=contracts.DEFAULT_GATE_TIM
         with open(log_path, "w", encoding="utf-8") as handle:
             handle.write(text)
         return GateResult(False, None, log_path, text[-2000:])
-    text = (proc.stdout or "") + (proc.stderr or "")
+    text = captured or ""
     with open(log_path, "w", encoding="utf-8") as handle:
         handle.write(text)
     return GateResult(proc.returncode == 0, proc.returncode, log_path, text[-2000:])
@@ -254,7 +296,7 @@ def run_gate(repo, command, log_path, timeout_seconds=contracts.DEFAULT_GATE_TIM
 # The tail.
 
 def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, gate_log_path,
-                     ops=None, env=None, gate_timeout_seconds=None):
+                     ops=None, env=None, gate_timeout_seconds=None, still_ours=None):
     """The fixed local merge sequence of R50, from the task process's exit to a pushed default
     branch. Stops at the first refusal and names the halt class; every stop leaves the task
     branch in place so the operator can repair by hand and resume.
@@ -287,6 +329,11 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
                           evidence={"branch": branch,
                                     "tree": gitread.status_porcelain(repo).strip().splitlines()[:10]})
 
+    if still_ours is not None and not still_ours():
+        return TailResult(False, contracts.HALT_RUNNER_CRASHED, "lease",
+                          evidence={"branch": branch, "status": "merging",
+                                    "reason": "the lease was lost while the gate ran"})
+
     fetch(repo, ops=ops, task_id=task_id, env=env)
     remote_sha = gitread.rev_parse(repo, "origin/" + default_branch)
     if remote_sha != baseline_sha:
@@ -304,6 +351,11 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
                                     "conflict": merge.conflict, "merge_output": merge.output,
                                     "branch": branch, "baseline_sha": baseline_sha,
                                     "remote_sha": remote_sha})
+
+    if still_ours is not None and not still_ours():
+        return TailResult(False, contracts.HALT_RUNNER_CRASHED, "lease", merge_sha=merge.sha,
+                          evidence={"branch": default_branch, "status": "merging",
+                                    "reason": "the lease was lost before the push"})
 
     pushed = push(repo, ["origin", default_branch], ops=ops, task_id=task_id, env=env)
     if not pushed.ok:

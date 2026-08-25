@@ -89,6 +89,20 @@ def _skip(reason, blocking=False):
     return _check(SKIPPED, {"reason": reason}, blocking)
 
 
+class _GitReadFailed(Exception):
+    """A git read the verdict needed could not be completed."""
+
+
+def _safe(fn, *args, **kwargs):
+    """Every git read in this module goes through here. A ref that no longer resolves, a repo
+    an operator moved, or a permission failure becomes a blocking skip rather than an exception,
+    which is what lets a later session re-run the verdict on a repaired repo without crashing."""
+    try:
+        return fn(*args, **kwargs)
+    except gitread.GitError as exc:
+        raise _GitReadFailed(str(exc))
+
+
 def default_branch_of(manifest):
     return (manifest.project.default_branch
             or gitread.default_branch(manifest.project.repo)
@@ -118,13 +132,19 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
             pass
 
     # Git checks.
-    porcelain = gitread.status_porcelain(repo)
-    checks["tree_clean"] = _check(PASS if not porcelain.strip() else FAIL,
-                                  {"tree": porcelain.strip().splitlines()[:10]})
+    try:
+        porcelain = _safe(gitread.status_porcelain, repo)
+        checks["tree_clean"] = _check(PASS if not porcelain.strip() else FAIL,
+                                      {"tree": porcelain.strip().splitlines()[:10]})
+    except _GitReadFailed as exc:
+        checks["tree_clean"] = _skip("could not read the working tree: %s" % exc, blocking=True)
 
-    current = gitread.current_branch(repo)
-    checks["on_default"] = _check(PASS if current == default else FAIL,
-                                  {"branch": current, "default_branch": default})
+    try:
+        current = _safe(gitread.current_branch, repo)
+        checks["on_default"] = _check(PASS if current == default else FAIL,
+                                      {"branch": current, "default_branch": default})
+    except _GitReadFailed as exc:
+        checks["on_default"] = _skip("could not read the current branch: %s" % exc, blocking=True)
 
     local_sha = gitread.rev_parse(repo, default)
     remote_sha = gitread.rev_parse(repo, "origin/" + default)
@@ -140,11 +160,17 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
     elif not baseline:
         checks["new_commit_since_baseline"] = _skip("no baseline_sha on the record", blocking=True)
     else:
-        commits = gitread.log_oneline(repo, baseline, default) if local_sha else []
-        checks["new_commit_since_baseline"] = _check(
-            PASS if commits else FAIL,
-            {"baseline_sha": baseline, "head_sha": local_sha, "commits": len(commits)},
-        )
+        try:
+            commits = _safe(gitread.log_oneline, repo, baseline, default) if local_sha else []
+            checks["new_commit_since_baseline"] = _check(
+                PASS if commits else FAIL,
+                {"baseline_sha": baseline, "head_sha": local_sha, "commits": len(commits)},
+            )
+        except _GitReadFailed as exc:
+            # The usual cause is a baseline the operator's repair rewrote away. Not landed,
+            # and not a crash: the record says why and the run can halt cleanly.
+            checks["new_commit_since_baseline"] = _skip(
+                "could not compare against the baseline %s: %s" % (baseline, exc), blocking=True)
 
     # PR terminal checks.
     if mode != PR_TERMINAL:
@@ -173,8 +199,12 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
 
     # Mirror (R6, R50: pushed only after the closeout, so it is a full scope check).
     target = gitwrite.mirror_target(manifest.project.mirror)
-    if target is None:
+    if target is None and not manifest.project.mirror:
         checks["mirror_equals_head"] = _skip("no project.mirror in the manifest")
+    elif target is None:
+        checks["mirror_equals_head"] = _skip(
+            "project.mirror %r names no remote and destination the runner can read back"
+            % (list(manifest.project.mirror),), blocking=True)
     else:
         remote, destination = target
         mirror_sha = gitread.rev_parse(repo, "%s/%s" % (remote, destination))
