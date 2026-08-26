@@ -75,13 +75,14 @@ runner re-verifies what halted and resumes at the first task that did not land.
 
 ## Where things are
 
-- `CONCEPTS.md`: the vocabulary. Runner, Manifest, Task process, Closeout process, Halt class,
-  Verify-landed. Read this first.
+- `CONCEPTS.md`: the vocabulary. Runner, Manifest, Lease, Task process, Closeout process, Halt
+  class, Cause line, Verify-landed. Read this first.
 - `docs/plans/2026-08-25-1346-feat-relay-outer-loop-plan.md`: the implementation plan, including
   the requirements, the key technical decisions, and the halt class table.
 - `docs/examples/`: one manifest per adapter.
-- `docs/solutions/`: learnings, starting with the `.claude/` permission gate that shaped the
-  pre-flight scan.
+- `docs/solutions/`: the learnings store, three so far. The `.claude/` permission gate that shaped
+  the pre-flight scan, the process group kill that resolved its target too late, and the cause line
+  contract that lived in two places and degraded to question marks.
 - `skills/relay/scripts/relay/`: the runner package.
 
 ## Tests
