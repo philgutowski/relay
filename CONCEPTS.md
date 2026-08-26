@@ -89,20 +89,27 @@ A Task whose process stopped deliberately without landing, leaving the repositor
 Blocked Task is a normal outcome rather than a failure.
 
 A Blocked Task is only legible to an operator who was not watching if the blocker reaches somewhere
-outside the run's own transcript. Where that record is written, and whether the Runner may write it
-given that it is otherwise read-only on the Tracker, is not yet settled.
+outside the run's own transcript. The Closeout process writes that record, as a comment on the
+Tracker, and the Runner never does: it reads the Tracker afterwards to confirm a comment appeared
+and reports a Blocked Task whose card carries none as a check for the operator to make by hand. So a
+Blocked Task the Closeout failed to record is visible in the run summary rather than on the board,
+which is the accepted cost of the Runner holding no write path at all.
 
 ### Shipping mode
-The per-project choice of what landing means: a pull request whose checks have decided, or a merge
-to the default branch performed outside the Task process. The Manifest names one, and Verify-landed
-applies the matching checks.
+The per-project choice of what landing means: a merge to the default branch performed outside the
+Task process, or a pull request whose checks have decided. The Manifest names one, and Verify-landed
+applies the matching checks. Only the merge mode is implemented; the pull request mode is named in
+the schema and refused before a run starts, so no Task can be driven under it today.
 
 ## Surroundings
 
 ### Tracker adapter
 The read-side interface between a Runner and whatever holds the Task list and their statuses. Each
-adapter exposes the same three operations regardless of what sits behind it: list candidate Tasks,
-read one Task's status, and confirm that a closing reference is present.
+adapter exposes the same operations regardless of what sits behind it, and not one of them writes:
+listing candidate Tasks, reading one Task's status and its recent comments, confirming that a
+closing reference is present, and supplying what the Task process and the Closeout process need in
+order to write to that Tracker themselves. The absence of a write operation is the whole guarantee.
+A Runner cannot move a card by mistake because it holds no way to move one at all.
 
 ### External gate
 The project's own mechanism that refuses a broken change independently of any agent's judgment,

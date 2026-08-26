@@ -209,15 +209,25 @@ passing suite that never took that branch.
 
 Relay has more code shaped this way, and it is worth naming rather than assuming clean:
 
-- The lease loss checks at `skills/relay/scripts/relay/run.py:284` and `:464` only run their
+- The lease loss checks at `skills/relay/scripts/relay/run.py:285` and `:495` only run their
   guarded behaviour once a lease is already gone. A test has to force the lease into a lost
   state deliberately, the way `test_a_heartbeat_that_reports_a_lost_lease_stops_the_run` does at
   `tests/test_launch.py:240` to `:244`, not merely assert the heartbeat exists.
-- The blocking skip pattern in `skills/relay/scripts/relay/verify.py`, defined at `:88` and used
-  at `:140` and `:173` among others, exists to turn an unreadable git state into not landed
+- The blocking skip pattern in `skills/relay/scripts/relay/verify.py`, defined at `:87` and used
+  at `:139` and `:172` among others, exists to turn an unreadable git state into not landed
   rather than a crash. That path by definition only runs when something upstream is already
   degraded, so it deserves the same scrutiny: does the suite actually put it into the degraded
   state, or does it exercise the healthy path and assume the fallback follows?
+
+  **Checked on 2026-08-26, and the answer was worse than a missing test.** The skip machinery
+  itself is sound. What was not sound was its supply: the GitHub adapter's `status` turned an
+  unreadable project board into `terminal: False, skipped: None`, a definite answer, so the
+  degraded path verify was written to take could not be reached from that adapter at all. A
+  suite that exercises the skip by handing verify a `skipped` reason directly proves the skip
+  works and proves nothing about whether anything ever produces one. The lesson generalises the
+  one below: it is not enough to force the guarded branch, you also have to check that the code
+  upstream can put the system into the state the branch guards. The fix, and the two tests that
+  pin both halves of the distinction, are in `tests/test_adapters.py`.
 
 The check to apply going forward, here and anywhere else in Relay with this shape: before
 trusting a kill path, a lease check, or a skip branch, ask whether any existing test forces the
