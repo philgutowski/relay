@@ -175,8 +175,13 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
             else:
                 store.set_cursor(index + 1)
                 continue
+            # The message is the raiser's own sentence, kept beside the class's template
+            # line. First live run: a retry refused under R48 halted as unclean_exit and the
+            # summary said "left the tree dirty" about a clean tree, because the sentence that
+            # explained the refusal was printed to stdout and never written down.
             store.upsert(halt.task_id, status=contracts.STATUS_HALTED,
-                         halt_class=halt.halt_class, halt_evidence=halt.evidence)
+                         halt_class=halt.halt_class, halt_evidence=halt.evidence,
+                         halt_message=halt.message)
             store.write_terminal(contracts.RUN_HALTED, halt.task_id, halt.halt_class,
                                  contracts.CLI_VERSION_TESTED)
             wrote_terminal = True

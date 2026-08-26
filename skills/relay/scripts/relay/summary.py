@@ -79,6 +79,7 @@ def _task_entry(store, record):
         # Weakest source first. The record carries fields a template may also name, most
         # of them written after the halt, so the evidence the raiser recorded has to win.
         "cause": cause_line(record.get("halt_class"), record, landing, evidence),
+        "halt_message": record.get("halt_message"),
         "landing_ref": record.get("landing_ref"),
         "branch": record.get("branch"),
         "closeout": record.get("closeout"),
@@ -190,9 +191,13 @@ def lines(data):
         out.append((head, source + ".status"))
         if entry["cause"]:
             out.append(("    %s" % entry["cause"], source + ".cause"))
+        if entry["halt_message"] and entry["halt_message"] != entry["cause"]:
+            out.append(("    %s" % entry["halt_message"], source + ".halt_message"))
         if entry["excluded_reason"]:
             out.append(("    %s" % entry["excluded_reason"], source + ".excluded_reason"))
-        if entry["landing_ref"]:
+        # A landed task's cause line already names the ref; printing it twice was the first
+        # live run's summary.
+        if entry["landing_ref"] and entry["class"] != contracts.HALT_LANDED:
             out.append(("    landed at %s" % entry["landing_ref"], source + ".landing_ref"))
         if entry["branch"]:
             out.append(("    branch left in place: %s" % entry["branch"], source + ".branch"))
