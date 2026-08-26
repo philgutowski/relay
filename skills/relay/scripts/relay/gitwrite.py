@@ -331,7 +331,7 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
 
     if still_ours is not None and not still_ours():
         return TailResult(False, contracts.HALT_RUNNER_CRASHED, "lease",
-                          evidence={"branch": branch, "status": "merging",
+                          evidence={"branch": branch, "status_before": contracts.STATUS_MERGING,
                                     "reason": "the lease was lost while the gate ran"})
 
     fetch(repo, ops=ops, task_id=task_id, env=env)
@@ -354,7 +354,8 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
 
     if still_ours is not None and not still_ours():
         return TailResult(False, contracts.HALT_RUNNER_CRASHED, "lease", merge_sha=merge.sha,
-                          evidence={"branch": default_branch, "status": "merging",
+                          evidence={"branch": default_branch,
+                                    "status_before": contracts.STATUS_MERGING,
                                     "reason": "the lease was lost before the push"})
 
     pushed = push(repo, ["origin", default_branch], ops=ops, task_id=task_id, env=env)

@@ -240,6 +240,16 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
     return _finish(Verdict(scope, checks, at=_stamp(now)), record)
 
 
+def card_status_of(verdict):
+    """The tracker status the card read when the verdict was taken, for the partial_landing
+    cause line. A card the adapter could not read says so rather than rendering a placeholder."""
+    check = verdict.checks.get("card_terminal") or {}
+    evidence = check.get("evidence") or {}
+    if evidence.get("status"):
+        return evidence["status"]
+    return evidence.get("reason") or "unreadable"
+
+
 def _stamp(now):
     return datetime.fromtimestamp(now(), tz=timezone.utc).isoformat()
 

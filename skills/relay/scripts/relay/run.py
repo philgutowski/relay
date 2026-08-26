@@ -227,7 +227,8 @@ def _one_task(cfg, task):
         raise _Halt(task.id, contracts.HALT_UNCLEAN_EXIT,
                     "pre flight refused before launching %s on check %s"
                     % (task.id, preflight.failed),
-                    {"check": preflight.failed, "evidence": preflight.evidence})
+                    {"branch": branch, "check": preflight.failed,
+                     "evidence": preflight.evidence})
 
     # Baseline (R17): what the runner will compare against when it decides landing.
     card = adapter.read(task.id)
@@ -283,7 +284,8 @@ def _one_task(cfg, task):
 
     if launched.lease_lost:
         raise _Halt(task.id, contracts.HALT_RUNNER_CRASHED,
-                    "the lease was lost while %s was running; another runner may hold it" % task.id)
+                    "the lease was lost while %s was running; another runner may hold it" % task.id,
+                    {"status_before": contracts.STATUS_RUNNING, "branch": branch})
 
     if digest.get("halt_class") == contracts.HALT_TIMEOUT:
         return _timeout_route(context)
@@ -337,9 +339,14 @@ def _timeout_route(ctx):
     run continues past a task that ran long. A dirty tree halts, because nobody can tell from
     here whether the half written state is safe to build on."""
     disposition = gitwrite.timeout_disposition(ctx.repo, ctx.default, ctx.branch)
+    # Both units on purpose. The seconds are the measurement and the minutes are what the
+    # cause line names; deriving the minutes at render time would put a unit conversion in the
+    # summary, which is the one place that must not compute anything.
     ctx.digest["timeout"] = {
         "tree": disposition.tree, "branch": disposition.branch,
         "active_seconds": ctx.launched.active_seconds, "wall_seconds": ctx.launched.wall_seconds,
+        "active_minutes": round((ctx.launched.active_seconds or 0) / 60.0),
+        "wall_minutes": round((ctx.launched.wall_seconds or 0) / 60.0),
     }
     if disposition.action == "halt":
         verdict = verify.verify(ctx.manifest, ctx.store.get(ctx.task.id), ctx.adapter,
@@ -389,7 +396,9 @@ def _merge_route(ctx):
         raise _Halt(ctx.task.id, contracts.HALT_GATE_REFUSED,
                     "the code scope verify failed for %s on %s"
                     % (ctx.task.id, ", ".join(verdict.failed())),
-                    {"checks": verdict.checks})
+                    {"branch": ctx.default, "sha": tail.merge_sha,
+                     "log": ctx.store.path("gate", ctx.task.id + ".log"),
+                     "checks": verdict.checks})
 
     gate_summary = {"ok": True, "returncode": 0,
                     "log": ctx.store.path("gate", ctx.task.id + ".log")}
@@ -403,7 +412,9 @@ def _merge_route(ctx):
         if not pushed.ok:
             raise _Halt(ctx.task.id, contracts.HALT_GATE_REFUSED,
                         "the mirror push was refused for %s" % ctx.task.id,
-                        {"push_output": pushed.output})
+                        {"branch": ctx.default, "sha": tail.merge_sha,
+                         "log": ctx.store.path("gate", ctx.task.id + ".log"),
+                         "push_output": pushed.output})
 
     final = verify.verify(ctx.manifest, ctx.store.get(ctx.task.id), ctx.adapter,
                           scope=verify.SCOPE_FULL, env=ctx.env, now=ctx.now)
@@ -412,7 +423,8 @@ def _merge_route(ctx):
         raise _Halt(ctx.task.id, final.halt_class or contracts.HALT_PARTIAL_LANDING,
                     "%s did not verify as landed: %s"
                     % (ctx.task.id, ", ".join(final.failed() + final.blocking_skips())),
-                    {"checks": final.checks})
+                    {"sha": tail.merge_sha, "card_status": verify.card_status_of(final),
+                     "branch": ctx.default, "checks": final.checks})
 
     if gitread.branch_exists(ctx.repo, ctx.branch):
         gitwrite.delete_branch(ctx.repo, ctx.branch, ops=ctx.store, task_id=ctx.task.id,
@@ -431,9 +443,21 @@ def _blocked_route(ctx, halt_class):
     finding = closeout.confirm_blocked_comment(ctx.adapter, ctx.task.id, ctx.baseline_comment_id)
     if finding:
         ctx.findings.append(finding)
+    # The class arrives from the digest, so the evidence has to cover every class that can
+    # reach here: blocked_envelope wants the blocker, no_envelope the last message, timeout the
+    # tree and the minutes. Recording only the stranded head left each of them a placeholder.
+    envelope = ctx.digest.get("envelope") or {}
+    blockers = envelope.get("blockers") or []
+    evidence = {
+        "stranded_head": stranded["head"],
+        "branch": stranded["branch"] or ctx.branch,
+        "blocker": blockers[0] if blockers else "no blocker text in the envelope",
+        "last_message": ctx.digest.get("last_message") or "(no final message)",
+    }
+    evidence.update(ctx.digest.get("timeout") or {})
     ctx.store.upsert(ctx.task.id, status=contracts.STATUS_BLOCKED, halt_class=halt_class,
                      branch=stranded["branch"], findings=ctx.findings,
-                     halt_evidence={"stranded_head": stranded["head"]})
+                     halt_evidence=evidence)
 
 
 def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None, gate=None):
@@ -465,7 +489,8 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
         raise _Halt(ctx.task.id, contracts.HALT_RUNNER_CRASHED,
                     "the lease was lost while the closeout for %s was running; nothing was "
                     "pushed" % ctx.task.id,
-                    {"stage": "closeout", "status": "merging", "branch": ctx.branch})
+                    {"stage": "closeout", "status_before": contracts.STATUS_MERGING,
+                     "branch": ctx.branch})
 
     scope = gitwrite.closeout_scope_check(ctx.repo, pre_closeout_head, allowed_paths,
                                           ops=ctx.store, task_id=ctx.task.id, env=ctx.env)
@@ -473,7 +498,9 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
         raise _Halt(ctx.task.id, contracts.HALT_CLOSEOUT_OUT_OF_SCOPE,
                     contracts.HALT_LINES[contracts.HALT_CLOSEOUT_OUT_OF_SCOPE].format(
                         path=", ".join(scope.offending), allowed=", ".join(allowed_paths)),
-                    {"offending": scope.offending, "reset_to": scope.reset_to})
+                    {"path": ", ".join(scope.offending),
+                     "allowed": ", ".join(allowed_paths) or "nothing outside the default branch",
+                     "offending": scope.offending, "reset_to": scope.reset_to})
 
     if gitread.rev_parse(ctx.repo, "HEAD") != pre_closeout_head:
         pushed = gitwrite.push(ctx.repo, ["origin", ctx.default], ops=ctx.store,
@@ -481,5 +508,7 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
         if not pushed.ok:
             raise _Halt(ctx.task.id, contracts.HALT_GATE_REFUSED,
                         "the push of the closeout commit was refused for %s" % ctx.task.id,
-                        {"push_output": pushed.output, "commit": gitread.rev_parse(ctx.repo, "HEAD")})
+                        {"branch": ctx.default, "sha": gitread.rev_parse(ctx.repo, "HEAD"),
+                         "log": ctx.store.path("gate", ctx.task.id + ".log"),
+                         "push_output": pushed.output})
     return result
