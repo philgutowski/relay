@@ -302,8 +302,12 @@ corrected the raisers that passed a structured value; it did not teach the filte
 next raiser that passes a dict under a name a template happens to use will fail the same silent way,
 and the table catches it only for rows someone remembers to write.
 
-**Three renderers of this contract exist, and the fix reached one.** This is the honest limit of
-what was closed. `summary.cause_line` is now derived from the templates. `classify.cause_line` at
+**Three renderers of this contract existed, and the first fix reached one.** Closed 2026-08-26:
+`classify.cause_line` was deleted (its only output was an unread digest key, and four of its fields
+were hard coded to `?` because the git and tracker evidence does not exist at classify time), and
+`classify.finding_line` now delegates to `summary.cause_line`, pinned by the same `FINDING_ROWS`
+table rendered through both entry points in `tests/test_classify.py`. The paragraph below records
+the state before that, for the shape of the trap. `summary.cause_line` is now derived from the templates. `classify.cause_line` at
 `classify.py:267` and `classify.finding_line` at `classify.py:289` are two more renderers of the
 same `HALT_LINES` dict, each with its own hand written field dict and its own bare except returning
 the raw template. `classify.cause_line` hard codes four of its keys to the literal `"?"`.
