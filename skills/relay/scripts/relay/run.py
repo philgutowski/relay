@@ -495,12 +495,15 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
     scope = gitwrite.closeout_scope_check(ctx.repo, pre_closeout_head, allowed_paths,
                                           ops=ctx.store, task_id=ctx.task.id, env=ctx.env)
     if not scope.ok:
-        raise _Halt(ctx.task.id, contracts.HALT_CLOSEOUT_OUT_OF_SCOPE,
-                    contracts.HALT_LINES[contracts.HALT_CLOSEOUT_OUT_OF_SCOPE].format(
-                        path=", ".join(scope.offending), allowed=", ".join(allowed_paths)),
-                    {"path": ", ".join(scope.offending),
-                     "allowed": ", ".join(allowed_paths) or "nothing outside the default branch",
-                     "offending": scope.offending, "reset_to": scope.reset_to})
+        # Two classes reach here. A path outside the allowed set is out of scope; a tree the
+        # closeout left dirty entirely inside the allowed set is an unclean exit. Both reset to
+        # the pre closeout head, and neither pushes.
+        evidence = {"branch": ctx.default, "reset_to": scope.reset_to,
+                    "offending": scope.offending, "untracked": scope.untracked,
+                    "path": ", ".join(scope.offending) or "nothing outside the allowed paths",
+                    "allowed": ", ".join(allowed_paths) or "nothing outside the default branch"}
+        raise _Halt(ctx.task.id, scope.halt_class,
+                    summary.cause_line(scope.halt_class, evidence), evidence)
 
     if gitread.rev_parse(ctx.repo, "HEAD") != pre_closeout_head:
         pushed = gitwrite.push(ctx.repo, ["origin", ctx.default], ops=ctx.store,

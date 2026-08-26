@@ -66,11 +66,9 @@ class CloseoutResult:
     brief_sha256: str | None = None
 
 
-def depth_for(digest, gate_refused=False):
+def depth_for(digest):
     """`full` when something went wrong that a future session could repeat, `lightweight`
     otherwise. The closeout process still decides whether to run it at all."""
-    if gate_refused:
-        return contracts.COMPOUND_DEPTH_FULL
     for finding in (digest or {}).get("findings") or []:
         if finding.get("class") in FULL_DEPTH_FINDINGS:
             return contracts.COMPOUND_DEPTH_FULL
@@ -147,11 +145,11 @@ def compound_command(depth, hint):
 
 def render(manifest, card, outcome, digest, comments, adapter, allowed_paths, landing_ref=None,
            branch=None, commit_range=None, plan_path=None, gate=None, wall_seconds=None,
-           active_seconds=None, gate_refused=False):
+           active_seconds=None):
     """The closeout brief. Deterministic from its inputs, like the task brief, and it never
     receives the task process transcript (R27), only the digest the runner composed from it."""
     task_id = card.get("id")
-    depth = depth_for(digest, gate_refused)
+    depth = depth_for(digest)
     envelope = (digest or {}).get("envelope") or {}
     landing_line = ""
     if outcome == OUTCOME_LANDED and landing_ref:
@@ -227,7 +225,7 @@ def _closeout_task(manifest, task_id):
 
 def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths,
         landing_ref=None, branch=None, commit_range=None, plan_path=None, gate=None,
-        wall_seconds=None, active_seconds=None, gate_refused=False, timeout_seconds=None,
+        wall_seconds=None, active_seconds=None, timeout_seconds=None,
         **launch_kwargs):
     """Render, launch, and read the ending. Returns what happened; it changes no git state and
     writes nothing to the tracker itself. The caller runs the scope check and the push."""
@@ -235,7 +233,7 @@ def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths
     text = render(manifest, card, outcome, digest, comments, adapter, allowed_paths,
                   landing_ref=landing_ref, branch=branch, commit_range=commit_range,
                   plan_path=plan_path, gate=gate, wall_seconds=wall_seconds,
-                  active_seconds=active_seconds, gate_refused=gate_refused)
+                  active_seconds=active_seconds)
     brief_path = store.path("briefs", task_id + ".closeout.md")
     with open(brief_path, "w", encoding="utf-8") as handle:
         handle.write(text)

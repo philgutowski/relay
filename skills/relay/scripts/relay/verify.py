@@ -47,7 +47,6 @@ CODE_CHECKS = ("tree_clean", "on_default", "head_equals_remote", "new_commit_sin
 TRACKER_CHECKS = ("card_terminal", "closing_reference")
 FULL_CHECKS = CODE_CHECKS + ("mirror_equals_head",) + TRACKER_CHECKS
 
-LOCAL_MERGE = "local_merge"
 PR_TERMINAL = "pr_terminal"
 
 
