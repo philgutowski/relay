@@ -237,6 +237,14 @@ class RunTheProcess(CloseoutCase):
         self.assertEqual(result.result, closeout.RESULT_SKIPPED)
         self.assertEqual([f["class"] for f in result.findings], [])
 
+    def test_a_long_closeout_message_still_reads_its_terminal_line(self):
+        """First live run, 2026-08-26. The closeout explained its skip at more than 200
+        characters and ended in `Documentation skipped`, and the record said unfinished: the
+        parser was handed the digest's 200 character head, and the line lived past it."""
+        result = self.go("closeout_skipped_long.jsonl")
+        self.assertEqual(result.result, closeout.RESULT_SKIPPED)
+        self.assertEqual([f["class"] for f in result.findings], [])
+
     def test_a_closeout_that_wrote_a_doc_reads_as_complete(self):
         result = self.go("closeout_complete.jsonl")
         self.assertEqual(result.result, closeout.RESULT_COMPLETE)

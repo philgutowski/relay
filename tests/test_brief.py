@@ -90,10 +90,10 @@ class LocalMergeTemplate(BriefCase):
     def test_the_brief_handles_one_task_only(self):
         self.assertRegex(self.render(), r"(?i)exactly one task")
 
-    def test_the_brief_names_the_in_review_status_and_the_gate_description(self):
-        text = self.render()
-        self.assertIn("in review", text)
-        self.assertIn("pre push hook", text)
+    def test_the_brief_names_the_gate_description(self):
+        # The in review status is named only under adapters that have a card to move; the
+        # markdown fixture here has none. See TrackerStepsPerAdapter.
+        self.assertIn("pre push hook", self.render())
 
     def test_the_envelope_is_asked_for_inside_a_fenced_relay_envelope_block(self):
         text = self.render()
@@ -216,6 +216,35 @@ class WriteBrief(BriefCase):
         with open(path) as handle:
             self.assertEqual(handle.read(), text)
         self.assertEqual(digest, state.sha256_of(text))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TrackerStepsPerAdapter(unittest.TestCase):
+    """First live run, 2026-08-26: under the markdown adapter the task blocked on "move the
+    tracker card" with the code done and the gate green, because there is no card to move."""
+
+    def load(self, name):
+        return mf.load(os.path.join(_paths.REPO_ROOT, "docs", "examples", name))
+
+    def test_markdown_tells_the_task_it_has_no_tracker_write(self):
+        m = self.load("manifest-markdown.toml")
+        text = brief.render(m, m.tasks[0], {"id": "T-1", "title": "t", "description": "d"})
+        self.assertIn("no tracker write for you to make", text)
+        self.assertIn("Do not edit `tasks.md`", text)
+        self.assertNotIn("Move the tracker card", text)
+        self.assertNotIn("Comment the blocker on the tracker card", text)
+
+    def test_jira_and_github_keep_the_card_moving_step(self):
+        for name in ("manifest-jira-local-merge.toml", "manifest-github-projects.toml"):
+            with self.subTest(example=name):
+                m = self.load(name)
+                text = brief.render(m, m.tasks[0], {"id": "T-1", "title": "t", "description": "d"})
+                self.assertIn("Move the tracker card to `%s`" % m.tracker.in_review_status, text)
+                self.assertIn("Comment the blocker on the tracker card", text)
+                self.assertNotIn("no tracker write", text)
 
 
 if __name__ == "__main__":

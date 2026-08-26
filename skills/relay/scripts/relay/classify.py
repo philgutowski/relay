@@ -94,8 +94,15 @@ def required_skill_for(skill_name):
     return None
 
 
+KEY_LINE_RE = re.compile(r"^[ \t]*(?:[-*]\s*)?[`*]*[A-Za-z_]+[`*]*\s*:")
+
+
 def _list_after(block, key):
-    """Loose list parse: `key: a` inline, or `key:` followed by `- item` lines."""
+    """Loose list parse: `key: a` inline, `key:` followed by `- item` lines, or `key:` followed
+    by a plain paragraph, which is one item per line. The paragraph case came from the first
+    live run: the process wrote its blocker as prose under `blockers:` and the record read "no
+    blocker text in the envelope" while the text sat one line below. The list ends at the next
+    `key:` line, or at the first blank line once something has been collected."""
     match = re.search(r"^[ \t]*(?:[-*]\s*)?[`*]*%s[`*]*\s*:[ \t]*(.*)$" % re.escape(key), block, re.M)
     if not match:
         return []
@@ -110,8 +117,10 @@ def _list_after(block, key):
         elif stripped == "":
             if items:
                 break
-        else:
+        elif KEY_LINE_RE.match(line):
             break
+        else:
+            items.append(stripped.strip("`"))
     return items
 
 
@@ -239,6 +248,11 @@ def classify(transcript_path, launch_result, write_tool_patterns=None):
                 result["findings"].append(finding)
 
     result["last_message"] = (last_text or "")[:LAST_MESSAGE_CHARS] or None
+    # The tail is for the closeout's ending contract, whose terminal line is the last line of a
+    # message that can be longer than the head above. First live run: a closeout that explained
+    # its skip before printing `Documentation skipped` read as unfinished, because the parser
+    # was handed the first 200 characters and the line lived past them.
+    result["last_message_tail"] = (last_text or "")[-LAST_MESSAGE_CHARS:] or None
     envelope = parse_envelope(last_text) if last_text else None
     result["envelope"] = envelope
 

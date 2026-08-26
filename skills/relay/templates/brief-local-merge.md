@@ -37,15 +37,12 @@ $blocked_followup
 4. Run `$ce_simplify` unless the diff is documentation only or under ten lines.
 5. Run `$ce_review $review_mode plan:<plan path>`, apply its findings, and commit the fixes.
 6. Run the project gate and make it pass. The gate is: $gate_description
-7. Move the tracker card to `$in_review_status` and comment the head commit of `$branch` on it.
-   This is the last tracker write you make; the runner launches a separate process to close the
-   card once the merge exists.
+7. $tracker_review_step
 8. Print the return envelope below as your final message, with nothing after it.
 
 ## If you cannot finish
 
-Comment the blocker on the tracker card, then print the envelope with `status: blocked` and the
-blockers listed. A blocked task is a normal outcome and the run continues without it. Stopping
+$tracker_blocked_step A blocked task is a normal outcome and the run continues without it. Stopping
 with no comment and no envelope is the one ending the runner cannot diagnose, so spend your last
 turn on the envelope rather than on one more attempt.
 

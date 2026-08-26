@@ -73,6 +73,38 @@ def skipped(reason):
     return {"status": None, "terminal": False, "reference": None, "skipped": str(reason)}
 
 
+def task_tracker_steps(manifest, branch):
+    """The two places the task brief tells the process to touch the tracker: the review step
+    before the envelope, and the comment when it cannot finish. Resolved by adapter name rather
+    than by building the adapter, so a brief renders without a tracker credential.
+
+    The markdown adapter is the reason this exists (first live run, 2026-08-26). Its tracker is
+    a file the closeout edits and the runner reads at the remote head, so a task told to "move
+    the card to in review" had no card to move and blocked on that step with the code done and
+    the gate green. Under markdown the task makes no tracker write at all.
+    """
+    name = manifest.tracker.adapter
+    in_review = manifest.tracker.in_review_status or "its in review status"
+    if name == "markdown":
+        path = manifest.tracker.file or "the tracker file"
+        return {
+            "review_step": ("There is no tracker write for you to make. This project's tracker is `%s` "
+                            "in the repository, which the runner's own closeout process edits after "
+                            "you exit. Do not edit `%s` yourself; confirm the head of `%s` is "
+                            "committed and go to the next step." % (path, path, branch)),
+            "blocked_step": ("Do not edit `%s`; the runner records the blocker there after you exit. "
+                             "Print the envelope with `status: blocked` and the blockers listed."
+                             % path),
+        }
+    return {
+        "review_step": ("Move the tracker card to `%s` and comment the head commit of `%s` on it. "
+                        "This is the last tracker write you make; the runner launches a separate "
+                        "process to close the card once the merge exists." % (in_review, branch)),
+        "blocked_step": ("Comment the blocker on the tracker card, then print the envelope with "
+                         "`status: blocked` and the blockers listed."),
+    }
+
+
 def build(manifest, env=None, opener=None, run=None, read=None):
     """The adapter the manifest names. Imports are local so a machine without one tracker's
     dependencies can still use the others."""
