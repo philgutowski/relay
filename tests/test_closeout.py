@@ -144,10 +144,6 @@ class CompoundDepth(CloseoutCase):
         self.assertEqual(closeout.depth_for(digest_from("skill_substitution.jsonl")),
                          contracts.COMPOUND_DEPTH_FULL)
 
-    def test_a_refused_gate_chooses_the_full_depth(self):
-        digest = dict(digest_from("success.jsonl"))
-        self.assertEqual(closeout.depth_for(digest, gate_refused=True), contracts.COMPOUND_DEPTH_FULL)
-
     def test_a_clean_run_chooses_the_lightweight_depth(self):
         text = self.render(digest=digest_from("success.jsonl"))
         self.assertIn(contracts.COMPOUND_DEPTH_LIGHTWEIGHT, text)

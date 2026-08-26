@@ -243,11 +243,62 @@ class CloseoutScopeCheck(TailBase):
         self.assertTrue(push.ok, push.output)
         self.assertNotEqual(gitread.rev_parse(self.repo, "origin/main"), self.baseline)
 
-    def test_a_closeout_that_committed_nothing_passes(self):
+    def test_a_closeout_that_committed_nothing_and_changed_nothing_passes(self):
         pre = gitread.rev_parse(self.repo, "main")
         result = gitwrite.closeout_scope_check(self.repo, pre, self.allowed)
         self.assertTrue(result.ok)
         self.assertEqual(result.offending, [])
+
+    def test_an_untracked_file_outside_the_allowed_paths_is_offending(self):
+        """The check read the commit diff, so a closeout that never committed passed it however
+        much it had changed. An untracked file is the plainest version: nothing to diff."""
+        pre = gitread.rev_parse(self.repo, "main")
+        with open(os.path.join(self.repo, "leftover.py"), "w") as handle:
+            handle.write("scratch = True\n")
+        result = gitwrite.closeout_scope_check(self.repo, pre, self.allowed, ops=self.ops,
+                                               task_id=self.task_id)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.halt_class, contracts.HALT_CLOSEOUT_OUT_OF_SCOPE)
+        self.assertIn("leftover.py", result.offending)
+        self.assertIn("leftover.py", result.untracked,
+                      "an untracked offender survives the reset and has to be named as such")
+
+    def test_an_uncommitted_edit_outside_the_allowed_paths_is_offending_and_is_reset(self):
+        pre = gitread.rev_parse(self.repo, "main")
+        with open(os.path.join(self.repo, "README.md"), "w") as handle:
+            handle.write("# rewritten by the closeout\n")
+        result = gitwrite.closeout_scope_check(self.repo, pre, self.allowed, ops=self.ops,
+                                               task_id=self.task_id)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.halt_class, contracts.HALT_CLOSEOUT_OUT_OF_SCOPE)
+        self.assertIn("README.md", result.offending)
+        self.assertTrue(gitread.is_clean(self.repo), "the reset left the tree dirty")
+
+    def test_a_dirty_tree_inside_the_allowed_paths_is_an_unclean_exit_not_an_overreach(self):
+        """In scope but uncommitted is a different failure from out of scope, and it gets the
+        class that names it. Left alone it refuses the next task at pre flight instead."""
+        pre = gitread.rev_parse(self.repo, "main")
+        os.makedirs(os.path.join(self.repo, "docs", "solutions", "x"), exist_ok=True)
+        with open(os.path.join(self.repo, "docs", "solutions", "x", "y.md"), "w") as handle:
+            handle.write("# a learning the closeout never committed\n")
+        result = gitwrite.closeout_scope_check(self.repo, pre, self.allowed, ops=self.ops,
+                                               task_id=self.task_id)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.halt_class, contracts.HALT_UNCLEAN_EXIT)
+        self.assertEqual(result.offending, [])
+        self.assertIn("docs/solutions/x/y.md", result.untracked)
+
+    def test_a_path_holding_a_space_arrives_whole(self):
+        """`git status --porcelain` quotes such a path; `-z` does not. A quoted path would not
+        match the allowed list and would be reported as an overreach that never happened."""
+        pre = gitread.rev_parse(self.repo, "main")
+        os.makedirs(os.path.join(self.repo, "docs", "plans"), exist_ok=True)
+        with open(os.path.join(self.repo, "docs", "plans", "a plan.md"), "w") as handle:
+            handle.write("# spaced\n")
+        result = gitwrite.closeout_scope_check(self.repo, pre, self.allowed, ops=self.ops,
+                                               task_id=self.task_id)
+        self.assertEqual(result.offending, [], "a quoted path was read as being outside docs/")
+        self.assertIn("docs/plans/a plan.md", result.untracked)
 
 
 class MirrorPush(TailBase):

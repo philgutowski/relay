@@ -47,7 +47,6 @@ CODE_CHECKS = ("tree_clean", "on_default", "head_equals_remote", "new_commit_sin
 TRACKER_CHECKS = ("card_terminal", "closing_reference")
 FULL_CHECKS = CODE_CHECKS + ("mirror_equals_head",) + TRACKER_CHECKS
 
-LOCAL_MERGE = "local_merge"
 PR_TERMINAL = "pr_terminal"
 
 
@@ -238,6 +237,16 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
                 "adapter.closing_reference raised: %s" % exc, blocking=True)
 
     return _finish(Verdict(scope, checks, at=_stamp(now)), record)
+
+
+def card_status_of(verdict):
+    """The tracker status the card read when the verdict was taken, for the partial_landing
+    cause line. A card the adapter could not read says so rather than rendering a placeholder."""
+    check = verdict.checks.get("card_terminal") or {}
+    evidence = check.get("evidence") or {}
+    if evidence.get("status"):
+        return evidence["status"]
+    return evidence.get("reason") or "unreadable"
 
 
 def _stamp(now):

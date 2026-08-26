@@ -26,23 +26,37 @@ Shipping it as documented and non functional is the only option that is wrong.
 
 Each was validated against the code. Numbers are the review's stable ids.
 
-| # | Severity | Where | What |
-|---|---|---|---|
-| 19 | P2 | `adapters/github.py:116` | A board read that failed is reported as "not terminal" rather than unknown, so an unreadable tracker looks like a card that did not move. |
-| 20 | P2 | `adapters/markdown.py:110` | The markdown adapter can only ever report open or closed, so KTD6's route for a missing envelope, which needs the card in `in_review_status`, can never fire for it. The obvious workaround, setting `in_review_status = "open"`, makes the route fire for every unclosed card. |
-| 21 | P2 | `gitwrite.py:351` | The closeout scope check diffs commits only, so a closeout that leaves the working tree dirty or drops an untracked file outside the allowed paths passes it. |
-| 22 | P2 | `run.py:295` | The timeout cause line prints `?` minutes because the evidence carries seconds under different key names. |
-| 23 | P2 | `run.py:354` | The `partial_landing` cause line renders with no evidence at all: the halt passes a `checks` dict and the template names `sha` and `card_status`. |
-| 25 | P2 | `summary.py:67` | The `runner_crashed` line always reads "during halted", because the record is passed after the evidence and its post crash status wins over `status_before`. |
-| 27 | P2 | `verify.py:177` | Partly addressed. A mirror rule the runner cannot parse now blocks; a mirror that is configured and pushed but whose ref cannot be read back is still worth a second look. |
-| 18 | P2 | `adapters/markdown.py` | Applied in eae48d5. Kept here only because it was introduced by this milestone's own simplification pass and is a useful reminder that a mechanical edit can leave both forms behind. |
-| 28 | P3 | `closeout.py:69` | `depth_for`'s `gate_refused` parameter is unreachable from any production caller. |
-| 29 | P3 | `verify.py:50` | `LOCAL_MERGE` is defined and never used. |
-| 30 | P3 | `relay_cli.py:11` | A comment still says the CLI "lands in U10", which it has. |
+| # | Severity | Where | What | State |
+|---|---|---|---|---|
+| 19 | P2 | `adapters/github.py:116` | A board read that failed is reported as "not terminal" rather than unknown, so an unreadable tracker looks like a card that did not move. | Applied 2026-08-26 |
+| 20 | P2 | `adapters/markdown.py:110` | The markdown adapter can only ever report open or closed, so KTD6's route for a missing envelope, which needs the card in `in_review_status`, can never fire for it. The obvious workaround, setting `in_review_status = "open"`, makes the route fire for every unclosed card. | Open |
+| 21 | P2 | `gitwrite.py:351` | The closeout scope check diffs commits only, so a closeout that leaves the working tree dirty or drops an untracked file outside the allowed paths passes it. | Applied 2026-08-26 |
+| 22 | P2 | `run.py:295` | The timeout cause line prints `?` minutes because the evidence carries seconds under different key names. | Applied 2026-08-26 |
+| 23 | P2 | `run.py:354` | The `partial_landing` cause line renders with no evidence at all: the halt passes a `checks` dict and the template names `sha` and `card_status`. | Applied 2026-08-26 |
+| 25 | P2 | `summary.py:67` | The `runner_crashed` line always reads "during halted", because the record is passed after the evidence and its post crash status wins over `status_before`. | Applied 2026-08-26 |
+| 27 | P2 | `verify.py:177` | Partly addressed. A mirror rule the runner cannot parse now blocks; a mirror that is configured and pushed but whose ref cannot be read back is still worth a second look. | Open |
+| 18 | P2 | `adapters/markdown.py` | Kept here only because it was introduced by this milestone's own simplification pass and is a useful reminder that a mechanical edit can leave both forms behind. | Applied in eae48d5 |
+| 28 | P3 | `closeout.py:69` | `depth_for`'s `gate_refused` parameter is unreachable from any production caller. | Applied 2026-08-26 |
+| 29 | P3 | `verify.py:50` | `LOCAL_MERGE` is defined and never used. | Applied 2026-08-26 |
+| 30 | P3 | `relay_cli.py:11` | A comment still says the CLI "lands in U10", which it has. | Applied 2026-08-26 |
 
-Findings 22, 23 and 25 share one fix path and one missing test: there is no `tests/test_summary.py`,
-and the only assertion on a cause line is that it is non empty. A table test rendering every entry
-in `HALT_LINES` from a realistic record and asserting no `?` survives would have caught all three.
+Findings 22, 23 and 25 shared one fix path and one missing test: there was no
+`tests/test_summary.py`, and the only assertion on a cause line was that it was non empty. That
+file now exists as a table over every entry in `HALT_LINES`, one row per class holding what its
+production raiser records and citing it by function, plus two runs of the real loop over the
+stub. The table found three more placeholder lines the review had not:
+
+- `blocked: ?` on every blocked task, which is the most common non landing outcome there is. The
+  blocked route recorded only the stranded head, so the blocker text the class names was dropped.
+- `closeout changed ? outside ?`, the same shape as 23: the evidence carried `offending` and
+  `reset_to` while the template named `path` and `allowed`.
+- `the runner hit an unexpected {error_type} on {task}: {error}`, braces and all, because
+  `LINE_FIELD_DEFAULTS` was a hand written list that had gone stale. It is now derived from the
+  templates, so a template that gains a field cannot outrun its defaults.
+
+Finding 21's fix also separated two failures the old check conflated. A path outside the allowed
+set is `closeout_out_of_scope`; a tree the closeout left dirty entirely inside the allowed set is
+`unclean_exit`. Both reset to the pre closeout head and neither pushes.
 
 ## Gaps against the existing solutions doc
 

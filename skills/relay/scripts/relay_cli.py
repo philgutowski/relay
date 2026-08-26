@@ -7,7 +7,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def main(argv=None):
-    from relay import cli  # noqa: WPS433 (lands in U10)
+    # Imported here rather than at module scope, so sys.path is set before the package is
+    # found.
+    from relay import cli
 
     return cli.main(argv)
 

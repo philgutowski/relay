@@ -67,10 +67,13 @@ class _Body:
 class DispatchRun:
     """A `run(args, timeout=None)` for `gh` that answers from fixtures by subcommand."""
 
-    def __init__(self, issues=None, items=None, failure=None):
+    def __init__(self, issues=None, items=None, failure=None, items_failure=None):
         self.issues = dict(issues or {})
         self.items = items
         self.failure = failure
+        # A board that fails on its own, with the issue read still working. That is the shape
+        # that matters: `gh issue view` needs no project scope and `gh project item-list` does.
+        self.items_failure = items_failure
         self.calls = []
 
     def __call__(self, args, timeout=None):
@@ -79,6 +82,9 @@ class DispatchRun:
             code, err = self.failure
             return _Proc(code, "", err)
         if "project" in args:
+            if self.items_failure is not None:
+                code, err = self.items_failure
+                return _Proc(code, "", err)
             return _Proc(0, fixture(self.items), "")
         number = args[args.index("view") + 1]
         name = self.issues.get(str(number))
@@ -302,6 +308,34 @@ class GitHub(AdapterCase):
         result = adapter.status("12")
         self.assertIn("not authenticated", result["skipped"])
         self.assertEqual(adapter.candidates(), [])
+
+    def test_an_unreadable_project_board_is_skipped_rather_than_reported_not_terminal(self):
+        """A board this adapter could not read and a card that has not moved both used to come
+        back as `terminal: False, skipped: None`, which verify reads as a card that stayed put.
+        The first is an unknown and has to reach verify as a blocking skip instead."""
+        run = self.run_for(items_failure=(1, "gh: your token has no project scope\n"))
+        adapter = gh_adapter.GitHubAdapter(self.github_manifest(status_field="Done"), run=run)
+        result = adapter.status("13")
+        self.assertIn("project board could not be read", result["skipped"])
+        self.assertIn("no project scope", result["skipped"])
+        self.assertFalse(result["terminal"])
+
+    def test_a_closed_issue_is_terminal_even_when_the_board_cannot_be_read(self):
+        """The board is not consulted for a closed issue, so an unreadable one changes nothing."""
+        run = self.run_for(items_failure=(1, "gh: your token has no project scope\n"))
+        adapter = gh_adapter.GitHubAdapter(self.github_manifest(status_field="Done"), run=run)
+        result = adapter.status("12")
+        self.assertTrue(result["terminal"])
+        self.assertIsNone(result["skipped"])
+
+    def test_an_issue_absent_from_the_board_is_not_terminal_and_is_not_skipped(self):
+        """The other half of the same distinction: the board read worked and the card is simply
+        not on it. That is a real answer, not an unknown."""
+        run = self.run_for(issues={"99": "github_issue_open.json"})
+        adapter = gh_adapter.GitHubAdapter(self.github_manifest(status_field="Done"), run=run)
+        result = adapter.status("99")
+        self.assertFalse(result["terminal"])
+        self.assertIsNone(result["skipped"])
 
     def test_a_pr_create_command_does_not_match_the_write_patterns(self):
         from relay import classify

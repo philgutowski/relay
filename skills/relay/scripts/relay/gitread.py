@@ -41,6 +41,33 @@ def is_clean(repo):
     return status_porcelain(repo).strip() == ""
 
 
+def status_paths(repo):
+    """Every path the working tree reports as changed, and which of those are untracked.
+
+    Returns (paths, untracked). `-z` rather than the default, so a path holding a space or a
+    quote arrives whole instead of quoted, and `-uall` so a new directory is reported by its
+    files rather than by its name.
+    """
+    fields = [field for field in
+              run(repo, ["status", "--porcelain", "-z", "-uall"]).stdout.split("\0") if field]
+    paths, untracked = [], []
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        code, path = entry[:2], entry[3:]
+        if not path:
+            continue
+        paths.append(path)
+        if code == "??":
+            untracked.append(path)
+        elif code[0] in ("R", "C") and index < len(fields):
+            # A rename or a copy puts the destination in this field and the source in the next.
+            paths.append(fields[index])
+            index += 1
+    return paths, untracked
+
+
 def current_branch(repo):
     """The branch name, or `HEAD` when detached."""
     return run(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()

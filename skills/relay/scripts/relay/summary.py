@@ -13,18 +13,30 @@ evidence on the record, and the checks a human still has to make by hand are lis
 rather than buried in prose. It points at a class, a cause, and the state directory, and never
 at a machine readable file the operator would have to parse to learn anything.
 """
+import string
+
 from . import contracts
 
 SCHEMA_VERSION = 1
 
-# Every field a halt line template can name. A record that stopped before an evidence key was
-# filled still gets a readable line rather than a formatting error.
-LINE_FIELD_DEFAULTS = {
-    "ref": "?", "blocker": "?", "last_message": "?", "tool": "?", "target": "?", "sha": "?",
-    "path": "?", "allowed": "?", "status": "?", "tree": "?", "branch": "?", "name": "?",
-    "required": "?", "log": "?", "card_status": "?", "active_minutes": "?", "wall_minutes": "?",
-    "minutes": "?", "url": "?", "task": "?",
-}
+
+def _template_fields():
+    """Every field name any halt line template can ask for, defaulted to a placeholder.
+
+    Derived from the templates rather than listed by hand. A hand written list goes stale the
+    moment a template gains a field, and it fails in the wrong direction when it does: the
+    missing key raises inside `format`, the except below swallows it, and the operator gets the
+    raw template with its braces still in it instead of a sentence.
+    """
+    fields = {}
+    for template in contracts.HALT_LINES.values():
+        for _, field, _, _ in string.Formatter().parse(template):
+            if field:
+                fields[field] = "?"
+    return fields
+
+
+LINE_FIELD_DEFAULTS = _template_fields()
 
 
 def line_fields(*sources):
@@ -64,7 +76,9 @@ def _task_entry(store, record):
         "id": task_id,
         "status": record.get("status"),
         "class": record.get("halt_class"),
-        "cause": cause_line(record.get("halt_class"), evidence, landing, record),
+        # Weakest source first. The record carries fields a template may also name, most
+        # of them written after the halt, so the evidence the raiser recorded has to win.
+        "cause": cause_line(record.get("halt_class"), record, landing, evidence),
         "landing_ref": record.get("landing_ref"),
         "branch": record.get("branch"),
         "closeout": record.get("closeout"),

@@ -114,6 +114,9 @@ class ScopeResult:
     changed: list = field(default_factory=list)
     halt_class: str | None = None
     reset_to: str | None = None
+    # Untracked offenders survive the reset, because a reset moves tracked files and nothing
+    # else. Named separately so the halt can tell the operator what is still on disk.
+    untracked: list = field(default_factory=list)
 
 
 @dataclass
@@ -331,7 +334,7 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
 
     if still_ours is not None and not still_ours():
         return TailResult(False, contracts.HALT_RUNNER_CRASHED, "lease",
-                          evidence={"branch": branch, "status": "merging",
+                          evidence={"branch": branch, "status_before": contracts.STATUS_MERGING,
                                     "reason": "the lease was lost while the gate ran"})
 
     fetch(repo, ops=ops, task_id=task_id, env=env)
@@ -354,7 +357,8 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
 
     if still_ours is not None and not still_ours():
         return TailResult(False, contracts.HALT_RUNNER_CRASHED, "lease", merge_sha=merge.sha,
-                          evidence={"branch": default_branch, "status": "merging",
+                          evidence={"branch": default_branch,
+                                    "status_before": contracts.STATUS_MERGING,
                                     "reason": "the lease was lost before the push"})
 
     pushed = push(repo, ["origin", default_branch], ops=ops, task_id=task_id, env=env)
@@ -397,16 +401,32 @@ def path_allowed(path, allowed_paths):
 
 
 def closeout_scope_check(repo, pre_closeout_head, allowed_paths, ops=None, task_id=None, env=None):
-    """R53 and KTD15: the closeout commits docs and never pushes, so the runner checks the new
-    commits before its own push. A path outside the allowed set resets the branch to the
-    pre-closeout head, which is why this runs before the push and not after it."""
-    changed = gitread.diff_name_only(repo, pre_closeout_head, "HEAD")
+    """R53 and KTD15: the closeout commits docs and never pushes, so the runner checks what it
+    produced before its own push. A path outside the allowed set resets the branch to the
+    pre-closeout head, which is why this runs before the push and not after it.
+
+    The working tree counts, not only the commits. A closeout that edited a file and left it
+    uncommitted, or dropped an untracked file, changed the repository just as much as one that
+    committed; reading the commit diff alone let both through, and the next task's pre flight
+    then refused on a tree this check had already called clean.
+    """
+    committed = gitread.diff_name_only(repo, pre_closeout_head, "HEAD")
+    working, untracked = gitread.status_paths(repo)
+    changed = committed + [path for path in working if path not in committed]
     offending = [path for path in changed if not path_allowed(path, allowed_paths)]
-    if not offending:
-        return ScopeResult(True, [], changed)
-    reset_hard(repo, pre_closeout_head, ops=ops, task_id=task_id, env=env)
-    return ScopeResult(False, offending, changed, contracts.HALT_CLOSEOUT_OUT_OF_SCOPE,
-                       reset_to=pre_closeout_head)
+    if offending:
+        reset_hard(repo, pre_closeout_head, ops=ops, task_id=task_id, env=env)
+        return ScopeResult(False, offending, changed, contracts.HALT_CLOSEOUT_OUT_OF_SCOPE,
+                           reset_to=pre_closeout_head,
+                           untracked=[path for path in untracked if path in offending])
+    if working:
+        # In scope but uncommitted, which is a different failure and gets the class that names
+        # it. Nothing here would have been pushed, and leaving it in place refuses the next
+        # task at pre flight, so the tree goes back to where the closeout found it.
+        reset_hard(repo, pre_closeout_head, ops=ops, task_id=task_id, env=env)
+        return ScopeResult(False, [], changed, contracts.HALT_UNCLEAN_EXIT,
+                           reset_to=pre_closeout_head, untracked=untracked)
+    return ScopeResult(True, [], changed)
 
 
 # PR terminal mode (R12). Both helpers take the adapter's injectable run callable, so no test

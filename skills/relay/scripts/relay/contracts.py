@@ -218,7 +218,11 @@ HALT_LINES = {
     HALT_TRACKER_WRITE_DENIED: "code landed, card unmoved: {tool} denied",
     HALT_REMOTE_ADVANCED: "remote moved during the task; merge aborted at {sha}",
     HALT_CLOSEOUT_OUT_OF_SCOPE: "closeout changed {path} outside {allowed}",
-    HALT_RUNNER_CRASHED: "runner died during {status}; tree {tree} on {branch}",
+    # `status_before`, not `status`: the record is a rendering source too and carries its
+    # own post crash `status`, which used to shadow the evidence and print "during halted"
+    # for every crash. The tree is deliberately absent: the reclaim path that raises this
+    # most often runs in a later process that never saw the repository.
+    HALT_RUNNER_CRASHED: "runner died during {status_before} on {branch}",
     HALT_SKILL_SUBSTITUTION: "ran {name} instead of {required}",
     HALT_GATE_REFUSED: "gate refused {branch} at {sha}; output in {log}",
     HALT_PARTIAL_LANDING: "landed at {sha} but card reads {card_status}",
