@@ -161,6 +161,18 @@ class Mirror(VerifyCase):
         self.assertEqual(verdict.checks["mirror_equals_head"]["result"], verify.PASS)
         self.assertTrue(verdict.landed, verdict.checks)
 
+    def test_a_mirror_ref_the_runner_cannot_read_back_blocks_rather_than_fails(self):
+        """Finding 27. `origin/release` was never pushed, so the ref does not resolve. That is
+        not a mirror behind head, it is a mirror the runner cannot see, and the remedies differ."""
+        sha = self.land_a_commit()
+        verdict = verify.verify(self.manifest(self.toml_with_mirror()),
+                                self.record(landing_ref=sha), self.landed_adapter(sha))
+        check = verdict.checks["mirror_equals_head"]
+        self.assertEqual(check["result"], verify.SKIPPED)
+        self.assertTrue(check["blocking"])
+        self.assertIn("origin/release", check["evidence"]["reason"])
+        self.assertFalse(verdict.landed)
+
 
 class PrTerminalMode(VerifyCase):
     def toml_pr_mode(self):

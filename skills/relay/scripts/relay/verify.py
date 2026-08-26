@@ -206,11 +206,20 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
             % (list(manifest.project.mirror),), blocking=True)
     else:
         remote, destination = target
-        mirror_sha = gitread.rev_parse(repo, "%s/%s" % (remote, destination))
-        checks["mirror_equals_head"] = _check(
-            PASS if mirror_sha and mirror_sha == local_sha else FAIL,
-            {"mirror_sha": mirror_sha, "head_sha": local_sha, "mirror": list(manifest.project.mirror)},
-        )
+        mirror_ref = "%s/%s" % (remote, destination)
+        mirror_sha = gitread.rev_parse(repo, mirror_ref)
+        if not mirror_sha:
+            # Unreadable is not the same as behind. A FAIL says the mirror points somewhere
+            # else and the remedy is a push; a ref the runner cannot read back at all is a
+            # blocking skip, the same shape as origin/<default> not resolving above.
+            checks["mirror_equals_head"] = _skip(
+                "%s does not resolve; the mirror was never pushed or never fetched" % mirror_ref,
+                blocking=True)
+        else:
+            checks["mirror_equals_head"] = _check(
+                PASS if mirror_sha == local_sha else FAIL,
+                {"mirror_sha": mirror_sha, "head_sha": local_sha, "mirror": list(manifest.project.mirror)},
+            )
 
     # Tracker checks (R22). Both halves are required: code that merged while the card stayed put
     # is a partial landing, not a landing.
