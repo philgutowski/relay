@@ -264,3 +264,42 @@ class CauseLinesFromARealRun(RunCase):
         self.assertNotIn("?", entry["cause"])
         self.assertIn("clean", entry["cause"])
         self.assertIn("active minutes", entry["cause"])
+
+
+class LinesFromTheFirstLiveRun(unittest.TestCase):
+    """Two misreports the 2026-08-26 live run's summary printed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = os.path.join(self.tmp.name, "home")
+        os.makedirs(self.home)
+        self.manifest_path = os.path.join(self.tmp.name, "manifest.toml")
+        with open(self.manifest_path, "w", encoding="utf-8") as handle:
+            handle.write("# not loaded\n")
+        self.repo = os.path.join(self.tmp.name, "repo")
+        self.store = state.StateStore(self.manifest_path, self.repo, home=self.home)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def text(self):
+        return summary.render(summary.build(_Manifest(self.manifest_path, self.repo, ["T-1"]), self.store))
+
+    def test_a_landed_task_names_its_ref_once(self):
+        self.store.upsert("T-1", status=contracts.STATUS_LANDED, halt_class=contracts.HALT_LANDED,
+                          halt_evidence={"ref": "abc1234"}, landing_ref="abc1234", findings=[])
+        self.assertEqual(self.text().count("landed at abc1234"), 1)
+
+    def test_a_refused_retry_prints_the_refusal_beside_the_class_line(self):
+        message = "retry refused: relay/T-1 carries commits past the baseline; keep or discard them by hand first"
+        self.store.upsert("T-1", status=contracts.STATUS_HALTED, halt_class=contracts.HALT_UNCLEAN_EXIT,
+                          halt_evidence={"branch": "relay/T-1"}, halt_message=message, findings=[])
+        text = self.text()
+        self.assertIn("left the tree dirty on relay/T-1", text)
+        self.assertIn(message, text)
+
+    def test_a_halt_message_equal_to_the_cause_is_not_printed_twice(self):
+        self.store.upsert("T-1", status=contracts.STATUS_HALTED, halt_class=contracts.HALT_UNCLEAN_EXIT,
+                          halt_evidence={"branch": "relay/T-1"},
+                          halt_message="left the tree dirty on relay/T-1", findings=[])
+        self.assertEqual(self.text().count("left the tree dirty on relay/T-1"), 1)
