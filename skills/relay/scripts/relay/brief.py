@@ -32,6 +32,9 @@ from . import contracts, state
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "templates")
 TEMPLATES = {
     "local_merge": "brief-local-merge.md",
+    # Reachable only by building a manifest by hand: `validate` refuses pr_terminal, because the
+    # run loop has no pull request sequence. The template is kept, and still rendered by its
+    # tests, because it is the design work the mode will need when it is implemented.
     "pr_terminal": "brief-pr-terminal.md",
 }
 

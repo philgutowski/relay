@@ -30,8 +30,11 @@ next one. Relay is that outer loop and nothing more.
   the task's model, effort, and permission allowlist, waits, verifies the landed state, runs the
   compound judgment as a separate short process, advances or halts.
 - **Manifest:** one file per project. Names the tracker adapter, the task list, the shipping
-  mode (PR-terminal or local merge), any mirror rule, and the disallow patterns. Everything
-  project-specific is data here, never code in the runner.
+  mode, any mirror rule, and the disallow patterns. Everything project-specific is data here,
+  never code in the runner. One shipping mode runs today, `local_merge`, where the runner runs
+  the gate and owns the merge. `pr_terminal`, where each task ends at a pull request whose checks
+  have decided, is named in the schema and refused by `validate` until its run loop sequence
+  exists.
 - **Skill:** `/relay`. Writes the manifest from a conversation, checks the three properties
   above, launches the runner.
 

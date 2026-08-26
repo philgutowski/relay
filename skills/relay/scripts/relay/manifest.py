@@ -20,6 +20,13 @@ from . import contracts, gitread
 
 ADAPTERS = ("jira", "github", "markdown")
 SHIPPING_MODES = ("local_merge", "pr_terminal")
+# Named in the schema and refused by `validate`. Every read side piece of pr_terminal exists and
+# is unit tested (`gitwrite.find_pr`, `gitwrite.poll_ci`, the `pr_probe` seam in `verify.verify`)
+# and nothing wires them into the run loop, so a run under this mode halts on its first task
+# with a class whose documented remedy is wrong for the real cause. Refusing it before a run
+# starts is the honest place to say so. Decided 2026-08-26; see
+# docs/ideation/2026-08-25-relay-review-residuals.md.
+UNIMPLEMENTED_SHIPPING_MODES = ("pr_terminal",)
 QUALIFYING_KEYS = ("gate", "durable_state", "independence", "editors")
 REQUIRED_TABLES = ("project", "tracker", "shipping", "permissions", "gate", "qualifying", "tasks")
 
@@ -305,6 +312,10 @@ def validate(manifest, check_repo=True, env=None):
     # Shipping mode and adapter.
     if manifest.shipping_mode not in SHIPPING_MODES:
         err("shipping.mode must be one of %s" % ", ".join(SHIPPING_MODES))
+    elif manifest.shipping_mode in UNIMPLEMENTED_SHIPPING_MODES:
+        err("shipping.mode %s is not implemented: the run loop has no pull request sequence, so "
+            "every task would halt without one being opened or checked. Use local_merge."
+            % manifest.shipping_mode)
     adapter = manifest.tracker.adapter
     if adapter not in ADAPTERS:
         err("tracker.adapter must be one of %s" % ", ".join(ADAPTERS))
@@ -355,8 +366,6 @@ def validate(manifest, check_repo=True, env=None):
     docs_root = contracts.DEFAULT_DOCS_ROOT
     if check_repo:
         remotes = gitread.remotes(repo)
-        if manifest.shipping_mode == "pr_terminal" and "origin" not in remotes:
-            err("shipping.mode pr_terminal requires the repo to have an origin remote")
         if manifest.shipping_mode == "local_merge" and "origin" not in remotes:
             err("shipping.mode local_merge requires an origin remote to push to")
         for key in ("user.name", "user.email"):

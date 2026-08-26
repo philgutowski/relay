@@ -5,22 +5,35 @@ Source: an eight reviewer code review of units U4 to U11, base 072d068, run id
 20260825-174244-6ec89071. Fourteen P0 and P1 findings were applied in eae48d5. These are the
 rest, kept here so they are recorded rather than remembered.
 
-## The one decision
+## The one decision, settled 2026-08-26: pr_terminal is de scoped
 
-**pr_terminal mode is shipped as working and cannot run.** `run.py` halts every task under it
-with `ci_undecided` and the message "not wired into the run loop yet", while `manifest.validate`
-accepts the mode, `docs/examples/manifest-github-pr.toml` configures it, `brief-pr-terminal.md`
-renders for it, and both `SKILL.md` and `README.md` present it as one of two shipping modes with
-no caveat. The halt class an operator sees is actively misleading: the documented remedy is
-"wait for CI", and there is no PR being checked at all.
+**The problem.** `run.py` halted every task under `pr_terminal` with `ci_undecided` and the
+message "not wired into the run loop yet", while `manifest.validate` accepted the mode,
+`docs/examples/manifest-github-pr.toml` configured it, `brief-pr-terminal.md` rendered for it,
+and both `SKILL.md` and `README.md` presented it as one of two shipping modes with no caveat.
+The halt class an operator saw was actively misleading: its documented remedy is "wait for CI",
+and there was no pull request being checked at all. Three reviewers found this independently.
 
-Three reviewers found this independently. The parts already exist and are unit tested:
-`gitwrite.find_pr`, `gitwrite.poll_ci`, and the `pr_probe` seam in `verify.verify`. Nothing wires
-them together and no end to end test covers the mode.
+**The decision.** Refuse the mode rather than implement it. `validate` now names it as
+unimplemented, with its own error text so it does not read like a misspelled mode name. The
+example was converted to `local_merge` and renamed `docs/examples/manifest-github-projects.toml`,
+which keeps one example per adapter. `SKILL.md` and `README.md` say the mode is refused and why,
+and the `ci_undecided` row in the halt class table says no run can reach it today. The halt in
+`run.py` remains as a backstop for a manifest built by hand, under `unexpected_error` rather than
+`ci_undecided`, so its remedy is not a lie.
 
-Two honest options. Implement the R50 PR sequence in the run loop, or refuse the mode in
-`validate` and mark it unimplemented in the example, the skill, and the README until it is real.
-Shipping it as documented and non functional is the only option that is wrong.
+**Why.** The runner has never been run against a real repository, and `local_merge` is the mode
+that will be exercised first. An end to end test for `pr_terminal` cannot invoke `gh`, so it needs
+a fake transport driving a whole pull request lifecycle: find the PR, run the closeout against the
+task branch, scope check, push the task branch rather than the default, poll CI within the bound,
+full verify with `pr_probe` wired in, checkout and sync the default. That is a new test harness,
+not a wiring change.
+
+**What is kept.** Every read side piece already exists and is unit tested: `gitwrite.find_pr`,
+`gitwrite.poll_ci`, and the `pr_probe` seam in `verify.verify`. `brief-pr-terminal.md` is kept and
+still rendered by its tests. The mode stays in `SHIPPING_MODES` and gains
+`UNIMPLEMENTED_SHIPPING_MODES` next to it, so implementing it later means deleting one tuple entry
+and writing the R50 sequence, not rebuilding the parts.
 
 ## Findings left unapplied
 
@@ -64,9 +77,13 @@ set is `closeout_out_of_scope`; a tree the closeout left dirty entirely inside t
 faithfully, and the branch diff backstop is stronger than the doc's own script. Three gaps:
 
 - The doc resolved the R19 tension by asking the runner to write the blocked comment itself, as a
-  narrow carved exception. The code implemented detection only (`blocked_unrecorded`), so a
-  blocked and uncommented task still depends on a human reading the summary. The code took the
-  opposite position from the doc and nothing records why.
+  narrow carved exception. The code implemented detection only (`blocked_unrecorded`). **Settled
+  2026-08-26: the code's position stands and R19 is absolute.** The reasoning is now written into
+  that doc's own guidance section, replacing the paragraph that asked for the exception: the
+  adapter interface is eight read methods with a test asserting exactly that surface, the closeout
+  process is a Claude process and already owns the write, and the summary's pending checks turn a
+  closeout that wrote nothing into a named line rather than silence. The accepted cost is that a
+  failed closeout leaves the board untouched and the operator learns it from the summary.
 - `cli_version` in the terminal record is always the pinned `CLI_VERSION_TESTED`, never the CLI
   that actually ran, so the doc's ask to notice the gate boundary moving cannot be satisfied.
 - `CLAUDE_DIR_SCAN_REGEX` misses markdown link and bold forms of a `.claude/` path, which tracker

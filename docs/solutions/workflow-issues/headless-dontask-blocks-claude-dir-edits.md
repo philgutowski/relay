@@ -153,13 +153,32 @@ line, so the summary can say what to do about it instead of only reporting it.
 in the brief.** The IW-83 brief told the run to comment the blocker on the card if blocked. The
 transcript shows zero `mcp__atlassian__addCommentToJiraIssue` calls. The run addressed its blocker to
 the absent human in its final message instead, which reaches nobody, so the blocked exit was
-invisible on the board. That is exactly AE2's shape, and the brief alone did not produce it. When
-verify-landed classifies a task as blocked under R23 and the tracker carries no new comment since
-the R17 baseline, the runner should write the blocked state to the card from what it can see: no new
-commit on the default branch, no PR, the last denial line from the transcript. Note the tension with
-R19, which keeps the runner read-only on the tracker so a runner bug can never move a card.
-Commenting is not moving. A comment on a blocked task is the narrow exception worth carving
-explicitly rather than leaving implicit.
+invisible on the board. That is exactly AE2's shape, and the brief alone did not produce it.
+
+This paragraph originally resolved the tension with R19 by asking the runner to write that comment
+itself, as a narrow carved exception, on the argument that commenting is not moving. **That is not
+what was built, and the reversal is deliberate. Decided 2026-08-26: R19 stays absolute and the
+runner never writes to a tracker.** Three things changed the answer between writing this and
+building it:
+
+- The adapter interface settled at eight methods and none of them writes, with a shared test
+  asserting exactly that surface (KTD16). Carving the exception means a ninth write method on every
+  adapter, tracker write credentials reachable from runner code, and that assertion relaxed. The
+  property R19 buys, that a defect in the runner can never move a card, is bought by the absence of
+  the code path, not by the runner's intent to use it carefully.
+- The Closeout process arrived, and it is a Claude process. Writing the blocker comment is its first
+  duty, so the write already happens on the blocked path; it simply does not happen inside the
+  runner.
+- R36's summary and its pending checks arrived. A blocked task whose closeout wrote nothing raises
+  the `blocked_unrecorded` finding, which becomes a named line in the summary telling the operator
+  to check that card by hand. The silent case this paragraph was written against is now a checklist
+  line rather than nothing at all.
+
+So the mechanism is detection, not writing. `closeout.confirm_blocked_comment` reads
+`comments_since` against the R17 baseline after the closeout has run, and a card with no newer
+comment produces the finding. What this does not give you is the comment itself: if the closeout
+process fails to write, the board still shows an untouched card and the operator learns it from the
+summary rather than from the tracker. That is the accepted cost of R19.
 
 **Pre-authorize the degraded path in the brief, so a run that finds a blocker can take it alone.**
 The IW-83 run worked out the right fallback by itself: merge the finished commits, leave the blocked
