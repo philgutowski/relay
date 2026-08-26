@@ -145,6 +145,14 @@ class NegativeManifests(ManifestCase):
     def test_local_merge_requires_in_review_status(self):
         self.assert_error(self.edit(r'^in_review_status = .*$', ""), "tracker.in_review_status is required")
 
+    def test_markdown_warns_that_the_no_envelope_route_cannot_fire(self):
+        """Finding 20: the route needs a third card state the markdown line does not have."""
+        result = mf.validate(mf.load(self.write(self.base)), env=_repo.scrubbed_env())
+        self.assertEqual(result.errors, [])
+        joined = "\n".join(result.warnings)
+        self.assertIn("markdown adapter reports only open or closed", joined)
+        self.assertIn("cannot fire", joined)
+
     def test_unknown_adapter_fails(self):
         self.assert_error(self.edit(r'^adapter = "markdown"', 'adapter = "trello"'), "tracker.adapter must be one of")
 

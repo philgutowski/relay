@@ -17,7 +17,7 @@ git or tracker evidence and are assigned by verify (U8); the findings here attac
 import json
 import re
 
-from . import contracts
+from . import contracts, summary
 
 LAST_MESSAGE_CHARS = 200
 ARGUMENT_CHARS = 120
@@ -176,7 +176,6 @@ def classify(transcript_path, launch_result, write_tool_patterns=None):
         "last_message": None,
         "halt_class": None,
         "routable": False,
-        "cause_line": None,
     }
     try:
         lines, malformed = read_transcript(transcript_path)
@@ -260,46 +259,17 @@ def classify(transcript_path, launch_result, write_tool_patterns=None):
             "class": contracts.HALT_NO_ENVELOPE,
             "last_message": result["last_message"],
         })
-    result["cause_line"] = cause_line(result)
     return result
 
 
-def cause_line(result):
-    """Render the halt class's summary sentence from the evidence in the result."""
-    cls = result.get("halt_class")
-    if cls is None:
-        return None
-    envelope = result.get("envelope") or {}
-    blockers = envelope.get("blockers") or []
-    fields = {
-        "blocker": blockers[0] if blockers else "no blocker text in the envelope",
-        "last_message": result.get("last_message") or "(no final message)",
-        "active_minutes": "?",
-        "wall_minutes": "?",
-        "tree": "?",
-        "branch": "?",
-    }
-    template = contracts.HALT_LINES.get(cls, cls)
-    try:
-        return template.format(**fields)
-    except (KeyError, IndexError):
-        return template
-
-
 def finding_line(finding):
-    """One summary line per finding, from the HALT_LINES templates."""
-    cls = finding.get("class")
-    template = contracts.HALT_LINES.get(cls, cls)
-    fields = dict(finding)
-    fields.setdefault("target", "")
-    fields.setdefault("tool", "?")
-    fields.setdefault("name", "?")
-    fields.setdefault("required", "?")
-    fields.setdefault("last_message", "")
-    try:
-        return template.format(**fields)
-    except (KeyError, IndexError):
-        return template
+    """One sentence per finding, for the closeout brief's Other findings bullets.
+
+    Rendered by `summary.cause_line`, so the closeout brief and the run summary share one
+    renderer of `HALT_LINES`. A second copy with its own hand written defaults is how a template
+    that gained a field degraded what reached a tracker card while the summary printed fine.
+    """
+    return summary.cause_line(finding.get("class"), finding)
 
 
 def write_digest(result, path):

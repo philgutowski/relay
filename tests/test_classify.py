@@ -4,7 +4,8 @@ import unittest
 from types import SimpleNamespace
 
 import _paths
-from relay import classify, contracts
+from relay import classify, contracts, summary
+from test_summary import FINDING_ROWS
 
 FIXTURES = os.path.join(_paths.FIXTURES_DIR, "transcripts")
 # The shape the Jira adapter's write_tool_patterns() returns in U4 (KTD16).
@@ -55,7 +56,6 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(r["envelope"]["status"], "blocked")
         self.assertTrue(r["envelope"]["blockers"][0].startswith("acceptance criterion 3"))
         self.assertEqual(len(r["envelope"]["blockers"]), 2)
-        self.assertTrue(r["cause_line"].startswith("blocked: acceptance criterion 3"))
 
     def test_no_envelope_carries_the_first_200_characters(self):
         r = run("no_envelope.jsonl")
@@ -63,7 +63,6 @@ class Fixtures(unittest.TestCase):
         self.assertIsNone(r["envelope"])
         self.assertEqual(len(r["last_message"]), 200)
         self.assertTrue(r["last_message"].startswith("Round two applied."))
-        self.assertIn("exited without a return envelope", r["cause_line"])
         self.assertIn(contracts.HALT_NO_ENVELOPE, classes(r))
 
     def test_path_gate_finding_names_the_path_and_the_tool(self):
@@ -74,7 +73,6 @@ class Fixtures(unittest.TestCase):
         self.assertTrue(gates[0]["target"].endswith(".claude/skills/itg-brief/SKILL.md"))
         self.assertIsNotNone(gates[0]["tool_use_line"])
         self.assertEqual(r["halt_class"], contracts.HALT_PATH_GATE)
-        self.assertEqual(r["cause_line"], contracts.HALT_LINES[contracts.HALT_PATH_GATE])
         self.assertIn(contracts.HALT_NO_ENVELOPE, classes(r), "the missing envelope stays visible")
 
     def test_skill_substitution_names_bare_and_required(self):
@@ -204,6 +202,36 @@ class RealTranscriptSmoke(unittest.TestCase):
         self.assertEqual(r["halt_class"], contracts.HALT_PATH_GATE)
         self.assertFalse(any(f["class"] == contracts.HALT_TRACKER_WRITE_DENIED for f in r["findings"]),
                          "the Jira transition succeeded in that run")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class FindingLines(unittest.TestCase):
+    """`classify.finding_line` feeds the closeout brief, which the Closeout process reads when it
+    writes the tracker card. The same table `tests/test_summary.py` renders through the summary
+    is rendered here through this entry point, so the brief cannot carry a placeholder the
+    summary would have caught."""
+
+    def test_no_placeholder_survives_a_finding_line(self):
+        for halt_class, (finding, raiser) in sorted(FINDING_ROWS.items()):
+            with self.subTest(halt_class=halt_class, raiser=raiser):
+                line = classify.finding_line(dict(finding, **{"class": halt_class}))
+                self.assertNotIn("?", line, "%s renders a placeholder: %s" % (halt_class, line))
+                self.assertNotIn("{", line, "%s left a field unfilled: %s" % (halt_class, line))
+
+    def test_the_brief_and_the_summary_render_a_finding_the_same_way(self):
+        for halt_class, (finding, raiser) in sorted(FINDING_ROWS.items()):
+            with self.subTest(halt_class=halt_class, raiser=raiser):
+                finding = dict(finding, **{"class": halt_class})
+                self.assertEqual(classify.finding_line(finding),
+                                 summary.cause_line(halt_class, finding))
+
+    def test_a_template_field_no_finding_supplies_renders_as_a_placeholder_not_braces(self):
+        line = classify.finding_line({"class": contracts.HALT_DENIED_TOOL})
+        self.assertNotIn("{", line)
+        self.assertIn("?", line)
 
 
 if __name__ == "__main__":

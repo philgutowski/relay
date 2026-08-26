@@ -42,12 +42,12 @@ Each was validated against the code. Numbers are the review's stable ids.
 | # | Severity | Where | What | State |
 |---|---|---|---|---|
 | 19 | P2 | `adapters/github.py:116` | A board read that failed is reported as "not terminal" rather than unknown, so an unreadable tracker looks like a card that did not move. | Applied 2026-08-26 |
-| 20 | P2 | `adapters/markdown.py:110` | The markdown adapter can only ever report open or closed, so KTD6's route for a missing envelope, which needs the card in `in_review_status`, can never fire for it. The obvious workaround, setting `in_review_status = "open"`, makes the route fire for every unclosed card. | Open |
+| 20 | P2 | `adapters/markdown.py:110` | The markdown adapter can only ever report open or closed, so KTD6's route for a missing envelope, which needs the card in `in_review_status`, can never fire for it. The obvious workaround, setting `in_review_status = "open"`, makes the route fire for every unclosed card. | Decided 2026-08-26: route documented as unavailable under this adapter, `validate` warns. A third mark would not suffice on its own because the adapter reads at the remote head. |
 | 21 | P2 | `gitwrite.py:351` | The closeout scope check diffs commits only, so a closeout that leaves the working tree dirty or drops an untracked file outside the allowed paths passes it. | Applied 2026-08-26 |
 | 22 | P2 | `run.py:295` | The timeout cause line prints `?` minutes because the evidence carries seconds under different key names. | Applied 2026-08-26 |
 | 23 | P2 | `run.py:354` | The `partial_landing` cause line renders with no evidence at all: the halt passes a `checks` dict and the template names `sha` and `card_status`. | Applied 2026-08-26 |
 | 25 | P2 | `summary.py:67` | The `runner_crashed` line always reads "during halted", because the record is passed after the evidence and its post crash status wins over `status_before`. | Applied 2026-08-26 |
-| 27 | P2 | `verify.py:177` | Partly addressed. A mirror rule the runner cannot parse now blocks; a mirror that is configured and pushed but whose ref cannot be read back is still worth a second look. | Open |
+| 27 | P2 | `verify.py:177` | Partly addressed. A mirror rule the runner cannot parse now blocks; a mirror that is configured and pushed but whose ref cannot be read back is still worth a second look. | Applied 2026-08-26: an unresolvable mirror ref is a blocking skip, not a FAIL. |
 | 18 | P2 | `adapters/markdown.py` | Kept here only because it was introduced by this milestone's own simplification pass and is a useful reminder that a mechanical edit can leave both forms behind. | Applied in eae48d5 |
 | 28 | P3 | `closeout.py:69` | `depth_for`'s `gate_refused` parameter is unreachable from any production caller. | Applied 2026-08-26 |
 | 29 | P3 | `verify.py:50` | `LOCAL_MERGE` is defined and never used. | Applied 2026-08-26 |
