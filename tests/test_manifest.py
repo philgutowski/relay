@@ -81,6 +81,21 @@ class NegativeManifests(ManifestCase):
         self.assertTrue(any(fragment in e for e in result.errors), "%r not in %r" % (fragment, result.errors))
         return result
 
+    def test_pr_terminal_is_refused_as_unimplemented_rather_than_as_a_typo(self):
+        """Decided 2026-08-26. The mode is in the schema, the example, and the brief templates,
+        and the run loop has no sequence for it, so a run under it halts on its first task. The
+        refusal belongs before the run starts, and it has to say why rather than reading like a
+        misspelled mode name."""
+        result = self.assert_error(self.edit(r'^mode = "local_merge"$', 'mode = "pr_terminal"'),
+                                   "shipping.mode pr_terminal is not implemented")
+        self.assertTrue(any("Use local_merge" in error for error in result.errors))
+        self.assertFalse(any("must be one of" in error for error in result.errors),
+                          "an unimplemented mode is not the same error as an unknown one")
+
+    def test_an_unknown_shipping_mode_still_reads_as_a_typo(self):
+        self.assert_error(self.edit(r'^mode = "local_merge"$', 'mode = "pr-terminal"'),
+                          "shipping.mode must be one of")
+
     def test_gate_command_as_a_string_fails_naming_the_field(self):
         self.assert_error(self.edit(r'^command = \["true"\]', 'command = "make test"'), "gate.command must be a non-empty array")
 
@@ -106,11 +121,12 @@ class NegativeManifests(ManifestCase):
     def test_permission_mode_field_fails(self):
         self.assert_error(self.edit(r"^\[permissions\]", '[permissions]\npermission_mode = "dontAsk"'), "permission_mode is not a field")
 
-    def test_pr_mode_without_origin_fails(self):
+    def test_a_repo_with_no_origin_remote_fails(self):
+        """The runner pushes the merge, so a repo it cannot push to is refused before a run. The
+        pr_terminal half of this rule went with the mode when validate started refusing it."""
         repo = _repo.make_repo(self.tmp.name, name="noremote", origin=False)
-        text = self.base.replace(self.repo, repo).replace('mode = "local_merge"', 'mode = "pr_terminal"')
-        text = text.replace('default_branch = "main"', 'default_branch = "main"')
-        self.assert_error(text, "pr_terminal requires the repo to have an origin remote")
+        self.assert_error(self.base.replace(self.repo, repo),
+                          "local_merge requires an origin remote to push to")
 
     def test_excluded_without_reason_fails(self):
         self.assert_error(self.edit(r'^reason = .*$', ""), "excluded but carries no reason")

@@ -362,9 +362,16 @@ def _timeout_route(ctx):
 def _merge_route(ctx):
     """R50, local merge, routable to merge. Every step before the closeout is the runner's own,
     and every one of them can refuse."""
-    if ctx.manifest.shipping_mode == "pr_terminal":
-        raise _Halt(ctx.task.id, contracts.HALT_CI_UNDECIDED,
-                    "pr_terminal mode is not wired into the run loop yet")
+    if ctx.manifest.shipping_mode in manifest_module.UNIMPLEMENTED_SHIPPING_MODES:
+        # Unreachable through the CLI, which validates first and refuses the mode there. Kept as
+        # a backstop for a caller that builds a manifest by hand, and deliberately not
+        # ci_undecided: that class tells an operator to wait for CI, and there is no pull
+        # request being checked.
+        raise _Halt(ctx.task.id, contracts.HALT_UNEXPECTED_ERROR,
+                    "shipping.mode %s is not implemented" % ctx.manifest.shipping_mode,
+                    {"task": ctx.task.id, "error_type": "unimplemented shipping mode",
+                     "error": "%s has no sequence in the run loop; relay validate refuses it"
+                              % ctx.manifest.shipping_mode})
 
     ctx.store.upsert(ctx.task.id, status=contracts.STATUS_MERGING)
     # The gate is the longest thing the runner does without a child process to heartbeat for

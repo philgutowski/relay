@@ -1,0 +1,65 @@
+# Relay manifest: a GitHub Projects board, local merge mode. The task process plans, builds
+# and reviews on its own branch; the runner runs the gate, merges, and pushes.
+#
+# pr_terminal mode, where each task ends at an open pull request whose checks have decided, is
+# named in the schema and refused by `relay validate`. The run loop has no PR sequence, so a run
+# under it would halt on its first task. See docs/ideation/2026-08-25-relay-review-residuals.md.
+
+[project]
+repo = "~/code/example-service"
+default_branch = "main"
+mirror = []
+
+[tracker]
+adapter = "github"
+owner = "example-org"
+project_number = 7
+# An issue is terminal when it is CLOSED, or when its item on the board reads this status.
+status_field = "Done"
+# KTD6 routes a task whose process printed no return envelope by asking whether the card reached
+# this status. Required in local merge mode.
+in_review_status = "In review"
+
+[shipping]
+mode = "local_merge"
+
+[permissions]
+allowed = ["Bash", "Read", "Edit", "Write", "Grep", "Glob", "Skill", "Agent", "TodoWrite"]
+disallowed = []
+
+[timeouts]
+task_minutes = 150
+closeout_minutes = 20
+# Unused in local merge mode, where the gate runs locally before the merge. Kept because the
+# schema requires it.
+ci_poll_minutes = 45
+
+[closeout]
+model = "sonnet"
+effort = "medium"
+allowed_tools = []
+allowed_paths = []
+
+[gate]
+command = ["make", "check"]
+description = "make check locally before the merge, and a pre push hook that runs it again"
+
+[qualifying]
+gate = "A pre push hook runs make check and refuses the push on failure; CI runs it again on main."
+durable_state = "Merge commits on main and the board's issues are the only state carried between tasks."
+independence = "The listed issues touch separate services and can ship in any order."
+editors = "Only the repository's own maintainers can edit these issues or comment on them."
+
+[on_blocked]
+merge_partial = false
+open_followup = true
+
+[[tasks]]
+id = "412"
+model = "opus"
+effort = "high"
+
+[[tasks]]
+id = "413"
+model = "sonnet"
+effort = "medium"

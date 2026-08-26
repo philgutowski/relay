@@ -50,10 +50,11 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
 1. Ask which repo and which tracker (jira, github, or markdown), then write a draft manifest and
    run `validate <manifest> --list` to read the candidate tasks back.
 2. Confirm with the operator, one question at a time: which tasks to include and in what order;
-   the model and effort for each; the shipping mode (`local_merge` when the runner merges and
-   pushes, `pr_terminal` when the task process opens a pull request and CI decides); any task to
-   exclude and why; and the two degraded path answers, `on_blocked.merge_partial` and
-   `on_blocked.open_followup`.
+   the model and effort for each; any task to exclude and why; and the two degraded path
+   answers, `on_blocked.merge_partial` and `on_blocked.open_followup`. The shipping mode is
+   `local_merge`, where the runner merges and pushes. `pr_terminal` is named in the schema and
+   refused by `validate`: the run loop has no pull request sequence, so every task under it
+   would halt without one being opened or checked.
 3. Ask for the four qualifying sentences, in the operator's own words, as data:
    - `qualifying.gate`: what refuses a broken change, and how it is invoked.
    - `qualifying.durable_state`: where the state carried between tasks lives.
@@ -126,7 +127,7 @@ The classes and what they mean for the operator:
 | `timeout` | the task ran past its bound and was killed with its whole process group | raise the timeout or split the task, then resume |
 | `unclean_exit` | the process left a dirty tree, or claimed to finish and left nothing to merge | inspect the tree, clean it, resume |
 | `runner_crashed` | a stale lease was reclaimed while a record was in flight | nothing usually; the next run re-verifies it |
-| `ci_undecided` | in `pr_terminal` mode, the checks did not decide within the bound | wait for CI, then run `verify` for that task |
+| `ci_undecided` | reserved for `pr_terminal` mode, which `validate` refuses; no run can reach it today | not applicable |
 
 After a repair, confirm before resuming:
 
