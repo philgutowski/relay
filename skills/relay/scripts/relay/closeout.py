@@ -253,7 +253,7 @@ def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths
                                         adapter.write_tool_patterns())
     findings = [finding for finding in closeout_digest.get("findings") or []
                 if finding.get("class") != contracts.HALT_NO_ENVELOPE]
-    result = RESULT_UNFINISHED if launch_result.timed_out else parse(closeout_digest.get("last_message"))
+    result = RESULT_UNFINISHED if launch_result.timed_out else parse(closeout_digest.get("last_message_tail"))
     if result == RESULT_UNFINISHED:
         findings.append({
             "class": contracts.CLOSEOUT_UNFINISHED,

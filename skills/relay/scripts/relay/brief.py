@@ -27,7 +27,7 @@ one task's data could reach another task's brief.
 import os
 import string
 
-from . import contracts, state
+from . import adapters, contracts, state
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "templates")
 TEMPLATES = {
@@ -101,11 +101,15 @@ def _qualified(name):
 def values(manifest, task, card, branch=None):
     """Every placeholder the templates use, from manifest and card values only."""
     default_branch = manifest.project.default_branch or "the default branch"
+    branch = branch or ("relay/" + task.id)
+    tracker_steps = adapters.task_tracker_steps(manifest, branch)
     return {
         "task_id": task.id,
         "title": defang(str(card.get("title") or "")).strip(),
         "description": defang(str(card.get("description") or "")).strip(),
-        "branch": branch or ("relay/" + task.id),
+        "branch": branch,
+        "tracker_review_step": tracker_steps["review_step"],
+        "tracker_blocked_step": tracker_steps["blocked_step"],
         "default_branch": default_branch,
         "gate_description": manifest.gate.description or "the project's own gate command",
         "in_review_status": manifest.tracker.in_review_status or "its in review status",

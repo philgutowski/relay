@@ -231,6 +231,15 @@ CLOSEOUT_SKIPPED_TEXT = (
     "without a note: the work was routine and the code says what it does.\n\n"
     "Documentation skipped"
 )
+# Longer than classify.LAST_MESSAGE_CHARS on purpose: the first live run's closeout explained
+# its skip at this length and the terminal line fell past the head the parser was handed.
+CLOSEOUT_SKIPPED_LONG_TEXT = (
+    "Recorded the blocked outcome on tasks.md and committed (not pushed, per the closeout scope). "
+    "The task's own branch shows a complete, correct looking implementation with no reported "
+    "blockers or denials, so there is no visible cause to document as a learning, just an "
+    "unexplained non landing. Nothing here rises to a durable learning worth compounding.\n\n"
+    "Documentation skipped"
+)
 CLOSEOUT_UNFINISHED_TEXT = (
     "Closed the card and named the merge commit. I started the compound judgment and the"
 )
@@ -264,6 +273,10 @@ def closeout_skipped():
     return finish(build_closeout_prefix(), CLOSEOUT_SKIPPED_TEXT)
 
 
+def closeout_skipped_long():
+    return finish(build_closeout_prefix(), CLOSEOUT_SKIPPED_LONG_TEXT)
+
+
 def closeout_unfinished():
     return finish(build_closeout_prefix(), CLOSEOUT_UNFINISHED_TEXT)
 
@@ -294,6 +307,7 @@ if __name__ == "__main__":
     write("malformed.jsonl", success, extra_raw=(2, '{"type": "assistant", "message": {this is not json'))
     write("closeout_complete.jsonl", closeout_complete)
     write("closeout_skipped.jsonl", closeout_skipped)
+    write("closeout_skipped_long.jsonl", closeout_skipped_long)
     write("closeout_unfinished.jsonl", closeout_unfinished)
     write("closeout_tracker_denied.jsonl", closeout_tracker_denied)
     print("fixtures written to", HERE)

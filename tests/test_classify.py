@@ -208,6 +208,32 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class ParagraphBlockers(unittest.TestCase):
+    """First live run: the blocker was written as prose under `blockers:` and the record read
+    "no blocker text in the envelope"."""
+
+    def test_a_paragraph_under_blockers_is_one_blocker(self):
+        env = classify.parse_envelope(
+            "```relay-envelope\nstatus: blocked\nblockers:\n"
+            "Cannot move the tracker card: no card id was provided in this session.\n"
+            "changed_files: toolkit/stats.py, tests/test_stats.py\nplan_path: docs/plans/x.md\n```")
+        self.assertEqual(env["blockers"],
+                         ["Cannot move the tracker card: no card id was provided in this session."])
+        self.assertEqual(env["changed_files"], ["toolkit/stats.py, tests/test_stats.py"])
+        self.assertEqual(env["plan_path"], "docs/plans/x.md")
+
+    def test_a_multi_line_paragraph_stops_at_the_next_key(self):
+        env = classify.parse_envelope(
+            "status: blocked\nblockers:\nfirst line of prose\nsecond line of prose\n\nplan_path: p.md\n")
+        self.assertEqual(env["blockers"], ["first line of prose", "second line of prose"])
+        self.assertEqual(env["plan_path"], "p.md")
+
+    def test_an_empty_blockers_key_followed_by_another_key_stays_empty(self):
+        env = classify.parse_envelope("status: complete\nblockers:\nchanged_files:\n- a.py\nplan_path: p.md\n")
+        self.assertEqual(env["blockers"], [])
+        self.assertEqual(env["changed_files"], ["a.py"])
+
+
 class FindingLines(unittest.TestCase):
     """`classify.finding_line` feeds the closeout brief, which the Closeout process reads when it
     writes the tracker card. The same table `tests/test_summary.py` renders through the summary
