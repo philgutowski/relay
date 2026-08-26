@@ -69,8 +69,21 @@ blocker is often the learning.
 
 ### Halt class
 The Runner's classification of one Task process exit, drawn from a closed set and decided from the
-session transcript plus git and Tracker evidence. Every class carries its evidence and one cause
-line for the summary, so an operator learns why a Task did not land without reading a transcript.
+session transcript plus git and Tracker evidence. Every class carries the evidence its Cause line
+needs, so an operator learns why a Task did not land without reading a transcript.
+
+### Cause line
+The one sentence a run summary prints to say why a Task did not land, and the only diagnosis an
+operator who was not watching gets. Each is a fixed template belonging to a Halt class, filled from
+the evidence the Runner recorded when it stopped. Findings that attach to a Task without being its
+own class carry one too, so a Cause line is not exclusively a property of a Halt class.
+
+A template and the evidence that fills it are two halves of one contract, written in different
+places by different code. Two rules keep them joined. Evidence a template names must be a plain
+value, because a structured one cannot be rendered into a sentence and is dropped. And where the
+evidence and the Task's own record both carry a field of that name, the evidence wins, since the
+record acquired most of its fields after the stop and would otherwise describe the aftermath rather
+than the cause.
 
 ## Outcomes
 
