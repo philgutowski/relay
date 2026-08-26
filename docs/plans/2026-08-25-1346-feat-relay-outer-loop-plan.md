@@ -354,7 +354,9 @@ stateDiagram-v2
   landed --> pending: startup validate finds missing evidence
 ```
 
-Halt class set. `verdict` is what the runner does next; `line` is the summary sentence template. Evidence paths are transcript JSON paths unless noted.
+Halt class set. `verdict` is what the runner does next; `line` is the summary sentence template. Evidence paths are transcript JSON paths unless noted. The last two rows are not halt classes: they are findings that attach to a record whose own class is something else, and they are in this table because they print a line and so belong to the same contract. The shipped set is `contracts.LINE_CLASSES`, and `contracts.HALT_LINES` holds the templates; this table is prose and the code is the authority.
+
+Amended 2026-08-26. The `runner_crashed` line named `<status>` and `<clean or dirty>` tree. Both were wrong in the shipped code and both were changed there rather than here. The template field is now `status_before`, because the task record is a rendering source too and carries its own post crash `status`, which shadowed the evidence and printed "during halted" for every crash. The tree clause was dropped outright, because the reclaim path that raises this class most often runs in a later process that never saw the repository and cannot know the tree. Do not reintroduce either. See `docs/solutions/logic-errors/cause-line-contract-split-degraded-to-placeholders.md`.
 
 | Class | Evidence | Verdict | Line |
 |---|---|---|---|
@@ -366,13 +368,16 @@ Halt class set. `verdict` is what the runner does next; `line` is the summary se
 | `tracker_write_denied` | `denied_tool` matching the adapter's `write_tool_patterns()` in the task or closeout transcript, and card unchanged | halt as partial landing | code landed, card unmoved: `<tool>` denied |
 | `remote_advanced` | `origin/<default>` differs from `baseline_sha` at merge time, or merge reports conflicts | halt, merge aborted, branch stranded | remote moved during the task; merge aborted at `<sha>` |
 | `closeout_out_of_scope` | post-closeout diff touches a path outside `closeout.allowed_paths` | halt | closeout changed `<path>` outside `docs/` |
-| `runner_crashed` | stale lease reclaimed with the record in `running` or `merging` and no terminal record | halt, then R48 re-verify | runner died during `<status>`; tree `<clean or dirty>` on `<branch>` |
+| `runner_crashed` | stale lease reclaimed with the record in `running` or `merging` and no terminal record, or the lease lost while the task ran | halt, then R48 re-verify | runner died during `<status before the crash>` on `<branch>` |
 | `skill_substitution` | `tool_use.name == Skill` and `input.skill` lacks `compound-engineering:` where the brief required it | warning only | ran `<name>` instead of `<required>` |
 | `gate_refused` | local gate exit nonzero on branch head, or push exit nonzero | halt, branch stranded | gate refused `relay/<id>` at `<sha>`; output in `gate/<id>.log` |
 | `partial_landing` | code on remote, card not terminal or closing reference absent | halt | landed at `<sha>` but card reads `<status>` |
 | `timeout` | runner killed the process group | clean tree: checkout default, strand branch, closeout blocked, continue; dirty tree: halt | timed out after `<n>` active minutes (`<m>` wall); tree `<clean or dirty>` on `<branch>` |
 | `unclean_exit` | tree dirty after exit, or not on `relay/<id>` or default | halt | left the tree dirty on `<branch>` |
-| `ci_undecided` | PR mode, CI not decided within the bound | halt | PR `<url>` open, CI undecided after `<n>` minutes |
+| `ci_undecided` | PR mode, CI not decided within the bound. Unreachable since 2026-08-26: `pr_terminal` is de scoped and `validate` refuses it, so nothing drives a run into this class. See the decision in `docs/ideation/2026-08-25-relay-review-residuals.md` | halt | PR `<url>` open, CI undecided after `<n>` minutes |
+| `unexpected_error` | an exception the run loop did not anticipate, a task process that could not be launched, or a manifest naming a shipping mode with no sequence | halt | the runner hit an unexpected `<error type>` on `<task>`: `<error>` |
+| `closeout_unfinished` | the closeout process timed out or ended without a terminal line | warning only; the run continues | the closeout ended without a terminal line; last message: `<first 200 chars>` |
+| `blocked_unrecorded` | a blocked task whose card carries no comment newer than the baseline, or whose tracker could not be read to confirm one | warning only; the run continues | blocked and the card carries no new comment; check `<task>` by hand |
 
 Runner subcommands. Each is a pure function over the state directory plus the manifest; none prompts.
 
