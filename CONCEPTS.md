@@ -22,6 +22,19 @@ The Runner holds no project knowledge of its own. Everything project-specific re
 Manifest data. It reads the Tracker but does not write to it, so a defect in the Runner can never
 move a card.
 
+### Lease
+The claim a Runner holds while it drives a Manifest, which is what stops two Runners from
+interleaving work against one repository. There are two: one over the Manifest, so a second run
+of the same Manifest refuses to start, and one over the target repository, so two different
+Manifests naming the same repository cannot merge into it at the same time.
+
+A Lease is renewed on a heartbeat rather than held for the length of the work, so it expires on
+its own if a Runner dies. A Lease past its expiry is stale and the next Runner reclaims it,
+marking any Task the dead Runner left in flight as halted. The expiry is deliberately shorter
+than any Task timeout, so a crashed Runner never blocks a repository for the length of a Task;
+the cost of that choice is that every long operation a Runner performs has to keep renewing, and
+one that does not is how a Runner ends up acting without the claim it thinks it holds.
+
 ### Manifest
 The single file, one per project, carrying every project-specific fact a Runner needs: the Task
 list, the Tracker adapter to use, the Shipping mode, the permission allowlist and disallow list,
@@ -36,6 +49,10 @@ something about it needs a human present.
 ### Task process
 The single headless agent invocation that carries one Task from plan to landing. It starts with an
 empty context, knows nothing of any other Task, and its report of its own success is not evidence.
+
+A Task process owns whatever it spawns. Subagents and gate commands run underneath it and can
+outlive it, so the Runner bounds the whole group rather than the one invocation, and a Task
+process that has exited is not by itself evidence that its work has stopped.
 
 ### Closeout process
 A separate short agent invocation the Runner launches after every Task process exit except a
