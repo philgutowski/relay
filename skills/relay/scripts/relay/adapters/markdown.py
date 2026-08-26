@@ -14,6 +14,15 @@ The grammar, from the plan:
 
 A comment id is its position in the task's comment list, so the baseline the runner records
 before launch is a count and `comments_since` is everything past it.
+
+Two states only, and the consequence (finding 20, decided 2026-08-26). A line is open or closed,
+so this adapter never reports a card in `in_review_status`, and KTD6's route that merges a task
+which exited without an envelope on the strength of commits plus a moved card cannot fire here.
+Such a task is always treated as blocked. A third mark would not repair that on its own, because
+the adapter reads the file at the remote default branch head and a task branch never reaches it
+before the merge. `manifest.validate` warns about this so the operator is not waiting for a route
+that cannot come. Choosing `in_review_status = "open"` is worse, not better: it would route every
+unclosed card.
 """
 import re
 

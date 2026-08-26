@@ -334,6 +334,15 @@ def validate(manifest, check_repo=True, env=None):
             err("tracker.file is required for the markdown adapter")
     if manifest.shipping_mode == "local_merge" and not manifest.tracker.in_review_status:
         err("tracker.in_review_status is required in local_merge mode (KTD6 uses it to route a missing envelope)")
+    elif manifest.shipping_mode == "local_merge" and adapter == "markdown":
+        # Finding 20, decided 2026-08-26. The markdown line has two states, open and closed, and
+        # the adapter reads it at the remote default branch head, which a task branch never
+        # reaches before the merge. KTD6's rescue route for a missing envelope therefore cannot
+        # fire under this adapter, and the manifest field only names the status the brief tells
+        # the task to write. Say so rather than let an operator wait for a route that never comes.
+        warn("tracker.in_review_status is %r, but the markdown adapter reports only open or closed, "
+             "so KTD6's route for a task that exits without an envelope cannot fire; such a task is "
+             "always treated as blocked under this adapter" % manifest.tracker.in_review_status)
 
     # R2, R5: every task has id, model, effort; an excluded task has a reason.
     seen = set()

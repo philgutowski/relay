@@ -19,6 +19,8 @@ mirror = []
 adapter = "markdown"
 file = "tasks.md"
 done_statuses = ["closed"]
+# Names the status the brief tells the task to write. The markdown line has no such state, so
+# the no envelope rescue route (KTD6) never fires under this adapter; validate warns about it.
 in_review_status = "in review"
 
 [shipping]
