@@ -214,7 +214,7 @@ Relay has more code shaped this way, and it is worth naming rather than assuming
   state deliberately, the way `test_a_heartbeat_that_reports_a_lost_lease_stops_the_run` does at
   `tests/test_launch.py:240` to `:244`, not merely assert the heartbeat exists.
 - The blocking skip pattern in `skills/relay/scripts/relay/verify.py`, defined at `:87` and used
-  at `:139` and `:172` among others, exists to turn an unreadable git state into not landed
+  at `:139` and `:171` among others, exists to turn an unreadable git state into not landed
   rather than a crash. That path by definition only runs when something upstream is already
   degraded, so it deserves the same scrutiny: does the suite actually put it into the degraded
   state, or does it exercise the healthy path and assume the fallback follows?
@@ -229,10 +229,28 @@ Relay has more code shaped this way, and it is worth naming rather than assuming
   upstream can put the system into the state the branch guards. The fix, and the two tests that
   pin both halves of the distinction, are in `tests/test_adapters.py`.
 
-The check to apply going forward, here and anywhere else in Relay with this shape: before
-trusting a kill path, a lease check, or a skip branch, ask whether any existing test forces the
-precondition the branch guards against, not merely the precondition that lets the surrounding
-function return normally.
+**A second shape in the same family, which the framing above does not reach.** Everything named
+so far is a *guard*: one branch, one precondition, and an instrument that forces the branch.
+`docs/solutions/logic-errors/cause-line-contract-split-degraded-to-placeholders.md` came out of the
+same milestone and the same review and is the other shape, a **split contract**: one declaration
+listing required names, and many independent sites that satisfy it. There the declaration is
+`contracts.HALT_LINES` and the fulfilment is roughly thirty evidence sites across `run.py`,
+`gitwrite.py`, `state.py` and `classify.py`. No branch is excluded, so there is nothing to force.
+Six of the sixteen halt classes rendered a placeholder or a raw template and the suite stayed
+green, because a contract with no point in the program where its two halves meet has nowhere for a
+mismatch to be caught, and every mismatch is therefore silent by construction. The instrument is
+different too: not a test that steers into an excluded corner, but a test that walks the
+declaration and performs the production operation on every entry. Relay has at least one more
+contract of that shape still unpinned, the classify digest built literally at `classify.py:166` to
+`:180` and read by string key in `run.py` and `closeout.py`.
+
+The check to apply going forward, here and anywhere else in Relay, is both questions rather than
+one. For a guard: before trusting a kill path, a lease check, or a skip branch, ask whether any
+existing test forces the precondition the branch guards against, not merely the precondition that
+lets the surrounding function return normally. For a split contract: ask whether a declaration
+lists required names while the things that satisfy it are scattered, and if so whether any test
+walks the declaration and performs the production operation on each entry, rather than comparing
+names.
 
 ## Related
 
@@ -255,6 +273,12 @@ function return normally.
 - `docs/ideation/2026-08-25-relay-review-residuals.md` records the findings from the same code
   review that this fix did not address. It is deliberately silent on the launcher, because the
   launcher findings were among the fourteen that were applied.
+- `docs/solutions/logic-errors/cause-line-contract-split-degraded-to-placeholders.md` is the
+  sibling named in Prevention, and it cross references this one. The pair is deliberate: two
+  defect shapes that both survive a green suite, needing two different instruments. This one is a
+  guard whose precondition excludes the case it exists for, found by forcing the excluded branch.
+  That one is a contract split between a declaration and many fulfilment sites, found by
+  enumerating the declaration. Read both before deciding a passing suite means an area is covered.
 
 During the plan's own document review, before any launcher code existed, a feasibility reviewer
 had already flagged that stdin must be devnull for a detached launch, and an adversarial
