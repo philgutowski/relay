@@ -54,6 +54,11 @@ A Task process owns whatever it spawns. Subagents and gate commands run undernea
 outlive it, so the Runner bounds the whole group rather than the one invocation, and a Task
 process that has exited is not by itself evidence that its work has stopped.
 
+Its own turn ending and the process exiting are the same event, so anything it starts in the
+background is at the mercy of that exit rather than surviving it. This is why the Runner's own
+bounding of the whole group is a backstop rather than the first line of defense: what usually
+kills a background command is the process's own turn ending, not the Runner noticing afterward.
+
 ### Closeout process
 A separate short agent invocation the Runner launches after every Task process exit except a
 timeout that left the tree dirty. It has two ordered duties: write the Task's outcome to the Tracker (the closing reference
