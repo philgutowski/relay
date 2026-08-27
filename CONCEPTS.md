@@ -56,10 +56,15 @@ process that has exited is not by itself evidence that its work has stopped.
 
 ### Closeout process
 A separate short agent invocation the Runner launches after every Task process exit except a
-timeout. It has two ordered duties: write the Task's outcome to the Tracker (the closing reference
+timeout that left the tree dirty. It has two ordered duties: write the Task's outcome to the Tracker (the closing reference
 when Landed, a comment carrying the Runner's blocker digest when Blocked), then the Compound
 judgment. It exists because the Runner never writes to the Tracker and the Task process exits
 before the landing commit exists, so neither can name it.
+
+Its ending is a contract: the final line of its last message says whether the Compound judgment
+wrote a learning or skipped one, and the Runner reads that line from the end of the message, not
+the start. A Closeout process that ends any other way is recorded as unfinished, which is a
+finding for the operator rather than a halt.
 
 ### Compound process
 The second duty of the Closeout process: judging whether a Task produced a learning worth keeping
@@ -84,6 +89,11 @@ value, because a structured one cannot be rendered into a sentence and is droppe
 evidence and the Task's own record both carry a field of that name, the evidence wins, since the
 record acquired most of its fields after the stop and would otherwise describe the aftermath rather
 than the cause.
+
+A Cause line is a derived form, and the record keeps the raw sentence it was derived from beside
+it: the words the code that stopped the run actually wrote. The summary prints that sentence under
+the Cause line whenever the two differ, so a template that fits the class loosely, such as a
+refused retry reported under the class for a dirty tree, cannot be the only account of the stop.
 
 ## Outcomes
 
