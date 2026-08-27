@@ -118,7 +118,7 @@ task_id="$1"; doc="$2"
 # wrappers a tracker card commonly uses: a link's leading `[` and a bold or
 # italic or unspaced-list-marker `*` (a spaced list marker, "- .claude/x",
 # already matched via the whitespace class member).
-hits="$(grep -nE '(^|[[:space:]"'"'"'`(/\[*])\.claude/' "$doc" || true)"
+hits="$(grep -nE '(^|[[:space:]"'"'"'`(/[*])\.claude/' "$doc" || true)"
 
 if [ -n "$hits" ]; then
   cat >&2 <<EOF
