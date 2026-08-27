@@ -289,21 +289,19 @@ class EndToEnd(RunCase):
 
 
 class DivergedRemoteAfterPush(RunCase):
-    """R1: the final verify must fetch, or a remote that moved after the runner's own push (a
-    concurrent force push, a competing writer) reads as landed anyway -- the check would only be
+    """R1: the final verify must fetch, or a remote that moved after the runner's own push, a
+    concurrent force push, a competing writer, reads as landed anyway. The check would only be
     proving the push succeeded, never that the remote still agrees."""
 
     def install_diverge_after_second_main_push_hook(self):
         """A post-receive hook on the bare origin that force-updates refs/heads/main to a
-        pre-pushed divergent ref on the *second* push that updates refs/heads/main -- the merge
+        pre-pushed divergent ref on the *second* push that updates refs/heads/main. The merge
         push (run.py:421) is the first, the closeout's push (run.py:539) is the second. Filters
         by updated ref name (post-receive fires on every push, not just main) so the setup-time
         rogue push and push order can never miscount invocations."""
-        _repo.git(self.repo, "checkout", "-q", "-b", "rogue")
-        with open(os.path.join(self.repo, "rogue.txt"), "w") as handle:
-            handle.write("a third party's rogue commit\n")
-        _repo.git(self.repo, "add", "-A")
-        _repo.git(self.repo, "commit", "-q", "-m", "rogue")
+        from test_gitwrite import commit_on_branch
+        commit_on_branch(self.repo, "rogue", {"rogue.txt": "a third party's rogue commit\n"},
+                         "rogue", base="main")
         _repo.git(self.repo, "push", "-q", "origin", "rogue:refs/heads/rogue")
         _repo.git(self.repo, "checkout", "-q", "main")
         _repo.git(self.repo, "branch", "-D", "rogue")

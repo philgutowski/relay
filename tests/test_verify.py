@@ -92,17 +92,15 @@ class DoFetch(VerifyCase):
     def test_do_fetch_true_reads_the_remote_fresh_while_the_cached_ref_stays_stale(self):
         """A stand-in for run.py:449's final verify: without a fetch, `head_equals_remote`
         reads whatever `origin/main` this repo last knew about, not what origin actually holds
-        now. `do_fetch=False` runs first here so its evidence is the control -- a `do_fetch=True`
+        now. `do_fetch=False` runs first here so its evidence is the control. A `do_fetch=True`
         call earlier would resolve the tracking ref and erase the difference this test proves."""
         self.land_a_commit()
         clone = os.path.join(self.tmp.name, "clone")
         _repo.git(self.tmp.name, "clone", "-q", self.repo + ".git", clone)
         _repo.git(clone, "config", "user.name", "Relay Test")
         _repo.git(clone, "config", "user.email", "relay@example.invalid")
-        with open(os.path.join(clone, "src", "feature.py"), "w") as handle:
-            handle.write("value = 2\n")
-        _repo.git(clone, "add", "-A")
-        _repo.git(clone, "commit", "-q", "-m", "a third party's commit")
+        from test_gitwrite import commit_on_branch
+        commit_on_branch(clone, "main", {"src/feature.py": "value = 2\n"}, "a third party's commit")
         _repo.git(clone, "push", "-q", "origin", "main")
         new_remote_sha = gitread.rev_parse(clone, "HEAD")
 
