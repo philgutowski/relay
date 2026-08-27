@@ -102,6 +102,11 @@ The Runner's own determination, from git and the Tracker alone, of whether a Tas
 It never reads the Task process's exit code, printed result, or claims as evidence, because a
 headless run has every incentive to report success.
 
+The landing it recognises does not have to be the Runner's own merge. An operator who finishes a
+Task by hand between runs and lands it through the project's own tooling has produced the same
+outcome by another means, and Verify-landed accepts it on the same terms, because it reads git and
+the Tracker rather than trusting which actor performed the merge.
+
 ### Landed
 A Task whose work is durably where the Shipping mode says it belongs and whose Tracker record names
 the landing. Both halves are required: code that merged while the card stayed put is a partial
