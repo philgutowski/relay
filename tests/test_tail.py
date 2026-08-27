@@ -8,13 +8,13 @@ The follow cases drive `tail.follow` with an injected `sleep` that advances a sc
 between polls. That is what lets one deterministic test cover started-before, started-during, and
 started-after without a wall clock race.
 """
-import io
 import json
 import os
+import tempfile
 import unittest
 
 import _paths
-from relay import contracts, tail
+from relay import contracts, state, tail
 
 STDOUT_FIXTURES = os.path.join(_paths.FIXTURES_DIR, "stdout")
 REAL_STREAM = os.path.join(STDOUT_FIXTURES, "real_stream.jsonl")
@@ -26,6 +26,23 @@ def line(payload):
 
 def assistant(content):
     return line({"type": "assistant", "message": {"role": "assistant", "content": content}})
+
+
+def say(body):
+    return assistant([{"type": "text", "text": body}]) + "\n"
+
+
+class _Task:
+    def __init__(self, task_id):
+        self.id = task_id
+
+
+class _Manifest:
+    """The two fields `tail` reads off a manifest. A real one needs a repo and a tracker; the
+    follow loop needs neither, which is itself worth pinning."""
+
+    def __init__(self, ids):
+        self.tasks = [_Task(task_id) for task_id in ids]
 
 
 class Decode(unittest.TestCase):
@@ -145,6 +162,204 @@ class RealStream(unittest.TestCase):
     def test_the_result_and_heartbeat_lines_contribute_nothing(self):
         self.assertNotIn("total_cost_usd", self.text)
         self.assertNotIn("heartbeat", self.text)
+
+
+class FollowCase(unittest.TestCase):
+    """Drives `tail.follow` with an injected `sleep` that advances a scripted run between polls,
+    so started-before, started-during, and started-after are one deterministic pass each."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = os.path.join(self.tmp.name, "home")
+        os.makedirs(self.home)
+        self.manifest_path = os.path.join(self.tmp.name, "manifest.toml")
+        with open(self.manifest_path, "w") as handle:
+            handle.write("# a path is all the store needs\n")
+        self.repo = os.path.join(self.tmp.name, "repo")
+        os.makedirs(self.repo)
+        self.manifest = _Manifest(["T-1", "T-2", "T-3"])
+        self.store = state.StateStore(self.manifest_path, self.repo, home=self.home)
+        self.lines = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def stream(self, text):
+        self.lines.append(text)
+
+    @property
+    def text(self):
+        return "\n".join(self.lines)
+
+    def log(self, task_id, phase=tail.PHASE_TASK):
+        name = "%s.stdout.log" % task_id if phase == tail.PHASE_TASK else "%s.closeout.stdout.log" % task_id
+        return self.store.path("logs", name)
+
+    def append(self, task_id, payload, phase=tail.PHASE_TASK):
+        with open(self.log(task_id, phase), "ab") as handle:
+            handle.write(payload if isinstance(payload, bytes) else payload.encode("utf-8"))
+
+    def terminal(self, run_status=contracts.RUN_COMPLETED):
+        self.store.write_terminal(run_status)
+
+    def go(self, script=(), limit=40):
+        """Follow, running one scripted step per sleep. The script mutates the filesystem and the
+        state store the way a live runner would, between polls."""
+        steps = list(script)
+        calls = {"n": 0}
+
+        def sleep(_seconds):
+            calls["n"] += 1
+            if calls["n"] > limit:
+                raise AssertionError("follow did not terminate after %d polls" % limit)
+            if steps:
+                steps.pop(0)()
+
+        return tail.follow(self.manifest, self.store, self.stream, sleep=sleep, poll_seconds=0)
+
+
+class FollowAfterTheRun(FollowCase):
+    def test_a_finished_run_replays_in_manifest_order_and_returns_completed(self):
+        self.append("T-1", say("one"))
+        self.append("T-1", say("one closeout"), phase=tail.PHASE_CLOSEOUT)
+        self.append("T-2", say("two"))
+        self.terminal()
+        self.assertEqual(self.go(), contracts.RUN_COMPLETED)
+        self.assertLess(self.text.index("one"), self.text.index("one closeout"))
+        self.assertLess(self.text.index("one closeout"), self.text.index("two"))
+
+    def test_a_halted_run_returns_halted(self):
+        self.append("T-1", say("one"))
+        self.terminal(contracts.RUN_HALTED)
+        self.assertEqual(self.go(), contracts.RUN_HALTED)
+
+    def test_a_terminal_record_already_present_replays_and_exits_rather_than_waiting(self):
+        """KTD4: a finished previous run and a run about to start are the same state, and the
+        finished one wins, so `follow` never hangs on a store that already reached terminal."""
+        self.terminal()
+        self.assertEqual(self.go(), contracts.RUN_COMPLETED)
+
+    def test_the_phase_header_names_the_task_and_the_phase(self):
+        self.append("T-1", say("one"))
+        self.append("T-1", say("closing"), phase=tail.PHASE_CLOSEOUT)
+        self.terminal()
+        self.go()
+        self.assertIn("T-1", self.text)
+        self.assertIn(tail.PHASE_CLOSEOUT, self.text)
+
+    def test_the_state_directory_is_named_once_for_orientation(self):
+        self.terminal()
+        self.go()
+        self.assertIn(self.store.dir, self.text)
+
+
+class FollowDuringTheRun(FollowCase):
+    def test_a_run_that_starts_after_follow_does_is_picked_up(self):
+        status = self.go(script=[
+            lambda: self.append("T-1", say("first line")),
+            lambda: self.append("T-1", say("second line")),
+            lambda: self.terminal(),
+        ])
+        self.assertEqual(status, contracts.RUN_COMPLETED)
+        self.assertIn("first line", self.text)
+        self.assertIn("second line", self.text)
+
+    def test_follow_says_it_is_waiting_once_and_then_stays_quiet(self):
+        self.go(script=[lambda: None, lambda: None, lambda: self.terminal()])
+        waiting = [entry for entry in self.lines if "waiting" in entry]
+        self.assertEqual(len(waiting), 1, self.lines)
+
+    def test_no_line_is_printed_twice_across_polls(self):
+        self.go(script=[
+            lambda: self.append("T-1", say("only once")),
+            lambda: None,
+            lambda: None,
+            lambda: self.terminal(),
+        ])
+        self.assertEqual(self.text.count("only once"), 1)
+
+    def test_a_line_split_across_two_polls_is_emitted_once_and_whole(self):
+        payload = say("a whole sentence that arrived in two pieces")
+        half = len(payload) // 2
+        self.go(script=[
+            lambda: self.append("T-1", payload[:half]),
+            lambda: self.append("T-1", payload[half:]),
+            lambda: self.terminal(),
+        ])
+        self.assertEqual(self.text.count("a whole sentence that arrived in two pieces"), 1)
+
+    def test_a_multibyte_character_split_across_a_read_boundary_survives(self):
+        payload = say("a café and a 寿司 bar").encode("utf-8")
+        cut = payload.index("caf".encode("utf-8")) + 4  # lands inside the two byte e-acute
+        self.go(script=[
+            lambda: self.append("T-1", payload[:cut]),
+            lambda: self.append("T-1", payload[cut:]),
+            lambda: self.terminal(),
+        ])
+        self.assertIn("a café and a 寿司 bar", self.text)
+
+    def test_the_terminal_record_appearing_with_the_last_lines_does_not_truncate_them(self):
+        def finish():
+            self.append("T-3", say("the very last line"))
+            self.terminal()
+
+        self.go(script=[lambda: self.append("T-1", say("early")), finish])
+        self.assertIn("the very last line", self.text)
+
+
+class FollowAcrossBoundaries(FollowCase):
+    def test_the_cursor_advances_task_to_closeout_to_the_next_task(self):
+        self.go(script=[
+            lambda: self.append("T-1", say("task one")),
+            lambda: self.append("T-1", say("closeout one"), phase=tail.PHASE_CLOSEOUT),
+            lambda: self.append("T-2", say("task two")),
+            lambda: self.terminal(),
+        ])
+        order = [self.text.index(body) for body in ("task one", "closeout one", "task two")]
+        self.assertEqual(order, sorted(order))
+
+    def test_a_task_that_wrote_no_log_at_all_is_skipped(self):
+        """An excluded task never launches, so its log never appears. The cursor must not wait
+        on it."""
+        self.go(script=[
+            lambda: self.append("T-1", say("task one")),
+            lambda: self.append("T-3", say("task three")),
+            lambda: self.terminal(),
+        ])
+        self.assertIn("task one", self.text)
+        self.assertIn("task three", self.text)
+        self.assertNotIn("T-2", self.text)
+
+    def test_a_task_whose_closeout_never_ran_advances_to_the_next_task(self):
+        self.go(script=[
+            lambda: self.append("T-1", say("task one")),
+            lambda: self.append("T-2", say("task two")),
+            lambda: self.terminal(),
+        ])
+        self.assertIn("task two", self.text)
+
+    def test_the_candidate_list_is_two_logs_per_task_in_manifest_order(self):
+        entries = tail.candidates(self.manifest, self.store)
+        self.assertEqual([(task_id, phase) for task_id, phase, _ in entries], [
+            ("T-1", tail.PHASE_TASK), ("T-1", tail.PHASE_CLOSEOUT),
+            ("T-2", tail.PHASE_TASK), ("T-2", tail.PHASE_CLOSEOUT),
+            ("T-3", tail.PHASE_TASK), ("T-3", tail.PHASE_CLOSEOUT),
+        ])
+
+
+class FollowTakesNoLease(FollowCase):
+    def test_following_leaves_the_state_file_byte_identical(self):
+        holder = state.StateStore(self.manifest_path, self.repo, home=self.home)
+        self.assertTrue(holder.acquire().ok)
+        self.terminal()
+        self.append("T-1", say("watched while the lease was held"))
+        with open(self.store.state_path, "rb") as handle:
+            before = handle.read()
+        self.go()
+        with open(self.store.state_path, "rb") as handle:
+            self.assertEqual(handle.read(), before)
+        self.assertIsNotNone(self.store.lease())
+        holder.release()
 
 
 if __name__ == "__main__":

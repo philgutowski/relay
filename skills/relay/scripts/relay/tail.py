@@ -102,3 +102,114 @@ def decode(raw):
             name = str(block.get("name") or "tool")
             events.append("  > %-10s %s" % (name, argument[:ARGUMENT_CHARS]))
     return events
+
+
+def candidates(manifest, store):
+    """Every log the run can produce, in the order the runner writes them: one Task log and one
+    Closeout log per Task, in Manifest order. Returns (task id, phase, path) triples.
+
+    Derived from the Manifest rather than from `state.json`'s cursor, because the cursor names
+    only where the run is now. This list also names where it has been and where it is going, so a
+    `tail` started at any point in the run has the same map.
+    """
+    entries = []
+    for task in manifest.tasks:
+        entries.append((task.id, PHASE_TASK, store.path("logs", task.id + ".stdout.log")))
+        entries.append((task.id, PHASE_CLOSEOUT,
+                        store.path("logs", task.id + ".closeout.stdout.log")))
+    return entries
+
+
+class _Reader:
+    """One log file, read forward from where the last read stopped.
+
+    Holds the bytes after the last newline rather than decoding them, because the writer is still
+    appending and a read lands mid line routinely. The fragment is completed by the next read.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.offset = 0
+        self.buffer = b""
+
+    def exists(self):
+        return os.path.exists(self.path)
+
+    def drain(self):
+        """The complete lines appended since the last call. A missing file drains to nothing,
+        so a candidate whose process never ran costs a stat and no more."""
+        try:
+            with open(self.path, "rb") as handle:
+                handle.seek(self.offset)
+                chunk = handle.read()
+                self.offset = handle.tell()
+        except OSError:
+            return []
+        if not chunk:
+            return []
+        self.buffer += chunk
+        parts = self.buffer.split(b"\n")
+        self.buffer = parts.pop()
+        return parts
+
+
+def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS):
+    """Follow the run's logs until it reaches a terminal record. Returns that record's
+    `run_status`, which the caller maps to an exit code.
+
+    `sleep` is injected so a test can advance a scripted run between polls instead of waiting on
+    a clock. Never acquires either Lease: this reads `state.json` and the log files and writes
+    nothing, the same rule `status` follows.
+    """
+    entries = candidates(manifest, store)
+    readers = [_Reader(path) for _, _, path in entries]
+    announced = set()
+    cursor = 0
+    waiting_said = False
+
+    stream("following: %s" % store.dir)
+
+    def emit(index):
+        """Drain one candidate and print what it produced, with its phase header the first time
+        that file appears. The header is what tells one Task's output from the next (R9)."""
+        reader = readers[index]
+        if not reader.exists():
+            return
+        if index not in announced:
+            task_id, phase, _ = entries[index]
+            announced.add(index)
+            stream("")
+            stream("== %s %s ==" % (task_id, phase))
+        for raw in reader.drain():
+            for event in decode(raw):
+                stream(event)
+
+    def frontier():
+        """The highest candidate that exists on disk, or -1 when the run has written none."""
+        for index in range(len(readers) - 1, -1, -1):
+            if readers[index].exists():
+                return index
+        return -1
+
+    while True:
+        edge = frontier()
+        if edge < 0 and not waiting_said:
+            waiting_said = True
+            stream("waiting for the run to start")
+        # Drain forward to the frontier. A candidate below the frontier belongs to a process that
+        # has already exited, so one more drain takes the rest of it and the cursor can advance
+        # past it. A candidate that never appeared is stepped over rather than waited on.
+        while cursor < edge:
+            emit(cursor)
+            cursor += 1
+        emit(cursor)
+
+        terminal = store.terminal()
+        if terminal is not None:
+            # Read after the drain, then drain again: the record and the last lines of the last
+            # log are written by different processes, and this is what stops the record winning
+            # the race and cutting the ending off.
+            for index in range(cursor, len(readers)):
+                emit(index)
+            return terminal.get("run_status")
+        sleep(poll_seconds)
