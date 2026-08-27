@@ -114,8 +114,11 @@ set -euo pipefail
 task_id="$1"; doc="$2"
 
 # Deliberately broad: a false positive costs one attended run, a false negative
-# costs a full run that halts unmergeable at the end.
-hits="$(grep -nE '(^|[[:space:]"'"'"'`(/])\.claude/' "$doc" || true)"
+# costs a full run that halts unmergeable at the end. Also catches markdown
+# wrappers a tracker card commonly uses: a link's leading `[` and a bold or
+# italic or unspaced-list-marker `*` (a spaced list marker, "- .claude/x",
+# already matched via the whitespace class member).
+hits="$(grep -nE '(^|[[:space:]"'"'"'`(/[*])\.claude/' "$doc" || true)"
 
 if [ -n "$hits" ]; then
   cat >&2 <<EOF
@@ -132,6 +135,18 @@ fi
 
 echo "OK $task_id: no .claude/ paths in plan or brief"
 ```
+
+**Widened 2026-08-27** to also catch a path wrapped in markdown syntax, which tracker cards
+write often enough that the original six-character class (start of line, whitespace, `"`,
+`'`, `` ` ``, `(`, `/`) missed it: a markdown link's display text (`[.claude/skills/x/SKILL.md](...)`,
+leading `[`), bold (`**.claude/settings.json**`), italic (`*.claude/settings.json*`), and an
+unspaced list marker (`*.claude/hooks/pre.sh`, indistinguishable from italic to the regex). A
+spaced list marker (`- .claude/x`) already matched via the whitespace class member. The added
+characters are `[` and `*`; the prefix appearing as the suffix of a longer word (`x.claude/y`,
+a bare word character glued to the leading dot) still does not match, because no word
+character was added to the class. `contracts.CLAUDE_DIR_SCAN_REGEX` in
+`skills/relay/scripts/relay/contracts.py` is the production form; `tests/test_contracts.py`'s
+`ClaudeDirScanRegex` class pins both the newly-caught forms and the suffix non-match.
 
 The same check belongs on the way out as a backstop, because a plan can be right and an
 implementation can still wander:

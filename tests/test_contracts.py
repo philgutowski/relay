@@ -108,6 +108,47 @@ class DigestKeysContract(unittest.TestCase):
         self.assertFalse(missing, "classify() no longer sets key(s) readers depend on: %s" % missing)
 
 
+class ClaudeDirScanRegex(unittest.TestCase):
+    """The leading character class in CLAUDE_DIR_SCAN_REGEX (brief.py:147's one consumer)
+    must catch a path wrapped in markdown link, bold, italic, or list-marker syntax, while
+    still not matching the prefix as the tail of a longer word."""
+
+    def _matches(self, text):
+        return bool(contracts.CLAUDE_DIR_SCAN_REGEX.search(text))
+
+    def test_markdown_link_display_text_matches(self):
+        self.assertTrue(self._matches("[.claude/skills/x/SKILL.md](docs/x.md)"))
+
+    def test_bold_matches(self):
+        self.assertTrue(self._matches("**.claude/settings.json**"))
+
+    def test_italic_matches(self):
+        self.assertTrue(self._matches("*.claude/settings.json*"))
+
+    def test_list_marker_with_no_space_matches(self):
+        self.assertTrue(self._matches("*.claude/hooks/pre.sh"))
+
+    def test_forms_that_already_matched_still_match(self):
+        forms = [
+            ".claude/skills/foo/SKILL.md",  # start of line
+            "edit .claude/skills/foo/SKILL.md",  # whitespace
+            'the file ".claude/settings.json" needs a hook',  # double quote
+            "the file '.claude/settings.json' needs a hook",  # single quote
+            "see `.claude/hooks/pre.sh`",  # backtick
+            "(.claude/agents/x.md) is stale",  # open paren
+            "path /Users/x/repo/.claude/skills/y/SKILL.md",  # mid-path slash
+        ]
+        for form in forms:
+            with self.subTest(form=form):
+                self.assertTrue(self._matches(form), "no longer matches: %s" % form)
+
+    def test_prefix_as_suffix_of_a_longer_word_does_not_match(self):
+        self.assertFalse(self._matches("x.claude/skills/y/SKILL.md"))
+
+    def test_bare_word_claude_with_no_path_does_not_match(self):
+        self.assertFalse(self._matches("run this under claude and check the output"))
+
+
 class SlugRule(unittest.TestCase):
     def test_matches_the_on_machine_examples(self):
         cases = {
