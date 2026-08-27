@@ -1,0 +1,22 @@
+{
+  "name": "relay",
+  "owner": {
+    "name": "Phillip Gutowski"
+  },
+  "metadata": {
+    "description": "Single plugin marketplace for Relay, so the repository installs by path or URL.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "relay",
+      "description": "Run a manifest of independent tasks through the compound-engineering pipeline, one fresh headless Claude Code process per task, serially and unattended.",
+      "author": {
+        "name": "Phillip Gutowski"
+      },
+      "homepage": "https://github.com/philgutowski/relay",
+      "tags": ["compound-engineering", "unattended", "runner", "workflow-automation"],
+      "source": "./"
+    }
+  ]
+}
