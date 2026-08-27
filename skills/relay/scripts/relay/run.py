@@ -139,6 +139,11 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
                % ((acquired.previous_holder or {}).get("holder_pid"),
                   len(acquired.reclaimed_ids), contracts.HALT_RUNNER_CRASHED))
 
+    # Read only once the run is actually going to reach a write_terminal call: EXIT_CONFIG and
+    # EXIT_LEASE both return above this point, and a blocking subprocess call whose result those
+    # paths would discard is wasted work on every run that never gets past them.
+    observed_cli_version = launch.cli_version(env)
+
     # Resolved once, here, from the repo as it stands before any task has touched it. Reading
     # it per closeout would let a task's own merge move the bound its closeout is checked
     # against (R53, KTD15).
@@ -183,11 +188,13 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
                          halt_class=halt.halt_class, halt_evidence=halt.evidence,
                          halt_message=halt.message)
             store.write_terminal(contracts.RUN_HALTED, halt.task_id, halt.halt_class,
-                                 contracts.CLI_VERSION_TESTED)
+                                 contracts.CLI_VERSION_TESTED,
+                                 cli_version_observed=observed_cli_version)
             wrote_terminal = True
             return RunOutcome(EXIT_HALTED, halt.task_id, halt.halt_class, halt.message,
                               store, store.records())
-        store.write_terminal(contracts.RUN_COMPLETED, cli_version=contracts.CLI_VERSION_TESTED)
+        store.write_terminal(contracts.RUN_COMPLETED, cli_version=contracts.CLI_VERSION_TESTED,
+                             cli_version_observed=observed_cli_version)
         wrote_terminal = True
         outcome.records = store.records()
         return outcome
@@ -198,7 +205,8 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
         if not wrote_terminal:
             try:
                 store.write_terminal(contracts.RUN_CRASHED,
-                                     cli_version=contracts.CLI_VERSION_TESTED)
+                                     cli_version=contracts.CLI_VERSION_TESTED,
+                                     cli_version_observed=observed_cli_version)
             except Exception:
                 pass
         store.release()

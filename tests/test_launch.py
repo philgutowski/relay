@@ -291,3 +291,51 @@ class CloseoutDisallowList(LaunchCase):
         args = launch.build_args(self.manifest, self.manifest.tasks[0], BRIEF, "sid")
         disallowed = args[args.index("--disallowedTools") + 1]
         self.assertNotIn("Bash(git push*)", disallowed.split(","))
+
+
+class _FakeCompletedProcess:
+    def __init__(self, stdout="", returncode=0):
+        self.stdout = stdout
+        self.returncode = returncode
+
+
+class CliVersion(unittest.TestCase):
+    """U6's version probe: a single blocking `claude --version` call, read once per run so a
+    drift from contracts.CLI_VERSION_TESTED is visible rather than silently invisible."""
+
+    def test_a_clean_version_line_is_parsed_to_its_leading_token(self):
+        fake = lambda *a, **k: _FakeCompletedProcess("2.1.247 (Claude Code)\n", 0)
+        self.assertEqual(launch.cli_version({}, run=fake), "2.1.247")
+
+    def test_a_nonzero_exit_returns_none_rather_than_a_stale_value(self):
+        fake = lambda *a, **k: _FakeCompletedProcess("2.1.247 (Claude Code)\n", 1)
+        self.assertIsNone(launch.cli_version({}, run=fake))
+
+    def test_a_missing_binary_returns_none_rather_than_raising(self):
+        def fake(*a, **k):
+            raise FileNotFoundError("no such file: claude")
+        self.assertIsNone(launch.cli_version({}, run=fake))
+
+    def test_a_timeout_returns_none_rather_than_raising(self):
+        def fake(*a, **k):
+            raise subprocess.TimeoutExpired(cmd=["claude", "--version"], timeout=10)
+        self.assertIsNone(launch.cli_version({}, run=fake))
+
+    def test_a_decode_error_returns_none_rather_than_raising(self):
+        # The call runs after run() has already acquired the lease and before its try/finally
+        # (run.py), so an uncaught exception here would skip store.release() and strand the
+        # lease. text=True decoding a non-UTF-8 byte in the binary's output raises
+        # UnicodeDecodeError, a ValueError subclass -- must be caught, not just OSError/timeout.
+        def fake(*a, **k):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        self.assertIsNone(launch.cli_version({}, run=fake))
+
+    def test_empty_stdout_returns_none(self):
+        fake = lambda *a, **k: _FakeCompletedProcess("", 0)
+        self.assertIsNone(launch.cli_version({}, run=fake))
+
+    def test_a_leading_non_version_token_returns_none_rather_than_the_wrong_word(self):
+        # A banner or update notice ahead of the real version line must not be mistaken for one.
+        fake = lambda *a, **k: _FakeCompletedProcess(
+            "Update available: run claude update\n2.1.247 (Claude Code)\n", 0)
+        self.assertIsNone(launch.cli_version({}, run=fake))

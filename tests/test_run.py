@@ -244,6 +244,24 @@ class EndToEnd(RunCase):
         self.assertIsNone(store.lease())
         self.assertEqual(store.status_word(), contracts.RUN_COMPLETED)
 
+    def test_the_terminal_record_carries_the_pinned_and_observed_cli_versions(self):
+        """The observed field comes from a real `claude --version` call against the stub
+        binary (not an injected fake), so a drift between it and CLI_VERSION_TESTED lands in
+        state.json rather than staying silently invisible."""
+        self.go()
+        terminal = self.store().terminal()
+        self.assertEqual(terminal["cli_version"], contracts.CLI_VERSION_TESTED)
+        self.assertEqual(terminal["cli_version_observed"], contracts.CLI_VERSION_TESTED)
+
+    def test_the_observed_cli_version_diverges_from_the_pinned_one_when_the_binary_reports_differently(self):
+        env = self.base_env()
+        env["RELAY_STUB_CLI_VERSION"] = "9.9.9 (Claude Code)"
+        self.go(base_env=env)
+        terminal = self.store().terminal()
+        self.assertEqual(terminal["cli_version"], contracts.CLI_VERSION_TESTED)
+        self.assertEqual(terminal["cli_version_observed"], "9.9.9")
+        self.assertNotEqual(terminal["cli_version"], terminal["cli_version_observed"])
+
     def test_each_landed_record_carries_its_landing_reference_and_verify_timestamp(self):
         self.go()
         for task_id in ("T-1", "T-3"):
