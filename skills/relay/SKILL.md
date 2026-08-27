@@ -24,7 +24,7 @@ Resolve `<runner>` once, from this skill's own directory as the harness gave it 
 <runner> = <this skill's directory>/scripts/relay_cli.py
 ```
 
-The six verbs:
+The seven verbs:
 
 ```bash
 python3 <runner> validate <manifest>            # check the manifest and its target repo
@@ -33,6 +33,7 @@ python3 <runner> run <manifest>                 # run to completion or to a halt
 python3 <runner> run <manifest> --retry-blocked # the same, retrying records that read blocked
 python3 <runner> run <manifest> --detach        # the same, in its own session, logged to the state dir
 python3 <runner> status <manifest>              # what the run is doing; never takes the lease
+python3 <runner> tail <manifest>                # follow the tasks' activity decoded; never takes the lease
 python3 <runner> summary <manifest>             # the run summary as text
 python3 <runner> summary <manifest> --json      # the same summary as data
 python3 <runner> verify <manifest> <task-id>    # re-run the landing verdict for one task
@@ -114,6 +115,16 @@ python3 <runner> status <manifest>
 Then tell the operator three paths and stop: the state directory, the runner log
 (`runner.log` inside it), and the per task output log for the task now running. The state file is
 the contract between the runner and any later session, including yours.
+
+Tell them `tail` is how they watch it, in their own terminal rather than in this session:
+
+```bash
+python3 <runner> tail <manifest>
+```
+
+It follows the tasks in order, decoded, and exits when the run reaches a terminal record. Like
+`status` it takes no lease, so it is safe beside a live run, and `Ctrl+C` stops the follower
+without touching the runner. Do not run it yourself here: it does not return until the run ends.
 
 ## Explain a halt
 
