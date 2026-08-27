@@ -157,6 +157,52 @@ class StatusVerb(CliCase):
         self.assertIn("no state", out)
 
 
+class TailVerb(CliCase):
+    """The seventh verb. The follow loop itself is covered in test_tail; these cases pin the
+    wiring: the exit code mapping, the lease rule, and the failure modes it shares with the
+    other six."""
+
+    def test_tail_on_a_completed_run_exits_ok_and_prints_decoded_activity(self):
+        self.complete_run()
+        code, out = self.call("tail", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn(self.store().dir, out)
+
+    def test_tail_on_a_halted_run_exits_halted(self):
+        self.halted_run()
+        code, out = self.call("tail", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_HALTED, out)
+
+    def test_tail_on_a_missing_manifest_exits_config_like_every_other_verb(self):
+        code, out = self.call("tail", os.path.join(self.tmp.name, "nope.toml"))
+        self.assertEqual(code, cli.EXIT_CONFIG)
+        self.assertIn("manifest not found", out)
+
+    def test_tail_never_takes_the_lease(self):
+        self.complete_run()
+        holder = self.store()
+        self.assertTrue(holder.acquire().ok)
+        before = json.dumps(holder.read(), sort_keys=True)
+        code, out = self.call("tail", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertEqual(json.dumps(self.store().read(), sort_keys=True), before)
+        holder.release()
+
+    def test_an_interrupt_while_following_exits_ok_without_a_traceback(self):
+        self.complete_run()
+        original = cli.tail_module.follow
+
+        def interrupt(*_args, **_kwargs):
+            raise KeyboardInterrupt()
+
+        cli.tail_module.follow = interrupt
+        try:
+            code, _ = self.call("tail", self.manifest_path)
+        finally:
+            cli.tail_module.follow = original
+        self.assertEqual(code, cli.EXIT_OK)
+
+
 class SummaryVerb(CliCase):
     def test_every_text_line_names_a_field_that_exists_in_the_json(self):
         self.complete_run()
