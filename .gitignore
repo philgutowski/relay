@@ -17,3 +17,4 @@ logs/
 __pycache__/
 *.pyc
 .coverage
+docs/backlog.md
