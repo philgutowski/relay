@@ -22,6 +22,7 @@ long subagent call; neither the deadline check nor the lease may depend on it sa
 import glob
 import os
 import queue as queuemod
+import re
 import signal
 import subprocess
 import threading
@@ -34,6 +35,8 @@ from . import contracts, manifest as manifest_module
 SIGKILL_GRACE_SECONDS = 15
 TICK_SECONDS = 1.0
 SCRUB_PREFIXES = ("CLAUDECODE", "CLAUDE_CODE_")
+CLI_VERSION_TIMEOUT_SECONDS = 10
+_VERSION_TOKEN_RE = re.compile(r"^(\d[\w.\-]*)")
 
 
 @dataclass
@@ -69,6 +72,24 @@ def child_env(manifest, base_env=None, home=None):
     if home:
         env["HOME"] = home
     return env
+
+
+def cli_version(env, run=subprocess.run, timeout=CLI_VERSION_TIMEOUT_SECONDS):
+    """The installed `claude` binary's own version, read once per run so drift from
+    CLI_VERSION_TESTED shows up in state.json instead of staying silently invisible.
+    Returns None on any failure -- a missing binary, a nonzero exit, a timeout, or output whose
+    leading token doesn't start with a digit -- rather than raising, since a version probe
+    failing is not a reason to fail the run, and a plausible-looking non-version word (a banner
+    or update notice ahead of the real version line) is worse than a visible None."""
+    try:
+        proc = run(["claude", "--version"], capture_output=True, text=True, env=env,
+                    timeout=timeout, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    match = _VERSION_TOKEN_RE.match(proc.stdout.strip())
+    return match.group(1) if match else None
 
 
 def build_args(manifest, task, brief_text, session_id, allowed=None, disallowed=None):
