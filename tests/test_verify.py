@@ -88,6 +88,32 @@ class CodeScope(VerifyCase):
         self.assertEqual(verdict.checks["new_commit_since_baseline"]["result"], verify.FAIL)
 
 
+class DoFetch(VerifyCase):
+    def test_do_fetch_true_reads_the_remote_fresh_while_the_cached_ref_stays_stale(self):
+        """A stand-in for run.py:449's final verify: without a fetch, `head_equals_remote`
+        reads whatever `origin/main` this repo last knew about, not what origin actually holds
+        now. `do_fetch=False` runs first here so its evidence is the control. A `do_fetch=True`
+        call earlier would resolve the tracking ref and erase the difference this test proves."""
+        self.land_a_commit()
+        clone = os.path.join(self.tmp.name, "clone")
+        _repo.git(self.tmp.name, "clone", "-q", self.repo + ".git", clone)
+        _repo.git(clone, "config", "user.name", "Relay Test")
+        _repo.git(clone, "config", "user.email", "relay@example.invalid")
+        from test_gitwrite import commit_on_branch
+        commit_on_branch(clone, "main", {"src/feature.py": "value = 2\n"}, "a third party's commit")
+        _repo.git(clone, "push", "-q", "origin", "main")
+        new_remote_sha = gitread.rev_parse(clone, "HEAD")
+
+        manifest, record, adapter = self.manifest(), self.record(), FakeAdapter()
+        stale = verify.verify(manifest, record, adapter, scope=verify.SCOPE_FULL, do_fetch=False)
+        self.assertNotEqual(stale.checks["head_equals_remote"]["evidence"]["remote_sha"],
+                            new_remote_sha)
+
+        fresh = verify.verify(manifest, record, adapter, scope=verify.SCOPE_FULL, do_fetch=True)
+        self.assertEqual(fresh.checks["head_equals_remote"]["evidence"]["remote_sha"],
+                         new_remote_sha)
+
+
 class FullScope(VerifyCase):
     def test_code_on_the_remote_and_a_terminal_card_is_landed(self):
         sha = self.land_a_commit()

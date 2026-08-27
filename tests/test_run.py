@@ -12,7 +12,7 @@ import unittest
 
 import _paths
 import _repo
-from relay import contracts, gitread, manifest as mf, run as runner, state
+from relay import contracts, gitread, manifest as mf, run as runner, state, verify
 
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
 
@@ -286,6 +286,62 @@ class EndToEnd(RunCase):
         for task_id, other in (("T-1", "T-3"), ("T-3", "T-1")):
             with open(store.path("briefs", task_id + ".md")) as handle:
                 self.assertNotIn(other, handle.read())
+
+
+class DivergedRemoteAfterPush(RunCase):
+    """R1: the final verify must fetch, or a remote that moved after the runner's own push, a
+    concurrent force push, a competing writer, reads as landed anyway. The check would only be
+    proving the push succeeded, never that the remote still agrees."""
+
+    def install_diverge_after_second_main_push_hook(self):
+        """A post-receive hook on the bare origin that force-updates refs/heads/main to a
+        pre-pushed divergent ref on the *second* push that updates refs/heads/main. The merge
+        push (run.py:421) is the first, the closeout's push (run.py:539) is the second. Filters
+        by updated ref name (post-receive fires on every push, not just main) so the setup-time
+        rogue push and push order can never miscount invocations."""
+        from test_gitwrite import commit_on_branch
+        commit_on_branch(self.repo, "rogue", {"rogue.txt": "a third party's rogue commit\n"},
+                         "rogue", base="main")
+        _repo.git(self.repo, "push", "-q", "origin", "rogue:refs/heads/rogue")
+        _repo.git(self.repo, "checkout", "-q", "main")
+        _repo.git(self.repo, "branch", "-D", "rogue")
+        self.rogue_sha = gitread.rev_parse(self.repo, "origin/rogue")
+
+        bare = self.repo + ".git"
+        hook = os.path.join(bare, "hooks", "post-receive")
+        with open(hook, "w") as handle:
+            handle.write(textwrap.dedent("""\
+                #!/bin/sh
+                set -e
+                counter="$PWD/relay_test_main_push_count"
+                while read oldrev newrev refname; do
+                  if [ "$refname" = "refs/heads/main" ]; then
+                    n=$(( $(cat "$counter" 2>/dev/null || echo 0) + 1 ))
+                    echo "$n" > "$counter"
+                    if [ "$n" -ge 2 ]; then
+                      git update-ref refs/heads/main refs/heads/rogue
+                    fi
+                  fi
+                done
+                """))
+        os.chmod(hook, 0o755)
+
+    def test_a_remote_that_diverges_after_the_runners_own_pushes_is_not_landed(self):
+        """This same fixture would report T-1 landed if `do_fetch` were `False` at run.py:449:
+        the local tracking ref the check reads without a fetch still shows the sha the runner
+        itself just pushed, not the rogue sha the bare origin now actually holds."""
+        self.install_diverge_after_second_main_push_hook()
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED, outcome.message)
+
+        record = self.store().get("T-1")
+        self.assertNotEqual(record["status"], contracts.STATUS_LANDED)
+        check = record["verify"]["checks"]["head_equals_remote"]
+        self.assertEqual(check["result"], verify.FAIL)
+        self.assertEqual(check["evidence"]["remote_sha"], self.rogue_sha)
 
 
 class BlockedByPathGate(RunCase):

@@ -447,7 +447,7 @@ def _merge_route(ctx):
                          "push_output": pushed.output})
 
     final = verify.verify(ctx.manifest, ctx.store.get(ctx.task.id), ctx.adapter,
-                          scope=verify.SCOPE_FULL, env=ctx.env, now=ctx.now)
+                          scope=verify.SCOPE_FULL, do_fetch=True, env=ctx.env, now=ctx.now)
     ctx.store.upsert(ctx.task.id, verify=final.as_dict())
     if not final.landed:
         raise _Halt(ctx.task.id, final.halt_class or contracts.HALT_PARTIAL_LANDING,
