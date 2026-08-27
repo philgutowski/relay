@@ -22,6 +22,12 @@ The Runner holds no project knowledge of its own. Everything project-specific re
 Manifest data. It reads the Tracker but does not write to it, so a defect in the Runner can never
 move a card.
 
+A Runner is one process for the length of a Manifest, so the code it runs is the code it loaded
+when it started. Where Relay drives its own repository, a Task that lands a change to the Runner's
+own code does not change the Runner already running, and that run's own record is written by the
+older code. What a Task lands becomes visible inside the same run only where the Runner reads
+something at the moment it uses it rather than loading it once at the start.
+
 ### Lease
 The claim a Runner holds while it drives a Manifest, which is what stops two Runners from
 interleaving work against one repository. There are two: one over the Manifest, so a second run
