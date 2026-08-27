@@ -216,14 +216,19 @@ class Terminal(StateCase):
         self.assertEqual(store.status_word(), "no_state")
         store.acquire()
         self.assertEqual(store.status_word(), "running")
-        store.write_terminal(contracts.RUN_COMPLETED, cli_version="2.1.245")
+        store.write_terminal(contracts.RUN_COMPLETED, cli_version="2.1.245",
+                             cli_version_observed="2.1.247")
         store.release()
         self.assertEqual(store.status_word(), contracts.RUN_COMPLETED)
+        self.assertEqual(store.terminal()["cli_version"], "2.1.245")
+        self.assertEqual(store.terminal()["cli_version_observed"], "2.1.247")
         store.acquire()
         store.write_terminal(contracts.RUN_HALTED, halt_task="T-2", halt_class=contracts.HALT_TIMEOUT)
         store.release()
         self.assertEqual(store.status_word(), contracts.RUN_HALTED)
         self.assertEqual(store.terminal()["halt_task"], "T-2")
+        # cli_version_observed defaults to None (the version-probe-failed path), not omitted.
+        self.assertIsNone(store.terminal()["cli_version_observed"])
         # A new run acquires, then dies: no terminal after the lease, lease stale.
         self.clock.advance(1)
         store.acquire()

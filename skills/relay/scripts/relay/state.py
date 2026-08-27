@@ -274,6 +274,7 @@ class StateStore:
                 "halt_task": ids[0] if ids else None,
                 "halt_class": contracts.HALT_RUNNER_CRASHED if ids else None,
                 "cli_version": None,
+                "cli_version_observed": None,
                 "previous_holder": previous,
                 "written_at": _iso(self.now()),
             }
@@ -391,12 +392,14 @@ class StateStore:
         return entry
 
     # Terminal record.
-    def write_terminal(self, run_status, halt_task=None, halt_class=None, cli_version=None):
+    def write_terminal(self, run_status, halt_task=None, halt_class=None, cli_version=None,
+                       cli_version_observed=None):
         record = {
             "run_status": run_status,
             "halt_task": halt_task,
             "halt_class": halt_class,
             "cli_version": cli_version,
+            "cli_version_observed": cli_version_observed,
             "written_at": _iso(self.now()),
         }
         self._mutate(lambda state: state.update(terminal=record))

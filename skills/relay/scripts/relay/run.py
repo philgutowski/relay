@@ -119,6 +119,7 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
     overrides = timeout_overrides or {}
     launch_kwargs = dict(launch_kwargs or {})
     env = launch.child_env(manifest, base_env, home)
+    observed_cli_version = launch.cli_version(env)
 
     try:
         adapter = adapter or adapters.build(manifest, env=base_env)
@@ -183,11 +184,13 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
                          halt_class=halt.halt_class, halt_evidence=halt.evidence,
                          halt_message=halt.message)
             store.write_terminal(contracts.RUN_HALTED, halt.task_id, halt.halt_class,
-                                 contracts.CLI_VERSION_TESTED)
+                                 contracts.CLI_VERSION_TESTED,
+                                 cli_version_observed=observed_cli_version)
             wrote_terminal = True
             return RunOutcome(EXIT_HALTED, halt.task_id, halt.halt_class, halt.message,
                               store, store.records())
-        store.write_terminal(contracts.RUN_COMPLETED, cli_version=contracts.CLI_VERSION_TESTED)
+        store.write_terminal(contracts.RUN_COMPLETED, cli_version=contracts.CLI_VERSION_TESTED,
+                             cli_version_observed=observed_cli_version)
         wrote_terminal = True
         outcome.records = store.records()
         return outcome
@@ -198,7 +201,8 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
         if not wrote_terminal:
             try:
                 store.write_terminal(contracts.RUN_CRASHED,
-                                     cli_version=contracts.CLI_VERSION_TESTED)
+                                     cli_version=contracts.CLI_VERSION_TESTED,
+                                     cli_version_observed=observed_cli_version)
             except Exception:
                 pass
         store.release()

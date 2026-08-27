@@ -14,8 +14,12 @@ Entries are consumed in numeric order of <n>. A fixture path is absolute or rela
 queue directory. With no queue the stub writes nothing and exits 0.
 
 Other knobs:
-  RELAY_STUB_SLEEP=<seconds>   overrides the entry's sleep (U6 timeout tests)
-  RELAY_STUB_CHILD=1           spawns one sleeping child so a group kill test has an orphan
+  RELAY_STUB_SLEEP=<seconds>       overrides the entry's sleep (U6 timeout tests)
+  RELAY_STUB_CHILD=1               spawns one sleeping child so a group kill test has an orphan
+  RELAY_STUB_CLI_VERSION=<text>    overrides the fake `--version` output (default matches
+                                    contracts.CLI_VERSION_TESTED; bump both together on a
+                                    real version pin change or every test that doesn't set this
+                                    starts observing harmless-but-misleading drift)
 """
 import fcntl
 import json
@@ -75,6 +79,10 @@ def next_entry(queue):
 
 
 def main(argv):
+    if argv[:1] == ["--version"]:
+        print(os.environ.get("RELAY_STUB_CLI_VERSION", "2.1.245 (Claude Code)"))
+        return 0
+
     flags = parse_args(argv)
     session_id = flags.get("session-id", "")
     print(json.dumps({"type": "system", "subtype": "stub_start", "session_id": session_id}), flush=True)

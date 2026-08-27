@@ -149,6 +149,7 @@ def build(manifest, store):
         "halt_task": terminal.get("halt_task"),
         "halt_class": terminal.get("halt_class"),
         "cli_version": terminal.get("cli_version"),
+        "cli_version_observed": terminal.get("cli_version_observed"),
         "cursor": raw.get("cursor", 0),
         "counts": _counts(entries),
         "tasks": entries,
