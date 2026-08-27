@@ -11,24 +11,30 @@ PLUGIN_ROOT = os.path.expanduser(
     "~/.claude/plugins/cache/compound-engineering-plugin/compound-engineering/%s" % contracts.PLUGIN_MIN_VERSION
 )
 
-RELAY_SRC_DIR = os.path.dirname(os.path.abspath(classify.__file__))
-RUN_PY_PATH = os.path.join(RELAY_SRC_DIR, "run.py")
-CLOSEOUT_PY_PATH = os.path.join(RELAY_SRC_DIR, "closeout.py")
+RUN_PY_PATH = os.path.join(_paths.SCRIPTS_DIR, "relay", "run.py")
+CLOSEOUT_PY_PATH = os.path.join(_paths.SCRIPTS_DIR, "relay", "closeout.py")
 
-# Matches digest.get("key") / ctx.digest.get("key") / closeout_digest.get("key") on the
-# top-level digest object, not a nested lookup like envelope.get(...) or finding.get(...).
-DIGEST_GET_RE = re.compile(r"\b(?:\w+\.)?digest\s*\.get\(\s*[\"']([A-Za-z_]+)[\"']")
+# Matches digest.get("key") / ctx.digest.get("key") / closeout_digest.get("key") /
+# (digest or {}).get("key") on the top-level digest object, not a nested lookup like
+# envelope.get(...) or finding.get(...). "digest" may be bare, dotted (ctx.digest), or suffixed
+# (closeout_digest), and may sit behind a "(... or {})" fallback wrapper.
+DIGEST_GET_RE = re.compile(
+    r"\(?\s*((?:\w+\.)*\w*digest)\s*(?:or\s+\{\}\s*\))?\s*\.get\(\s*[\"']([A-Za-z_]+)[\"']"
+)
 # Matches digest["key"] = ... / ctx.digest["key"] = ..., a key the reading module adds to the
 # dict itself rather than one classify.classify() guarantees, e.g. run.py's own "task_id" and
 # "timeout" bookkeeping. Excluded from the cross-module contract check below.
-DIGEST_SET_RE = re.compile(r"\b(?:\w+\.)?digest\s*\[\s*[\"']([A-Za-z_]+)[\"']\s*\]\s*=")
+DIGEST_SET_RE = re.compile(r"((?:\w+\.)*\w*digest)\s*\[\s*[\"']([A-Za-z_]+)[\"']\s*\]\s*=")
 
 
 def _digest_keys_read(source_path):
+    """Top-level digest keys a module reads via `.get(...)`, minus keys the same module writes
+    onto its own digest object first (e.g. run.py's "task_id" and "timeout" bookkeeping) --
+    those are local additions, not part of the cross-module classify contract."""
     with open(source_path, encoding="utf-8") as handle:
         source = handle.read()
-    read_keys = set(DIGEST_GET_RE.findall(source))
-    locally_set_keys = set(DIGEST_SET_RE.findall(source))
+    read_keys = {key for _, key in DIGEST_GET_RE.findall(source)}
+    locally_set_keys = {key for _, key in DIGEST_SET_RE.findall(source)}
     return read_keys - locally_set_keys
 
 
@@ -87,16 +93,16 @@ class DigestKeysContract(unittest.TestCase):
     tests fail if either reader reaches for a key classify does not set, or if classify stops
     setting a key either reader depends on."""
 
+    @classmethod
+    def setUpClass(cls):
+        cls.read_keys = _digest_keys_read(RUN_PY_PATH) | _digest_keys_read(CLOSEOUT_PY_PATH)
+
     def test_readers_stay_inside_digest_keys(self):
-        run_keys = _digest_keys_read(RUN_PY_PATH)
-        closeout_keys = _digest_keys_read(CLOSEOUT_PY_PATH)
-        unknown = (run_keys | closeout_keys) - contracts.DIGEST_KEYS
+        unknown = self.read_keys - contracts.DIGEST_KEYS
         self.assertFalse(unknown, "reader(s) use digest key(s) not in DIGEST_KEYS: %s" % unknown)
 
     def test_classify_sets_every_key_readers_use(self):
-        run_keys = _digest_keys_read(RUN_PY_PATH)
-        closeout_keys = _digest_keys_read(CLOSEOUT_PY_PATH)
-        required = (run_keys | closeout_keys) & contracts.DIGEST_KEYS
+        required = self.read_keys & contracts.DIGEST_KEYS
         result = classify.classify("/nonexistent/path.jsonl", SimpleNamespace(timed_out=False, exit_code=None))
         missing = required - set(result)
         self.assertFalse(missing, "classify() no longer sets key(s) readers depend on: %s" % missing)
