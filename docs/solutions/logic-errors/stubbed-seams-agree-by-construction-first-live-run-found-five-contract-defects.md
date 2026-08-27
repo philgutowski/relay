@@ -51,7 +51,7 @@ The run's own readout, in the order the operator met it.
 - **The record could not say why T-1 blocked.** The task wrote `blockers:` and a paragraph
   under it. The parser accepted only an inline value or `- item` lines, so `blockers` was
   `[]`, the blocked route filled the evidence with `"no blocker text in the envelope"`
-  (`run.py:466`), the closeout brief built its blockers bullets from the same empty list
+  (`run.py:484`), the closeout brief built its blockers bullets from the same empty list
   (`closeout.py:173`), and the tracker comment the closeout wrote said the cause of the block
   was not visible in the task data. The text sat one line below the key.
 - **Every closeout read `unfinished`.** The closeout explained its skip in more than 300
@@ -62,7 +62,7 @@ The run's own readout, in the order the operator met it.
   characters (`classify.py:22`, `:250`). The terminal line was past the head. The summary
   told the operator to confirm the tracker write by hand, for a closeout that had finished.
 - **A refused retry read as a dirty tree.** `run --retry-blocked` refused under R48 because
-  `relay/T-1` carried commits past the baseline (`run.py:334` to `:338`). That refusal is
+  `relay/T-1` carried commits past the baseline (`run.py:345` to `:347`). That refusal is
   raised as `_Halt` with class `unclean_exit` and a message that says exactly what happened.
   The loop stored only `halt_class` and `halt_evidence` and printed the message to stdout, so
   the summary rendered the class template, `left the tree dirty on {branch}`
@@ -141,7 +141,7 @@ result = RESULT_UNFINISHED if launch_result.timed_out else parse(closeout_digest
 
 The fixture that proves it is `tests/fixtures/transcripts/closeout_skipped_long.jsonl`, cut
 from the live closeout's wording and built by `CLOSEOUT_SKIPPED_LONG_TEXT` at
-`tests/fixtures/transcripts/_make.py:236` to `:243`, which the comment above it says is longer
+`tests/fixtures/transcripts/_make.py:236` to `:242`, which the comment above it says is longer
 than `LAST_MESSAGE_CHARS` on purpose. `tests/test_closeout.py:240`,
 `test_a_long_closeout_message_still_reads_its_terminal_line`, runs it through the real path.
 
@@ -158,8 +158,8 @@ name, without building the adapter, so a brief renders without a credential. Mar
 
 Jira and GitHub keep the card move. `brief.values` at `brief.py:105` to `:112` passes both as
 `tracker_review_step` and `tracker_blocked_step`, and
-`skills/relay/templates/brief-local-merge.md:40` and `:45` use them where the fixed sentences
-were. `tests/test_brief.py:225`, `TrackerStepsPerAdapter`, renders the three example manifests
+`skills/relay/templates/brief-local-merge.md:45` and `:50` use them where the fixed sentences
+were. `tests/test_brief.py:232`, `TrackerStepsPerAdapter`, renders the three example manifests
 and asserts each brief against its adapter's real capabilities.
 
 **Write the halt message down.** `run.py:182` to `:184`:
@@ -222,6 +222,18 @@ markdown tracked repo with a local bare origin and two one function tasks takes 
 up and is the only instrument that has found a defect on any of these seams. The stub cannot,
 by construction.
 
+**One exception: when the contract change is to the Runner package itself, the run that lands
+it is not the run that can verify it.** The Runner is one long lived process that imports
+`run.py`, `state.py`, and the rest of `skills/relay/scripts/relay/` once, at launch. A Task
+inside that same run can merge a change to those modules, but the process that spawned the
+Task keeps running the code it already loaded, so that run's own `state.json` and
+`relay summary` output describe the pre merge behavior, not the change that just landed.
+`docs/solutions/workflow-issues/self-hosted-run-cannot-observe-the-code-its-own-tasks-land.md`
+documents the case: T-2 landed a change to `StateStore.write_terminal`, and the terminal
+record that same run wrote afterward carried no trace of it, though the change was correct and
+the suite proved it. The live run instrument still applies, it just needs to be the *next* run
+against the target, not the one still executing when the change lands.
+
 **Treat "the fixture and the parser were written together" as a smell.** When a fixture is
 added, ask where its text came from. If the answer is the parser's docstring, the fixture
 pins the parser to itself. The correction is a fixture cut from a transcript a real process
@@ -263,3 +275,8 @@ should point.
 - `docs/plans/2026-08-25-1346-feat-relay-outer-loop-plan.md`, unit U1, is where the fixture
   transcripts were described as trimmed copies of real shapes. That is the assumption this run
   disproved; the plan stays as the historical record.
+- `docs/solutions/workflow-issues/self-hosted-run-cannot-observe-the-code-its-own-tasks-land.md`
+  is the exception this doc's Prevention section now names: a live run against a throwaway
+  target is still the instrument for a cross process contract change, except when the change is
+  to the Runner package itself, since the run that lands it keeps executing the code it
+  imported before the merge.
