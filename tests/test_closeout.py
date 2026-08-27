@@ -300,6 +300,15 @@ class BlockedCommentConfirmation(CloseoutCase):
         adapter = FakeAdapter(comments={"T-1": [{"id": "c1", "body": "old"}, {"id": "c2", "body": "the blocker"}]})
         self.assertIsNone(closeout.confirm_blocked_comment(adapter, "T-1", "c1"))
 
+    def test_a_baseline_deleted_from_the_card_is_a_finding_not_a_silent_pass(self):
+        """The baseline comment is gone from the fetched list entirely (deleted or edited
+        away), not merely lacking a reply. R42 must not read the card's unrelated pre-existing
+        comments as proof the blocker was recorded."""
+        adapter = FakeAdapter(comments={"T-1": [{"id": "c1", "body": "unrelated, predates the run"}]})
+        finding = closeout.confirm_blocked_comment(adapter, "T-1", "c0")
+        self.assertIsNotNone(finding)
+        self.assertEqual(finding["class"], contracts.BLOCKED_UNRECORDED)
+
     def test_an_unreadable_tracker_is_a_finding_rather_than_a_silent_pass(self):
         class Broken:
             def comments_since(self, task_id, baseline):

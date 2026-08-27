@@ -134,7 +134,7 @@ class GitHubAdapter:
         baseline = str(baseline_comment_id)
         if baseline in ids:
             return entries[ids.index(baseline) + 1:]
-        return entries
+        return []
 
     def closing_reference(self, task_id, ref):
         entries, _ = self._comments(task_id)

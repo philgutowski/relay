@@ -65,7 +65,7 @@ class FakeAdapter:
         ids = [entry.get("id") for entry in entries]
         if baseline_comment_id in ids:
             return entries[ids.index(baseline_comment_id) + 1:]
-        return entries
+        return []
 
     def closing_reference(self, task_id, ref):
         self.calls.append(("closing_reference", task_id, ref))
