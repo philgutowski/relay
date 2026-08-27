@@ -84,7 +84,11 @@ def cli_version(env, run=subprocess.run, timeout=CLI_VERSION_TIMEOUT_SECONDS):
     try:
         proc = run(["claude", "--version"], capture_output=True, text=True, env=env,
                     timeout=timeout, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        # ValueError covers UnicodeDecodeError from text=True decoding a non-UTF-8 byte in the
+        # binary's output: this call runs after run() has already acquired the lease and before
+        # its try/finally, so any exception here would skip store.release() and strand the
+        # lease. cli_version()'s contract is to fail closed to None, never raise.
         return None
     if proc.returncode != 0:
         return None

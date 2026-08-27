@@ -321,6 +321,15 @@ class CliVersion(unittest.TestCase):
             raise subprocess.TimeoutExpired(cmd=["claude", "--version"], timeout=10)
         self.assertIsNone(launch.cli_version({}, run=fake))
 
+    def test_a_decode_error_returns_none_rather_than_raising(self):
+        # The call runs after run() has already acquired the lease and before its try/finally
+        # (run.py), so an uncaught exception here would skip store.release() and strand the
+        # lease. text=True decoding a non-UTF-8 byte in the binary's output raises
+        # UnicodeDecodeError, a ValueError subclass -- must be caught, not just OSError/timeout.
+        def fake(*a, **k):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        self.assertIsNone(launch.cli_version({}, run=fake))
+
     def test_empty_stdout_returns_none(self):
         fake = lambda *a, **k: _FakeCompletedProcess("", 0)
         self.assertIsNone(launch.cli_version({}, run=fake))
