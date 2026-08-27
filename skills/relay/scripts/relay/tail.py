@@ -121,13 +121,16 @@ def candidates(manifest, store):
 
 
 class _Reader:
-    """One log file, read forward from where the last read stopped.
+    """One log file, read forward from where the last read stopped, and the Task and phase it
+    belongs to so the follower can name it.
 
     Holds the bytes after the last newline rather than decoding them, because the writer is still
     appending and a read lands mid line routinely. The fragment is completed by the next read.
     """
 
-    def __init__(self, path):
+    def __init__(self, task_id, phase, path):
+        self.task_id = task_id
+        self.phase = phase
         self.path = path
         self.offset = 0
         self.buffer = b""
@@ -161,8 +164,7 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS)
     a clock. Never acquires either Lease: this reads `state.json` and the log files and writes
     nothing, the same rule `status` follows.
     """
-    entries = candidates(manifest, store)
-    readers = [_Reader(path) for _, _, path in entries]
+    readers = [_Reader(*entry) for entry in candidates(manifest, store)]
     announced = set()
     cursor = 0
     waiting_said = False
@@ -176,10 +178,9 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS)
         if not reader.exists():
             return
         if index not in announced:
-            task_id, phase, _ = entries[index]
             announced.add(index)
             stream("")
-            stream("== %s %s ==" % (task_id, phase))
+            stream("== %s %s ==" % (reader.task_id, reader.phase))
         for raw in reader.drain():
             for event in decode(raw):
                 stream(event)
