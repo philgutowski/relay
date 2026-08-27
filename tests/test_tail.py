@@ -14,7 +14,9 @@ import tempfile
 import unittest
 
 import _paths
-from relay import contracts, state, tail
+from relay import cli, contracts, state, tail
+from test_cli import CliCase
+from test_run import CLOSE_SH, TASK_BRANCH_SH
 
 STDOUT_FIXTURES = os.path.join(_paths.FIXTURES_DIR, "stdout")
 REAL_STREAM = os.path.join(STDOUT_FIXTURES, "real_stream.jsonl")
@@ -360,6 +362,74 @@ class FollowTakesNoLease(FollowCase):
             self.assertEqual(handle.read(), before)
         self.assertIsNotNone(self.store.lease())
         holder.release()
+
+
+class TailAStubRun(CliCase):
+    """U4: a real run over the stub, with the stub echoing decodable stdout, then tailed.
+
+    Everything above this point tests the follower against files a test wrote. This drives the
+    actual runner, so the log layout, the write order, and the boundary between a task and its
+    closeout are the runner's rather than the test's.
+    """
+
+    def stream_file(self, name, body):
+        path = os.path.join(self.tmp.name, name + ".jsonl")
+        with open(path, "w") as handle:
+            handle.write(say(body))
+            handle.write(assistant([{"type": "tool_use", "name": "Skill",
+                                     "input": {"skill": "compound-engineering:ce-work"}}]) + "\n")
+        return path
+
+    def streamed_run(self):
+        for task_id in ("T-1", "T-2", "T-3"):
+            self.queue_entry("success.jsonl",
+                             TASK_BRANCH_SH % (task_id, task_id.lower().replace("-", "_"), task_id),
+                             stream=self.stream_file(task_id, "working on %s" % task_id))
+            self.queue_entry("closeout_skipped.jsonl", CLOSE_SH % (task_id, task_id),
+                             stream=self.stream_file(task_id + "-closeout",
+                                                     "closing out %s" % task_id))
+        return self.call("run", self.manifest_path)
+
+    def test_the_stub_writes_the_streamed_lines_into_the_task_log(self):
+        self.streamed_run()
+        with open(self.store().path("logs", "T-1.stdout.log")) as handle:
+            self.assertIn("working on T-1", handle.read())
+
+    def test_a_queue_entry_without_the_stream_key_is_unchanged(self):
+        """The key is opt in: the existing suite drives the same stub with no stream at all."""
+        self.complete_run()
+        with open(self.store().path("logs", "T-1.stdout.log")) as handle:
+            body = handle.read()
+        self.assertIn("stub_done", body)
+        self.assertEqual([], [event for raw in body.splitlines() for event in tail.decode(raw)])
+
+    def test_tailing_the_finished_run_prints_every_task_in_manifest_order(self):
+        self.streamed_run()
+        code, out = self.call("tail", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        for task_id in ("T-1", "T-2", "T-3"):
+            self.assertIn("working on %s" % task_id, out)
+        positions = [out.index("working on %s" % task_id) for task_id in ("T-1", "T-2", "T-3")]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_the_closeout_output_lands_between_its_task_and_the_next(self):
+        self.streamed_run()
+        _, out = self.call("tail", self.manifest_path)
+        self.assertLess(out.index("working on T-1"), out.index("closing out T-1"))
+        self.assertLess(out.index("closing out T-1"), out.index("working on T-2"))
+
+    def test_every_phase_header_names_its_task_and_phase(self):
+        self.streamed_run()
+        _, out = self.call("tail", self.manifest_path)
+        for task_id in ("T-1", "T-2", "T-3"):
+            self.assertIn("== %s %s ==" % (task_id, tail.PHASE_TASK), out)
+            self.assertIn("== %s %s ==" % (task_id, tail.PHASE_CLOSEOUT), out)
+
+    def test_the_tool_calls_render_decoded_rather_than_as_stream_json(self):
+        self.streamed_run()
+        _, out = self.call("tail", self.manifest_path)
+        self.assertIn("compound-engineering:ce-work", out)
+        self.assertNotIn('"type": "tool_use"', out)
 
 
 if __name__ == "__main__":

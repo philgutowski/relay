@@ -7,11 +7,17 @@ os.path.expanduser("~"), so a test that sets HOME redirects it. The slug rule mu
 runner's (relay.contracts.slug_for) exactly; the test suite checks that they agree.
 
 Queue protocol (RELAY_STUB_QUEUE names a directory):
-  <queue>/<n>/entry.json   {"fixture": "<path>", "exit": 0, "sleep": 0}
+  <queue>/<n>/entry.json   {"fixture": "<path>", "stream": "<path>", "exit": 0, "sleep": 0}
   <queue>/<n>/git.sh       optional; run with bash in the cwd after the fixture is written
   <queue>/counter          advanced under flock, so one runner drives task, closeout, task ...
 Entries are consumed in numeric order of <n>. A fixture path is absolute or relative to the
 queue directory. With no queue the stub writes nothing and exits 0.
+
+`stream` is opt in and separate from `fixture`. `fixture` is the session transcript the
+classifier reads off disk; `stream` is echoed to stdout, which is what the runner captures into
+<state>/logs/<id>.stdout.log and what `relay tail` decodes. Without it the stub prints only
+`system` and `result` lines, which carry no assistant message and decode to nothing, so a test
+that needs visible task activity sets it. Every test that does not is unaffected.
 
 Other knobs:
   RELAY_STUB_SLEEP=<seconds>       overrides the entry's sleep (U6 timeout tests)
@@ -117,6 +123,16 @@ def main(argv):
         target = os.path.join(target_dir, session_id + ".jsonl")
         shutil.copyfile(fixture, target)
         print(json.dumps({"type": "system", "subtype": "stub_transcript", "path": target}), flush=True)
+
+    stream = entry.get("stream")
+    if stream:
+        if not os.path.isabs(stream):
+            stream = os.path.join(queue, stream)
+        with open(stream, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.rstrip("\n")
+                if line:
+                    print(line, flush=True)
 
     if entry_dir is not None:
         script = os.path.join(entry_dir, "git.sh")
