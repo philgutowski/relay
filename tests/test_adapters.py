@@ -220,6 +220,10 @@ class Jira(AdapterCase):
         adapter = self.jira(self.opener())
         self.assertEqual(len(adapter.comments_since("IW-83", None)), 3)
 
+    def test_comments_since_an_absent_baseline_is_unresolved_not_everything(self):
+        adapter = self.jira(self.opener())
+        self.assertEqual(adapter.comments_since("IW-83", "99999"), [])
+
     def test_a_missing_token_env_var_is_a_named_configuration_error_before_any_request(self):
         opener = self.opener()
         with self.assertRaises(adapters.ConfigurationError) as caught:
@@ -302,6 +306,10 @@ class GitHub(AdapterCase):
         adapter = self.github(self.run_for())
         newer = adapter.comments_since("12", "IC_1")
         self.assertEqual([entry["id"] for entry in newer], ["IC_2"])
+
+    def test_comments_since_an_absent_baseline_is_unresolved_not_everything(self):
+        adapter = self.github(self.run_for())
+        self.assertEqual(adapter.comments_since("12", "IC_999"), [])
 
     def test_a_nonzero_gh_exit_is_skipped_with_the_stderr_text(self):
         adapter = self.github(self.run_for(failure=(1, "gh: not authenticated\n")))
