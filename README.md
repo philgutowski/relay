@@ -43,8 +43,18 @@ next one. Relay is that outer loop and nothing more.
 Relay is a Claude Code plugin. Nothing in it needs editing to run against a new project: every
 project specific fact lives in a manifest outside the target repo.
 
-1. Install the plugin from this repo, alongside the `compound-engineering` plugin version 3.23.4
-   or later, which owns the per task pipeline Relay calls.
+1. Install the plugin. A plugin installs from a marketplace, and this repository is its own
+   single plugin marketplace (`.claude-plugin/marketplace.json`), so it is two commands:
+
+   ```bash
+   claude plugin marketplace add /path/to/relay   # or the GitHub URL
+   claude plugin install relay@relay
+   ```
+
+   The install is a copy, not a link: after changing the skill or the runner, bump `version`
+   in `.claude-plugin/plugin.json` and run `claude plugin update relay@relay`. The
+   `compound-engineering` plugin version 3.23.4 or later must be installed too; it owns the per
+   task pipeline Relay calls.
 2. Confirm the runner works. It is Python 3 standard library only, so there is nothing to install:
 
    ```bash
@@ -65,6 +75,7 @@ detached. Everything the skill does is a runner subcommand you can also run your
 ```bash
 python3 skills/relay/scripts/relay_cli.py validate <manifest> --list
 python3 skills/relay/scripts/relay_cli.py run <manifest>
+python3 skills/relay/scripts/relay_cli.py run <manifest> --detach
 python3 skills/relay/scripts/relay_cli.py status <manifest>
 python3 skills/relay/scripts/relay_cli.py summary <manifest>
 ```

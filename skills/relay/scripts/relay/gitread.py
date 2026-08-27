@@ -134,6 +134,18 @@ def merge_head_exists(repo):
     return proc.returncode == 0
 
 
+def log_messages(repo, base, head):
+    """[(full sha, full message)] for base..head, newest first. The full message because a
+    closing trailer such as `Closes #62` lives in the body, not the subject."""
+    text = run(repo, ["log", "--format=%H%x00%B%x1e", "%s..%s" % (base, head)]).stdout
+    entries = []
+    for chunk in text.split("\x1e"):
+        sha, _, message = chunk.strip("\n").partition("\x00")
+        if sha.strip():
+            entries.append((sha.strip(), message.strip()))
+    return entries
+
+
 def log_oneline(repo, base, head):
     text = run(repo, ["log", "--oneline", "%s..%s" % (base, head)]).stdout
     return [line for line in text.splitlines() if line]

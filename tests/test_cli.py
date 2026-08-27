@@ -108,6 +108,29 @@ class RunVerb(CliCase):
         self.assertIn("left no commits", out)
 
 
+class DetachedRun(CliCase):
+    def test_detach_returns_at_once_and_the_run_completes_in_its_own_session(self):
+        import time
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_blocked("T-2")
+        self.closeout_blocked("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+        code, out = self.call("run", self.manifest_path, "--detach")
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("runner detached: pid", out)
+        self.assertIn("runner log:", out)
+        deadline = time.time() + 120
+        while time.time() < deadline and not self.store().terminal():
+            time.sleep(1)
+        terminal = self.store().terminal()
+        self.assertIsNotNone(terminal, "the detached run never wrote a terminal record")
+        self.assertEqual(terminal["run_status"], contracts.RUN_COMPLETED)
+        with open(self.store().path("runner.log")) as handle:
+            self.assertIn("relay run completed", handle.read())
+
+
 class StatusVerb(CliCase):
     def test_status_prints_the_terminal_record_and_the_cursor(self):
         self.complete_run()

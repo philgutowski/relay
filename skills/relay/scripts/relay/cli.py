@@ -11,6 +11,8 @@ hand, 3 another runner holds the lease.
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 from . import adapters, contracts, manifest as manifest_module, run as run_module, state, summary, verify
@@ -44,6 +46,9 @@ def build_parser():
     run_verb.add_argument("manifest")
     run_verb.add_argument("--retry-blocked", action="store_true",
                           help="retry tasks whose records read blocked")
+    run_verb.add_argument("--detach", action="store_true",
+                          help="start the run in its own session, logging to the state "
+                               "directory, and return at once")
 
     status = verbs.add_parser("status", help="print the run status without taking the lease")
     status.add_argument("manifest")
@@ -125,6 +130,8 @@ def cmd_run(args, env, out):
     adapter, failure = _adapter_for(manifest, env, out)
     if failure:
         return failure
+    if getattr(args, "detach", False):
+        return _detach(args, manifest, env, out)
     outcome = run_module.run(manifest, adapter=adapter, home=env.get("HOME"), base_env=env,
                              retry_blocked=args.retry_blocked,
                              stream=lambda line: out.write(line + "\n"))
@@ -133,6 +140,27 @@ def cmd_run(args, env, out):
     if outcome.store is not None:
         out.write(summary.render(summary.build(manifest, outcome.store)) + "\n")
     return outcome.exit_code
+
+
+def _detach(args, manifest, env, out):
+    """Start the same `run` in its own session and return. `setsid` does not exist on macOS, so
+    the /relay skill had to improvise a wrapper on the first Cratekit run; `start_new_session`
+    is the portable form. `caffeinate -i` keeps a Mac awake for the run when it is available."""
+    store = _store_for(manifest, env)
+    log_path = store.path("runner.log")
+    entry = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "relay_cli.py")
+    command = [sys.executable, entry, "run", os.path.abspath(args.manifest)]
+    if args.retry_blocked:
+        command.append("--retry-blocked")
+    if shutil.which("caffeinate"):
+        command = ["caffeinate", "-i"] + command
+    with open(log_path, "ab") as log:
+        proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log,
+                                stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    out.write("runner detached: pid %d\n" % proc.pid)
+    out.write("state: %s\n" % store.dir)
+    out.write("runner log: %s\n" % log_path)
+    return EXIT_OK
 
 
 def cmd_status(args, env, out):

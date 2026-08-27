@@ -31,6 +31,7 @@ python3 <runner> validate <manifest>            # check the manifest and its tar
 python3 <runner> validate <manifest> --list     # the same, plus the tracker's candidate tasks
 python3 <runner> run <manifest>                 # run to completion or to a halt
 python3 <runner> run <manifest> --retry-blocked # the same, retrying records that read blocked
+python3 <runner> run <manifest> --detach        # the same, in its own session, logged to the state dir
 python3 <runner> status <manifest>              # what the run is doing; never takes the lease
 python3 <runner> summary <manifest>             # the run summary as text
 python3 <runner> summary <manifest> --json      # the same summary as data
@@ -51,7 +52,9 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
    run `validate <manifest> --list` to read the candidate tasks back.
 2. Confirm with the operator, one question at a time: which tasks to include and in what order;
    the model and effort for each; any task to exclude and why; and the two degraded path
-   answers, `on_blocked.merge_partial` and `on_blocked.open_followup`. The shipping mode is
+   answers, `on_blocked.merge_partial` and `on_blocked.open_followup`. A value the operator
+   gives goes into the manifest verbatim. Recommend when asked; never substitute your
+   recommendation for an answer they already gave, including timeouts and status names. The shipping mode is
    `local_merge`, where the runner merges and pushes. `pr_terminal` is named in the schema and
    refused by `validate`: the run loop has no pull request sequence, so every task under it
    would halt without one being opened or checked.
@@ -63,6 +66,9 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
      card text is fed verbatim to an unattended process, so it names the accounts whose text is
      trusted to instruct one.
 4. Write the TOML. The gate command and any mirror rule are argument lists, never shell strings.
+   The gate is one command, the one the operator named; when a project's merge bar is several
+   commands, ask which one the runner runs and say what covers the others (a pre-commit hook,
+   usually). Do not author a wrapper script to bundle them unless the operator asks for one.
    Do not add a permission mode field: Relay always runs `dontAsk` and offers no switch.
 
 The examples under `docs/examples/` are the three shapes, one per adapter.
@@ -79,18 +85,25 @@ code. A missing qualifying satisfier is the most common one: say which of `quali
 and ask the operator for it. Do not invent one on their behalf. If validate names a missing
 credential environment variable, ask them to set it and run validate again.
 
+## Confirm before launch
+
+Launching starts an unattended process that will merge and push to the operator's repository.
+After validate passes, show the manifest path, the task list with model and effort, and the
+gate command, then ask for an explicit go. Do not launch on the strength of the manifest being
+valid, and do not launch when the operator has said to stop before launch.
+
 ## Launch
 
 The runner outlives this session, so start it detached and stop. Do not wait on it.
 
 ```bash
-setsid caffeinate -i python3 <runner> run <manifest> </dev/null \
-  >~/.relay/<manifest-hash>/runner.log 2>&1 &
+python3 <runner> run <manifest> --detach
 ```
 
-`setsid` gives the runner its own session, so a harness reaping this tool call's process group
-cannot end the run. `caffeinate -i` keeps the host awake. Lid close is not supported: the machine
-must stay open for the whole run.
+`--detach` starts the run in its own session, so a harness reaping this tool call's process
+group cannot end it, and logs to `runner.log` in the state directory. On macOS it wraps the run
+in `caffeinate -i` so the host stays awake; there is no `setsid` binary on macOS, so do not
+reach for one. Lid close is not supported: the machine must stay open for the whole run.
 
 A few seconds later, confirm it took the lease:
 

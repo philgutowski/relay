@@ -36,9 +36,9 @@ class VerifyCase(unittest.TestCase):
             handle.write(text if text is not None else self.toml)
         return mf.load(path)
 
-    def land_a_commit(self, message="task work"):
+    def land_a_commit(self, message="task work", content="value = 1\n"):
         """Put one new commit on main and push it, the state a passing tail leaves behind."""
-        sha = commit_on_branch(self.repo, "main", {"src/feature.py": "value = 1\n"}, message)
+        sha = commit_on_branch(self.repo, "main", {"src/feature.py": content}, message)
         _repo.git(self.repo, "push", "-q", "origin", "main")
         return sha
 
@@ -135,6 +135,49 @@ class FullScope(VerifyCase):
         self.assertEqual(check["result"], verify.SKIPPED)
         self.assertTrue(check["blocking"])
         self.assertIn("not authenticated", check["evidence"]["reason"])
+
+
+class LandedByHand(VerifyCase):
+    """The first Cratekit run: a task halted, the operator finished it by hand and merged it
+    with `Closes #62`, and the record had no landing_ref, so closing_reference was a blocking
+    skip forever and the runner relaunched a closed issue."""
+
+    def test_a_commit_on_main_naming_the_task_is_the_closing_reference(self):
+        sha = self.land_a_commit("merge: the shell, %s done" % self.task_id)
+        adapter = FakeAdapter(statuses={self.task_id: {"status": "done", "terminal": True}})
+        verdict = verify.verify(self.manifest(), self.record(), adapter)
+        self.assertTrue(verdict.landed, verdict.checks)
+        check = verdict.checks["closing_reference"]
+        self.assertEqual(check["result"], verify.PASS)
+        self.assertEqual(check["evidence"]["ref"], sha)
+        self.assertIn("names the task", check["evidence"]["derived"])
+        self.assertEqual(verdict.evidence["landing_ref"], sha)
+
+    def test_a_numeric_id_is_matched_as_a_hash_reference_only(self):
+        self.task_id = "62"
+        self.land_a_commit("feat: 62 tests, no reference")
+        adapter = FakeAdapter(statuses={"62": {"status": "CLOSED", "terminal": True}})
+        verdict = verify.verify(self.manifest(), self.record(), adapter)
+        self.assertEqual(verdict.checks["closing_reference"]["result"], verify.SKIPPED)
+        sha = self.land_a_commit("merge: the master shell\n\nCloses #62", content="value = 2\n")
+        verdict = verify.verify(self.manifest(), self.record(), adapter)
+        self.assertTrue(verdict.landed, verdict.checks)
+        self.assertEqual(verdict.checks["closing_reference"]["evidence"]["ref"], sha)
+
+    def test_no_commit_naming_the_task_keeps_the_blocking_skip(self):
+        self.land_a_commit("unrelated work")
+        adapter = FakeAdapter(statuses={self.task_id: {"status": "done", "terminal": True}})
+        verdict = verify.verify(self.manifest(), self.record(), adapter)
+        self.assertFalse(verdict.landed)
+        self.assertIsNone(verdict.halt_class)
+        self.assertIn("closing_reference", verdict.blocking_skips())
+
+    def test_a_record_with_its_own_landing_ref_is_not_second_guessed(self):
+        sha = self.land_a_commit("merge: %s" % self.task_id)
+        adapter = FakeAdapter(statuses={self.task_id: {"status": "done", "terminal": True}})
+        verdict = verify.verify(self.manifest(), self.record(landing_ref=sha), adapter)
+        self.assertEqual(verdict.checks["closing_reference"]["result"], verify.FAIL)
+        self.assertEqual(verdict.halt_class, contracts.HALT_PARTIAL_LANDING)
 
 
 class Mirror(VerifyCase):
@@ -278,6 +321,18 @@ class StartupReverify(VerifyCase):
         self.assertEqual(record["status"], contracts.STATUS_LANDED)
         self.assertEqual(record["verify"]["scope"], verify.SCOPE_FULL)
         self.assertIsNotNone(record["verify"]["at"])
+
+    def test_a_task_landed_by_hand_is_promoted_and_its_landing_ref_recorded(self):
+        manifest = self.manifest()
+        store = self.store_for(manifest)
+        sha = self.land_a_commit("merge: %s by hand" % self.task_id)
+        store.upsert(self.task_id, status=contracts.STATUS_HALTED,
+                     halt_class=contracts.HALT_UNCLEAN_EXIT, baseline_sha=self.baseline)
+        adapter = FakeAdapter(statuses={self.task_id: {"status": "done", "terminal": True}})
+        self.assertEqual(verify.startup_reverify(manifest, store, adapter), [self.task_id])
+        record = store.get(self.task_id)
+        self.assertEqual(record["status"], contracts.STATUS_LANDED)
+        self.assertEqual(record["landing_ref"], sha)
 
     def test_a_halted_record_that_still_fails_stays_halted(self):
         manifest = self.manifest()

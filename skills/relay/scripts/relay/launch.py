@@ -51,12 +51,18 @@ class LaunchResult:
     launch_error: str | None = None
 
 
+ALWAYS_SCRUBBED = ("JIRA_API_TOKEN", "JIRA_EMAIL")
+
+
 def child_env(manifest, base_env=None, home=None):
     """The environment every child of the runner gets: the operator's, minus the tracker
     credentials and minus the markers that tell a CLI it is nested in a session."""
     env = dict(os.environ if base_env is None else base_env)
-    for name in (manifest.tracker.token_env, manifest.tracker.email_env):
-        env.pop(name, None)
+    # The manifest's own credential names, and the Jira defaults regardless of adapter: a
+    # GitHub or markdown manifest names no token, and the operator's shell may still carry one.
+    for name in (manifest.tracker.token_env, manifest.tracker.email_env) + ALWAYS_SCRUBBED:
+        if name:
+            env.pop(name, None)
     for name in list(env):
         if name.startswith(SCRUB_PREFIXES):
             env.pop(name, None)

@@ -29,6 +29,7 @@ methods and expects plain data back:
 `{"url", "number", "state", "ci"}`, built by the run loop from gitwrite.find_pr and
 gitwrite.poll_ci. Without one, the PR checks are blocking skips rather than silent passes.
 """
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -234,7 +235,19 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
                                          {"status": card.get("status"), "terminal": bool(card.get("terminal"))})
 
     landing_ref = record.get("landing_ref")
-    if not landing_ref:
+    by_hand = None
+    if not landing_ref and record.get("baseline_sha") and local_sha:
+        by_hand = hand_landing(repo, record["baseline_sha"], local_sha, task_id)
+    if by_hand:
+        # The first Cratekit run: the operator finished a halted task by hand and merged it with
+        # `Closes #62`, and the blocking skip below kept it from ever being promoted, so the
+        # runner relaunched a closed task. A commit on the default branch that names the task is
+        # the same link as a comment naming the commit, read from the other end.
+        checks["closing_reference"] = _check(PASS, {
+            "ref": by_hand["sha"], "subject": by_hand["subject"],
+            "derived": "a commit on the default branch since the baseline names the task"})
+        record = dict(record, landing_ref=by_hand["sha"])
+    elif not landing_ref:
         checks["closing_reference"] = _skip("no landing_ref on the record yet", blocking=True)
     else:
         try:
@@ -246,6 +259,29 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
                 "adapter.closing_reference raised: %s" % exc, blocking=True)
 
     return _finish(Verdict(scope, checks, at=_stamp(now)), record)
+
+
+def _task_pattern(task_id):
+    """`#62` for a numeric id, the id as a whole word otherwise (`T-1`, `PROJ-12`)."""
+    escaped = re.escape(str(task_id))
+    if str(task_id).isdigit():
+        return re.compile(r"(?<![\w/])#%s(?!\d)" % escaped)
+    return re.compile(r"(?<![\w-])%s(?![\w-])" % escaped)
+
+
+def hand_landing(repo, baseline_sha, head_sha, task_id):
+    """The newest commit between the baseline and the head whose message names the task, as
+    {"sha", "subject"}, or None. This is how a task landed by hand between runs is recognised.
+    The whole message is read, because a `Closes #62` trailer sits in the body."""
+    pattern = _task_pattern(task_id)
+    try:
+        entries = gitread.log_messages(repo, baseline_sha, head_sha)
+    except gitread.GitError:
+        return None
+    for sha, message in entries:
+        if pattern.search(message):
+            return {"sha": sha, "subject": message.splitlines()[0] if message else ""}
+    return None
 
 
 def card_status_of(verdict):
@@ -308,6 +344,7 @@ def startup_reverify(manifest, store, adapter, pr_probe=None, env=None, now=time
             store.upsert(task_id, verify=verdict.as_dict())
             continue
         store.upsert(task_id, status=contracts.STATUS_LANDED, halt_class=contracts.HALT_LANDED,
+                     landing_ref=record.get("landing_ref") or verdict.evidence.get("landing_ref"),
                      verify=verdict.as_dict())
         promoted.append(task_id)
     return promoted
