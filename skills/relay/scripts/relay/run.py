@@ -119,7 +119,6 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
     overrides = timeout_overrides or {}
     launch_kwargs = dict(launch_kwargs or {})
     env = launch.child_env(manifest, base_env, home)
-    observed_cli_version = launch.cli_version(env)
 
     try:
         adapter = adapter or adapters.build(manifest, env=base_env)
@@ -139,6 +138,11 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
         stream("reclaimed a stale lease from pid %s; %d record(s) marked %s"
                % ((acquired.previous_holder or {}).get("holder_pid"),
                   len(acquired.reclaimed_ids), contracts.HALT_RUNNER_CRASHED))
+
+    # Read only once the run is actually going to reach a write_terminal call: EXIT_CONFIG and
+    # EXIT_LEASE both return above this point, and a blocking subprocess call whose result those
+    # paths would discard is wasted work on every run that never gets past them.
+    observed_cli_version = launch.cli_version(env)
 
     # Resolved once, here, from the repo as it stands before any task has touched it. Reading
     # it per closeout would let a task's own merge move the bound its closeout is checked
