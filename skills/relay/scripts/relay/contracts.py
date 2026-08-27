@@ -234,6 +234,25 @@ HALT_LINES = {
     BLOCKED_UNRECORDED: "blocked and the card carries no new comment; check {task} by hand",
 }
 
+# The digest classify.classify() (U7) guarantees, read by run.py and closeout.py via
+# digest.get(...). tests/test_contracts.py asserts both readers stay inside this set and that
+# classify keeps setting every key either reader uses.
+DIGEST_KEYS = frozenset((
+    "transcript_path",
+    "transcript_present",
+    "exit_code",
+    "timed_out",
+    "line_count",
+    "malformed_lines",
+    "tool_calls",
+    "findings",
+    "envelope",
+    "last_message",
+    "last_message_tail",
+    "halt_class",
+    "routable",
+))
+
 # Terminal record run statuses (R30, U3 step 6).
 RUN_COMPLETED = "completed"
 RUN_HALTED = "halted"
