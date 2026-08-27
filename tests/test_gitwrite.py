@@ -5,6 +5,7 @@ launches claude, reaches a network, or shells out to `gh`; the PR mode helpers t
 run callable and an injected clock.
 """
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -315,6 +316,37 @@ class MirrorPush(TailBase):
         self.assertEqual(
             gitread.rev_parse(self.repo, "origin/release"), gitread.rev_parse(self.repo, "main")
         )
+
+
+class PushTimeout(TailBase):
+    """A push can run the project's own gate inside a pre-push hook, so it cannot be bounded by
+    gitread's read timeout. Round three of Relay on Relay halted here: the repository's pre-push
+    hook ran a 216 second suite against a 120 second read bound, and the runner killed its own
+    push and reported it as an unexpected error."""
+
+    pre_push = "#!/bin/sh\nsleep 1\n"
+
+    def test_the_push_bound_is_the_gate_bound_plus_the_network_margin(self):
+        self.assertEqual(gitwrite.push_timeout_for(600),
+                         600 + contracts.PUSH_NETWORK_MARGIN_SECONDS)
+        self.assertEqual(gitwrite.push_timeout_for(),
+                         contracts.DEFAULT_GATE_TIMEOUT_MINUTES * 60
+                         + contracts.PUSH_NETWORK_MARGIN_SECONDS)
+        self.assertGreater(gitwrite.push_timeout_for(), gitread.GIT_TIMEOUT_SECONDS)
+
+    def test_a_read_bound_would_kill_a_push_whose_hook_runs_a_gate(self):
+        commit_on_branch(self.repo, "main", {"more.txt": "content\n"}, "more work")
+        with self.assertRaises(subprocess.TimeoutExpired):
+            gitread.run(self.repo, ["push", "origin", "main:probe"], timeout=0.5)
+
+    def test_a_push_survives_a_hook_slower_than_the_read_bound(self):
+        head = commit_on_branch(self.repo, "main", {"more.txt": "content\n"}, "more work")
+        # The argument is the gate bound, not the subprocess bound: passing 1 here must still
+        # allow the push the network margin on top, so a hook slower than 1 second lands.
+        result = gitwrite.push(self.repo, ["origin", "main"], ops=self.ops,
+                               task_id=self.task_id, timeout=1)
+        self.assertTrue(result.ok, result.output)
+        self.assertEqual(gitread.rev_parse(self.repo, "origin/main"), head)
 
 
 class DanglingMerge(TailBase):

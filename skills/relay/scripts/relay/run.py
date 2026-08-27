@@ -438,7 +438,8 @@ def _merge_route(ctx):
 
     if ctx.manifest.project.mirror:
         pushed = gitwrite.mirror_push(ctx.repo, list(ctx.manifest.project.mirror), ops=ctx.store,
-                                      task_id=ctx.task.id, env=ctx.env)
+                                      task_id=ctx.task.id, env=ctx.env,
+                                      timeout=ctx.overrides.get("gate_seconds"))
         if not pushed.ok:
             raise _Halt(ctx.task.id, contracts.HALT_GATE_REFUSED,
                         "the mirror push was refused for %s" % ctx.task.id,
@@ -537,7 +538,8 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
 
     if gitread.rev_parse(ctx.repo, "HEAD") != pre_closeout_head:
         pushed = gitwrite.push(ctx.repo, ["origin", ctx.default], ops=ctx.store,
-                               task_id=ctx.task.id, env=ctx.env)
+                               task_id=ctx.task.id, env=ctx.env,
+                               timeout=ctx.overrides.get("gate_seconds"))
         if not pushed.ok:
             raise _Halt(ctx.task.id, contracts.HALT_GATE_REFUSED,
                         "the push of the closeout commit was refused for %s" % ctx.task.id,

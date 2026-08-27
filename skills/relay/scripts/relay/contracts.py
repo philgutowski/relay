@@ -266,6 +266,12 @@ DEFAULT_CLOSEOUT_TIMEOUT_MINUTES = 20
 DEFAULT_CLOSEOUT_MODEL = "sonnet"
 DEFAULT_CLOSEOUT_EFFORT = "medium"
 DEFAULT_GATE_TIMEOUT_MINUTES = 30
+
+# A push can run the project's gate inside a pre-push hook, so it is bounded by the gate's own
+# timeout plus the network transfer, never by gitread's read timeout. See
+# docs/solutions/ for why: a 120 second read bound killed a push whose hook was running a 216
+# second suite, and the runner reported it as an unexpected error.
+PUSH_NETWORK_MARGIN_SECONDS = 120
 DEFAULT_DOCS_ROOT = "docs"
 CONCEPTS_FILE = "CONCEPTS.md"
 

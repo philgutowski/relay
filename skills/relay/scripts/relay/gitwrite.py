@@ -66,10 +66,22 @@ def _record(ops, task_id, op, phase, detail=None):
         ops.record_git_op(task_id, op, phase, detail)
 
 
-def _mutate(repo, op, args, ops=None, task_id=None, env=None, check=False):
+def push_timeout_for(gate_timeout_seconds=None):
+    """The bound for a push. A repository may run its gate inside a pre-push hook, so a push can
+    legitimately take as long as the gate plus the transfer. gitread's read timeout is far too
+    short for that, and applying it here kills the runner's own push mid-hook."""
+    if gate_timeout_seconds is None:
+        gate_timeout_seconds = contracts.DEFAULT_GATE_TIMEOUT_MINUTES * 60
+    return gate_timeout_seconds + contracts.PUSH_NETWORK_MARGIN_SECONDS
+
+
+def _mutate(repo, op, args, ops=None, task_id=None, env=None, check=False, timeout=None):
     """Run one mutating git command between an intent entry and a result entry."""
     _record(ops, task_id, op, "intent", {"args": list(args)})
-    proc = gitread.run(repo, args, check=check, env=env)
+    if timeout is None:
+        proc = gitread.run(repo, args, check=check, env=env)
+    else:
+        proc = gitread.run(repo, args, check=check, env=env, timeout=timeout)
     output = (proc.stdout or "") + (proc.stderr or "")
     _record(ops, task_id, op, "result", {"returncode": proc.returncode, "output": output[-2000:]})
     return proc
@@ -178,15 +190,17 @@ def abort_dangling_merge(repo, ops=None, task_id=None, env=None):
     return True
 
 
-def push(repo, args, ops=None, task_id=None, env=None):
-    proc = _mutate(repo, "push", ["push"] + list(args), ops, task_id, env)
+def push(repo, args, ops=None, task_id=None, env=None, timeout=None):
+    proc = _mutate(repo, "push", ["push"] + list(args), ops, task_id, env,
+                   timeout=push_timeout_for(timeout))
     output = (proc.stdout or "") + (proc.stderr or "")
     return PushResult(proc.returncode == 0, proc.returncode, output)
 
 
-def mirror_push(repo, mirror, ops=None, task_id=None, env=None):
+def mirror_push(repo, mirror, ops=None, task_id=None, env=None, timeout=None):
     """R6: the mirror rule is an argument list the manifest supplies, run after closeout."""
-    proc = _mutate(repo, "mirror_push", ["push"] + list(mirror), ops, task_id, env)
+    proc = _mutate(repo, "mirror_push", ["push"] + list(mirror), ops, task_id, env,
+                   timeout=push_timeout_for(timeout))
     output = (proc.stdout or "") + (proc.stderr or "")
     return PushResult(proc.returncode == 0, proc.returncode, output)
 
@@ -361,7 +375,8 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
                                     "status_before": contracts.STATUS_MERGING,
                                     "reason": "the lease was lost before the push"})
 
-    pushed = push(repo, ["origin", default_branch], ops=ops, task_id=task_id, env=env)
+    pushed = push(repo, ["origin", default_branch], ops=ops, task_id=task_id, env=env,
+                  timeout=gate_timeout_seconds)
     if not pushed.ok:
         return TailResult(False, contracts.HALT_GATE_REFUSED, "push", merge_sha=merge.sha, gate=gate,
                           evidence={"branch": default_branch, "sha": merge.sha,
