@@ -349,6 +349,25 @@ class FollowAcrossBoundaries(FollowCase):
         ])
 
 
+class FollowOnAManifestValidateWouldReject(FollowCase):
+    """`tail` deliberately does not validate the manifest, so it accepts shapes the other verbs
+    refuse. `validate` rejects both of these (manifest.py: "tasks is empty", "id is listed
+    twice"), which means the follow loop is the only thing standing between them and the
+    operator."""
+
+    def test_a_manifest_with_no_tasks_reports_the_run_instead_of_raising(self):
+        self.manifest = _Manifest([])
+        self.terminal()
+        self.assertEqual(self.go(), contracts.RUN_COMPLETED)
+
+    def test_a_task_listed_twice_does_not_replay_its_log_twice(self):
+        self.manifest = _Manifest(["T-1", "T-1"])
+        self.append("T-1", say("said once"))
+        self.terminal()
+        self.go()
+        self.assertEqual(self.text.count("said once"), 1)
+
+
 class FollowTakesNoLease(FollowCase):
     def test_following_leaves_the_state_file_byte_identical(self):
         holder = state.StateStore(self.manifest_path, self.repo, home=self.home)

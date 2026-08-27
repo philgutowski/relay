@@ -164,7 +164,15 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS)
     a clock. Never acquires either Lease: this reads `state.json` and the log files and writes
     nothing, the same rule `status` follows.
     """
-    readers = [_Reader(*entry) for entry in candidates(manifest, store)]
+    # One reader per distinct log. `tail` does not validate the Manifest, so it accepts shapes
+    # `validate` refuses: a Task listed twice would otherwise get two readers on one file and
+    # replay it once each, and an empty Task list leaves nothing to index.
+    readers = []
+    seen = set()
+    for task_id, phase, path in candidates(manifest, store):
+        if path not in seen:
+            seen.add(path)
+            readers.append(_Reader(task_id, phase, path))
     announced = set()
     cursor = 0
     waiting_said = False
@@ -203,7 +211,8 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS)
         while cursor < edge:
             emit(cursor)
             cursor += 1
-        emit(cursor)
+        if cursor < len(readers):
+            emit(cursor)
 
         terminal = store.terminal()
         if terminal is not None:
