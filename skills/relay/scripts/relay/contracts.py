@@ -81,8 +81,9 @@ REQUIRED_SKILLS = ("ce-plan", "ce-work", "ce-simplify-code", "ce-code-review", "
 DENIAL_REGEX = re.compile(r"^Permission to use (\w+) has been denied")
 # Under dontAsk an Edit or Write on a path under .claude/ is denied regardless of the allowlist.
 CLAUDE_DIR_PATH_REGEX = re.compile(r"(^|/)\.claude/")
-# The pre-flight scan form from the solutions doc: catches the path inside prose and quotes.
-CLAUDE_DIR_SCAN_REGEX = re.compile(r"(^|[\s\"'`(/])\.claude/", re.MULTILINE)
+# The pre-flight scan form from the solutions doc: catches the path inside prose, quotes,
+# and markdown wrappers (a link's `[`, and bold/italic/list-marker `*`).
+CLAUDE_DIR_SCAN_REGEX = re.compile(r"(^|[\s\"'`(/\[*])\.claude/", re.MULTILINE)
 
 # Transcript line types (the session jsonl the CLI writes). Only these three carry evidence.
 TRANSCRIPT_TYPE_ASSISTANT = "assistant"
