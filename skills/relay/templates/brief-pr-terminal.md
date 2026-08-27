@@ -16,6 +16,11 @@ $data_end
 
 ## Rules for the whole session
 
+Run every command in the foreground and wait for it to finish. Never start a command or an agent
+in the background and end your turn to wait for it: in this session, ending your turn is exiting,
+and everything still running is killed with you. A mutation driver, a test suite, or a build that
+takes twenty minutes is twenty minutes of waiting, not a reason to background it.
+
 Never invoke a Skill whose name lacks the `compound-engineering:` prefix. The harness ships
 skills with similar bare names and they are not substitutes for the plugin's; a bare name is
 recorded against this task as a substitution.

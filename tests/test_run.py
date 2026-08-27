@@ -309,6 +309,29 @@ class ExcludedByScan(RunCase):
         self.assertEqual(self.store().get("T-2")["status"], contracts.STATUS_LANDED)
 
 
+class TerminalCard(RunCase):
+    def test_a_card_that_is_already_terminal_is_excluded_instead_of_launched(self):
+        """The first Cratekit run relaunched issue 62 after it had been closed by hand."""
+        with open(os.path.join(self.repo, "tracker.md"), "w") as handle:
+            handle.write(TRACKER_MD.replace("- [ ] T-1", "- [x] T-1"))
+        _repo.git(self.repo, "add", "tracker.md")
+        _repo.git(self.repo, "commit", "-q", "-m", "T-1 closed elsewhere")
+        _repo.git(self.repo, "push", "-q", "origin", "main")
+        self.task_success("T-2")
+        self.closeout_landed("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        record = self.store().get("T-1")
+        self.assertEqual(record["status"], contracts.STATUS_EXCLUDED)
+        self.assertIn("terminal", record["excluded_reason"])
+        self.assertIsNone(record["session_id"], "a process was launched on a closed card")
+        self.assertNotIn("relay/T-1", self.relay_branches())
+        self.assertEqual(self.store().get("T-2")["status"], contracts.STATUS_LANDED)
+
+
 class ManifestExclusion(RunCase):
     def test_a_task_the_manifest_excluded_is_never_launched(self):
         text = MANIFEST.replace("__REPO__", self.repo).replace(

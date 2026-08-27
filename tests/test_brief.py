@@ -64,6 +64,13 @@ class SkillPinning(BriefCase):
             self.assertIn(contracts.SKILL_PREFIX, text, mode)
             self.assertRegex(text, r"(?i)never invoke a skill whose name lacks", mode)
 
+    def test_the_brief_forbids_backgrounding_work_and_ending_the_turn(self):
+        """The first Cratekit run: the task backgrounded the mutation driver, ended its turn
+        to wait, and exited, and the driver was killed mid mutation."""
+        for mode, text in self.each_template():
+            self.assertIn("foreground", text, mode)
+            self.assertIn("ending your turn is exiting", text, mode)
+
     def test_the_contract_strings_come_from_contracts_rather_than_the_template(self):
         local = self.render()
         self.assertIn(contracts.CE_WORK_RETURN_MODE, local)

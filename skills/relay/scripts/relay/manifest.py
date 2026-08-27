@@ -189,8 +189,12 @@ def load(path):
         project_number=t.get("project_number"),
         status_field=t.get("status_field"),
         file=t.get("file"),
-        token_env=pick(t, "tracker", "token_env", "JIRA_API_TOKEN"),
-        email_env=pick(t, "tracker", "email_env", "JIRA_EMAIL"),
+        # The credential names are a Jira fact. Naming them as applied defaults on a GitHub or
+        # markdown manifest told the first Cratekit run's operator about tokens it never reads.
+        token_env=(pick(t, "tracker", "token_env", "JIRA_API_TOKEN")
+                   if t.get("adapter") == "jira" else str(t.get("token_env", ""))),
+        email_env=(pick(t, "tracker", "email_env", "JIRA_EMAIL")
+                   if t.get("adapter") == "jira" else str(t.get("email_env", ""))),
         done_statuses=_tuple(t.get("done_statuses", [])),
         in_review_status=t.get("in_review_status"),
     )

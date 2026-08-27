@@ -245,6 +245,16 @@ def _one_task(cfg, task):
         return
     baseline_sha = gitread.rev_parse(repo, default)
     card_status = adapter.status(task.id)
+    if card_status.get("terminal"):
+        # Startup re-verify runs before this and promotes a task that landed by hand. A card
+        # that is terminal and was not promoted was closed elsewhere, and a task process given
+        # it has nothing to do. The first Cratekit run relaunched a closed issue this way.
+        reason = ("the card already reads %s, which is terminal; nothing to run"
+                  % card_status.get("status"))
+        store.upsert(task.id, status=contracts.STATUS_EXCLUDED, excluded_reason=reason)
+        if stream is not None:
+            stream("%s skipped: %s" % (task.id, reason))
+        return
     baseline_comment_id = _baseline_comment_id(adapter, task.id)
 
     # Brief and the pre-flight scan (R7, R41, R43).

@@ -53,10 +53,19 @@ class CompleteManifest(ManifestCase):
         self.assertTrue(m.on_blocked.merge_partial)
         result = mf.validate(m)
         self.assertTrue(result.ok, result.errors)
-        # The fixture omits the Jira env var names, so those two defaults are the ones named.
-        self.assertIn("tracker.token_env = 'JIRA_API_TOKEN'", result.defaults_applied)
-        self.assertIn("tracker.email_env = 'JIRA_EMAIL'", result.defaults_applied)
+        # The fixture is markdown tracked, so the Jira credential names are not defaults here:
+        # the first Cratekit run's validate named them on a GitHub manifest.
+        self.assertNotIn("tracker.token_env = 'JIRA_API_TOKEN'", result.defaults_applied)
+        self.assertNotIn("tracker.email_env = 'JIRA_EMAIL'", result.defaults_applied)
+        self.assertEqual(m.tracker.token_env, "")
         self.assertEqual(result.allowed_paths, ["docs/", "CONCEPTS.md", "tracker.md"])
+
+    def test_the_jira_credential_names_default_only_under_the_jira_adapter(self):
+        text = self.edit(r'^adapter = "markdown"$', 'adapter = "jira"\nbase_url = "https://x.atlassian.net"\nproject_key = "PROJ"')
+        m = self.load(text)
+        self.assertEqual(m.tracker.token_env, "JIRA_API_TOKEN")
+        result = mf.validate(m)
+        self.assertIn("tracker.token_env = 'JIRA_API_TOKEN'", result.defaults_applied)
 
     def test_defaults_apply_by_name_when_timeouts_and_closeout_are_absent(self):
         text = drop_table(self.base, "timeouts")
