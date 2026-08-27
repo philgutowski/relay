@@ -1,4 +1,4 @@
-"""The operator interface (U10, R45): six verbs, no prompts.
+"""The operator interface (U10, R45): seven verbs, no prompts.
 
 Every verb is a subcommand and none of them asks a question, because the `/relay` skill drives
 them and a skill session cannot answer one either. There is no operation that exists only inside
@@ -15,7 +15,8 @@ import shutil
 import subprocess
 import sys
 
-from . import adapters, contracts, manifest as manifest_module, run as run_module, state, summary, verify
+from . import (adapters, contracts, manifest as manifest_module, run as run_module, state, summary,
+               tail as tail_module, verify)
 
 EXIT_OK = run_module.EXIT_OK
 EXIT_CONFIG = run_module.EXIT_CONFIG
@@ -52,6 +53,9 @@ def build_parser():
 
     status = verbs.add_parser("status", help="print the run status without taking the lease")
     status.add_argument("manifest")
+
+    tail_verb = verbs.add_parser("tail", help="follow the running task's activity, decoded")
+    tail_verb.add_argument("manifest")
 
     summary_verb = verbs.add_parser("summary", help="print the run summary")
     summary_verb.add_argument("manifest")
@@ -191,6 +195,28 @@ def cmd_status(args, env, out):
     return EXIT_OK
 
 
+def cmd_tail(args, env, out):
+    """Follows the run's task logs and prints them decoded, one line per event. Reads state and
+    the log files and nothing else, so like `status` it never acquires the lease and can run
+    beside a live runner.
+
+    The manifest is loaded but not validated: a reader should still be able to watch a run whose
+    manifest was edited since it started, and `_load` already refuses one it cannot parse.
+    """
+    manifest, failure = _load(args.manifest, out)
+    if failure:
+        return failure
+    store = _store_for(manifest, env)
+    try:
+        run_status = tail_module.follow(manifest, store, lambda line: out.write(line + "\n"))
+    except KeyboardInterrupt:
+        # The operator stopping a follower is an ordinary ending, not a fault, and the runner is
+        # in its own session so this never reached it (R49).
+        out.write("\n")
+        return EXIT_OK
+    return EXIT_HALTED if run_status == contracts.RUN_HALTED else EXIT_OK
+
+
 def cmd_summary(args, env, out):
     manifest, failure = _load(args.manifest, out)
     if failure:
@@ -246,6 +272,7 @@ VERBS = {
     "validate": cmd_validate,
     "run": cmd_run,
     "status": cmd_status,
+    "tail": cmd_tail,
     "summary": cmd_summary,
     "verify": cmd_verify,
     "lease": cmd_lease,

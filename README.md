@@ -77,8 +77,14 @@ python3 skills/relay/scripts/relay_cli.py validate <manifest> --list
 python3 skills/relay/scripts/relay_cli.py run <manifest>
 python3 skills/relay/scripts/relay_cli.py run <manifest> --detach
 python3 skills/relay/scripts/relay_cli.py status <manifest>
+python3 skills/relay/scripts/relay_cli.py tail <manifest>
 python3 skills/relay/scripts/relay_cli.py summary <manifest>
 ```
+
+`tail` is how you watch a run that is already going. It follows each task's output in order and
+prints it decoded, one line per event, instead of the stream json that lands in `runner.log`. It
+works before, during, and after a run, takes no lease, and exits when the run reaches a terminal
+record.
 
 The run halts rather than continuing past an outcome it cannot confirm, and the summary names the
 halt class, its cause, and what a human still has to check. Repair by hand, then run again: the

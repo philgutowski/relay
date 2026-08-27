@@ -18,7 +18,7 @@ EXAMPLES = os.path.join(REPO_ROOT, "docs", "examples")
 SKILL = os.path.join(REPO_ROOT, "skills", "relay", "SKILL.md")
 
 # Every verb the plan's runner subcommand table names.
-VERBS = ("validate", "run", "status", "summary", "verify", "lease")
+VERBS = ("validate", "run", "status", "tail", "summary", "verify", "lease")
 
 # What must never appear in anything Relay ships (R40). These are the shapes a real project
 # leaks in: a Jira key, the operator's own repo, and a live Atlassian site.
