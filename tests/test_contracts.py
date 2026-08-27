@@ -29,8 +29,8 @@ DIGEST_SET_RE = re.compile(r"((?:\w+\.)*\w*digest)\s*\[\s*[\"']([A-Za-z_]+)[\"']
 
 def _digest_keys_read(source_path):
     """Top-level digest keys a module reads via `.get(...)`, minus keys the same module writes
-    onto its own digest object first (e.g. run.py's "task_id" and "timeout" bookkeeping) --
-    those are local additions, not part of the cross-module classify contract."""
+    onto its own digest object first (e.g. run.py's "task_id" and "timeout" bookkeeping).
+    Those are local additions, not part of the cross-module classify contract."""
     with open(source_path, encoding="utf-8") as handle:
         source = handle.read()
     read_keys = {key for _, key in DIGEST_GET_RE.findall(source)}
