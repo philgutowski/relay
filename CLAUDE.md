@@ -22,6 +22,26 @@ line, Verify-landed); use those words.
   frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in the
   runner, the classifier, the closeout, the summary, or the adapters.
 
+## Project tracking
+
+The GitHub Project **Relay** (project 4 on `philgutowski`, `gh project view 4 --owner
+philgutowski`, https://github.com/users/philgutowski/projects/4) is the canonical source of
+truth for what is open, in progress, and done. It supersedes `docs/backlog.md` as the working
+list; that file overrides Phillip's global backlog convention for this repo. Concretely:
+
+- Every open work item is a GitHub issue on `philgutowski/relay`, added to project 4, with a
+  Status of Todo, In Progress, or Done. `gh issue list --repo philgutowski/relay --state open`
+  and `gh project item-list 4 --owner philgutowski` are the ways to check current PM state, not
+  a doc in this repo.
+- `docs/backlog.md` stays for fast raw capture mid-session only, one line per idea per the
+  global convention. It is a holding pen, not a list: promote each line to a GitHub issue (`gh
+  issue create --repo philgutowski/relay`, added to project 4) as soon as it is triaged, quote
+  the backlog line in the issue body under a `Source:` note, then delete the line from
+  `docs/backlog.md`. A line still sitting in the file means it has not been promoted yet, not
+  that it is tracked.
+- `docs/plans/` still holds full plans (`/ce-plan` output); an issue for a plan's unit can point
+  at the plan file rather than restating it, same as the existing U1 to U11 issues do.
+
 ## Working here
 
 - Run the suite from the repo root: `python3 -m unittest discover -s tests`. It takes about two
