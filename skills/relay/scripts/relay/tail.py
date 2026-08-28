@@ -37,7 +37,7 @@ import json
 import os
 import time
 
-from . import contracts, notify
+from . import contracts
 
 # Bounds on one printed event. A task process writes messages far longer than a terminal line,
 # and a follower that reflows them is unreadable next to the tool calls between them.
@@ -243,7 +243,7 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
         come from one call so the printed line and the notification cannot drift."""
         stream(text)
         if notifier is not None:
-            notifier(notify.TITLE, text)
+            notifier(text)
 
     def emit(index):
         """Drain one candidate and print what it produced, with its phase header the first time
@@ -263,10 +263,17 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
             for event in decode(raw):
                 stream(event)
 
-    def note_statuses():
+    def poll_state():
+        """One read of `state.json` per poll. `store.records()` and `store.terminal()` would load
+        the file once each, and the records and the terminal record have to describe the same
+        moment anyway."""
+        return store.read() or {}
+
+    def note_statuses(state):
         """Announce every record whose status moved since the last poll."""
         nonlocal statuses
-        current = {task_id: record.get("status") for task_id, record in store.records().items()}
+        current = {task_id: record.get("status")
+                   for task_id, record in (state.get("tasks") or {}).items()}
         if statuses is not None:
             for task_id in sorted(current):
                 if current[task_id] != statuses.get(task_id):
@@ -280,11 +287,11 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
                 return index
         return -1
 
-    def terminal_now():
+    def terminal_of(state):
         """The terminal record this run wrote, or None. A record identical to the one the floor
         captured belongs to the previous run against this state directory, so it is not this
         run's ending."""
-        record = store.terminal()
+        record = state.get("terminal")
         if record is None or (has_floor and record == terminal_floor):
             return None
         return record
@@ -301,7 +308,7 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
     def drain_the_rest():
         for index in range(cursor, len(readers)):
             emit(index)
-        note_statuses()
+        note_statuses(poll_state())
 
     while True:
         edge = frontier()
@@ -316,9 +323,10 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
             cursor += 1
         if cursor < len(readers):
             emit(cursor)
-        note_statuses()
+        state = poll_state()
+        note_statuses(state)
 
-        record = terminal_now()
+        record = terminal_of(state)
         if record is not None:
             # Read after the drain, then drain again: the record and the last lines of the last
             # log are written by different processes, and this is what stops the record winning
@@ -331,7 +339,7 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
             # silent death, because the exit and the record are the same race the read above
             # guards, in the other direction.
             drain_the_rest()
-            record = terminal_now()
+            record = terminal_of(poll_state())
             if record is not None:
                 return finish(record)
             return GONE

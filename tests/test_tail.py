@@ -568,7 +568,7 @@ class PhasesOnly(FollowCase):
 class Notifications(FollowCase):
     def sent(self):
         fired = []
-        return fired, lambda title, body: fired.append((title, body))
+        return fired, fired.append
 
     def test_one_notification_per_phase_event_and_none_for_activity(self):
         fired, notifier = self.sent()
@@ -577,18 +577,19 @@ class Notifications(FollowCase):
             lambda: self.store.upsert("T-1", status=contracts.STATUS_LANDED),
             lambda: self.terminal(),
         ])
-        bodies = [body for _title, body in fired]
-        self.assertIn("== T-1 %s ==" % tail.PHASE_TASK, bodies)
-        self.assertIn("T-1 is now %s" % contracts.STATUS_LANDED, bodies)
-        self.assertIn("run %s" % contracts.RUN_COMPLETED, bodies)
-        self.assertFalse([body for body in bodies if "decoded activity" in body])
+        self.assertIn("== T-1 %s ==" % tail.PHASE_TASK, fired)
+        self.assertIn("T-1 is now %s" % contracts.STATUS_LANDED, fired)
+        self.assertIn("run %s" % contracts.RUN_COMPLETED, fired)
+        self.assertFalse([body for body in fired if "decoded activity" in body])
 
-    def test_every_notification_carries_the_relay_title(self):
+    def test_every_notification_is_also_a_printed_line(self):
         fired, notifier = self.sent()
+        self.append("T-1", say("one"))
         self.terminal()
         self.go(notifier=notifier)
         self.assertTrue(fired)
-        self.assertEqual({title for title, _body in fired}, {"Relay"})
+        for body in fired:
+            self.assertIn(body, self.lines)
 
     def test_attaching_a_notifier_does_not_change_what_is_printed(self):
         def run_once(notifier):

@@ -56,16 +56,16 @@ class Build(unittest.TestCase):
     def test_enabled_on_a_capable_host_returns_a_callable(self):
         self.assertTrue(callable(notify.build(True, platform="darwin", which=present)))
 
-    def test_the_built_notifier_sends_through_the_injected_runner(self):
+    def test_the_built_notifier_takes_a_body_and_binds_the_title_itself(self):
         recorder = Recorder()
         notifier = notify.build(True, platform="darwin", which=present, runner=recorder)
-        notifier("Relay", "T-1 task")
+        notifier("T-1 task")
         self.assertEqual(len(recorder.calls), 1)
         argv, _kwargs = recorder.calls[0]
         self.assertEqual(argv[0], notify.BINARY)
         self.assertEqual(argv[1], "-e")
         self.assertIn("T-1 task", argv[2])
-        self.assertIn("Relay", argv[2])
+        self.assertIn(notify.TITLE, argv[2])
 
 
 class Script(unittest.TestCase):

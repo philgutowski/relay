@@ -57,9 +57,12 @@ def send(title, body, runner=subprocess.run):
 def build(enabled, platform=None, which=shutil.which, runner=subprocess.run):
     """The notifier a follower takes, or None when there is nothing to send to.
 
+    Takes a body and nothing else. The title is always this module's, so binding it here keeps
+    the follower from having to know about notifications beyond calling one function.
+
     None rather than a no op callable: every caller's guard is then one `if`, and a disabled
     notifier is visible to a test by identity rather than by counting calls that did nothing.
     """
     if not enabled or not available(platform=platform, which=which):
         return None
-    return lambda title, body: send(title, body, runner=runner)
+    return lambda body: send(TITLE, body, runner=runner)

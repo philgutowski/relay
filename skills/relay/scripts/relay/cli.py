@@ -188,19 +188,19 @@ def _detach(args, manifest, env, out):
     command = detach_command(entry, os.path.abspath(args.manifest), args.retry_blocked)
     if shutil.which("caffeinate"):
         command = ["caffeinate", "-i"] + command
+    following = getattr(args, "follow", False)
     # Read the floor before the child can write anything. That is what makes a follower's "only
     # what this launch produced" exact rather than a race against process startup.
-    floor = tail_module.read_floor(manifest, store) if getattr(args, "follow", False) else None
+    floor = tail_module.read_floor(manifest, store) if following else None
     with open(log_path, "ab") as log:
         proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log,
                                 stderr=subprocess.STDOUT, start_new_session=True, env=env)
     out.write("runner detached: pid %d\n" % proc.pid)
     out.write("state: %s\n" % store.dir)
     out.write("runner log: %s\n" % log_path)
-    if not getattr(args, "follow", False):
+    if not following:
         return EXIT_OK
-    return _follow(args, manifest, store, out, floor=floor, with_summary=True,
-                   runner_alive=lambda: proc.poll() is None, proc=proc)
+    return _follow(args, manifest, store, out, floor=floor, proc=proc)
 
 
 def cmd_status(args, env, out):
@@ -244,40 +244,47 @@ def cmd_status(args, env, out):
     return EXIT_OK
 
 
-def _follow(args, manifest, store, out, floor=None, with_summary=False, runner_alive=None,
-            proc=None):
+def _follow(args, manifest, store, out, floor=None, proc=None):
     """The one following path, shared by `tail` and `run --follow`.
 
-    Four endings. A run status prints the summary when the caller launched the run, and maps to
-    an exit code. `None` is the `--for` bound, which is not a failure: the run continues. `GONE`
-    is a launched process that exited without a record. An interrupt is the operator, which is an
-    ordinary ending too.
+    `proc` is the run this call launched, and it is what separates the two callers: only a caller
+    that launched a run can watch that process, and only it owes the operator the summary a
+    foreground `run` would have printed. `tail` follows a run somebody else started and passes
+    none.
+
+    Four endings. A run status maps to an exit code. `None` is the `--for` bound, which is not a
+    failure: the run continues. `GONE` is a launched process that exited without a record. An
+    interrupt is the operator, which is an ordinary ending too.
     """
-    notifier = notify.build(getattr(args, "notify", False))
+    launched = proc is not None
+
+    def keep_following():
+        out.write("state: %s\n" % store.dir)
+        out.write("follow it again: relay tail %s\n" % args.manifest)
+
     try:
         outcome = tail_module.follow(
             manifest, store, lambda line: out.write(line + "\n"), floor=floor,
             deadline_seconds=getattr(args, "for_seconds", None),
-            phases_only=getattr(args, "phases", False), notifier=notifier,
-            runner_alive=runner_alive)
+            phases_only=getattr(args, "phases", False),
+            notifier=notify.build(getattr(args, "notify", False)),
+            runner_alive=(lambda: proc.poll() is None) if launched else None)
     except KeyboardInterrupt:
         # The operator stopping a follower is an ordinary ending, not a fault, and the runner is
         # in its own session so this never reached it (R49).
         out.write("\n")
         out.write("stopped following; the run continues\n")
-        out.write("follow it again: relay tail %s\n" % args.manifest)
+        keep_following()
         return EXIT_OK
     if outcome is tail_module.GONE:
         out.write("the runner exited without writing a terminal record; read %s\n"
                   % store.path("runner.log"))
-        code = proc.returncode if proc is not None else None
-        return code if code else EXIT_CONFIG
+        return proc.returncode or EXIT_CONFIG
     if outcome is None:
         out.write("still running after %s second(s); the run continues\n" % args.for_seconds)
-        out.write("state: %s\n" % store.dir)
-        out.write("follow it again: relay tail %s\n" % args.manifest)
+        keep_following()
         return EXIT_OK
-    if with_summary:
+    if launched:
         out.write(summary.render(summary.build(manifest, store)) + "\n")
     return EXIT_HALTED if outcome == contracts.RUN_HALTED else EXIT_OK
 
