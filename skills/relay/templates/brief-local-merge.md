@@ -60,7 +60,13 @@ status: complete
 blockers:
 changed_files:
 plan_path: <the plan path from step 2>
+learnings:
 ```
 
 `status` is one of `complete`, `blocked`, or `failed`. List one blocker per line under
-`blockers:` when there are any.
+`blockers:` when there are any. Under `learnings:`, judge whether this task found something a
+future session would get wrong without knowing it: a cause that was not where it looked, a
+contract or seam whose rules are not visible in the code, a decision reversed with a reason, or a
+trap that cost real time. Leave it empty on an ordinary run rather than filling it by reflex, and
+write it as plain prose with no colon led sub header line (`Cause:`, `Fix:`), since a line shaped
+that way is read as the start of a new field.
