@@ -8,11 +8,12 @@ import json
 import os
 import tempfile
 import textwrap
+import time
 import unittest
 
 import _paths
 import _repo
-from relay import contracts, gitread, manifest as mf, run as runner, state, verify
+from relay import contracts, gitread, gitwrite, launch, manifest as mf, run as runner, state, verify
 
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
 
@@ -835,3 +836,131 @@ class ContinuePastHalt(RunCase):
         self.assertEqual(record["halt_evidence"]["resume"]["check"], "head_equals_remote")
         self.assertFalse(record.get("continued_past"))
         self.assertIsNone(self.store().get("T-3"))
+
+
+class ContinuePastGuards(RunCase):
+    """_continue_past directly: the two refusals that never reach the disposition, and the two
+    exception paths that must halt safely rather than escape the loop. Review findings: a
+    stranded task branch from an earlier continued-past halt must not be stepped over again
+    (silently repeating "completed" forever), and the checkout inside the disposition must not
+    fire once the lease is gone."""
+
+    def cfg(self, store=None):
+        env = launch.child_env(self.manifest, self.base_env(), self.home)
+        allowed = tuple(mf.completed_allowed_paths(self.manifest, mf.docs_root_for(self.repo)))
+        return runner._Run(self.manifest, None, store or self.store(), self.repo, "main", env,
+                           self.base_env(), self.home, None, False, {}, {}, time.time, allowed)
+
+    def halt(self, evidence=None):
+        return runner._Halt("T-1", contracts.HALT_UNCLEAN_EXIT, "pre flight refused",
+                            evidence or {})
+
+    def opt_in(self):
+        text = MANIFEST.replace("__REPO__", self.repo) + "\n[on_halt]\ncontinue_past_task_halt = true\n"
+        with open(self.manifest_path, "w") as handle:
+            handle.write(text)
+        self.manifest = mf.load(self.manifest_path)
+
+    def test_a_no_task_branch_refusal_never_reaches_the_disposition(self):
+        self.opt_in()
+        store = self.store()
+        store.acquire()
+        h = self.halt({"branch": "relay/T-1", "check": "no_task_branch"})
+        self.assertFalse(runner._continue_past(self.cfg(store), h))
+        self.assertEqual(h.evidence["resume"], {"check": "no_task_branch"})
+
+    def test_a_lost_lease_refuses_before_the_checkout(self):
+        self.opt_in()
+        store = self.store()
+        store.acquire()
+        other = state.StateStore(os.path.join(self.tmp.name, "other.toml"), self.repo,
+                                 home=self.home, pid=424242)
+        with open(os.path.join(self.tmp.name, "other.toml"), "w") as handle:
+            handle.write("# a second manifest naming the same repo\n")
+        store.release()
+        self.assertTrue(other.acquire().ok)
+        h = self.halt({"branch": "relay/T-1", "check": "tree_clean"})
+        self.assertFalse(runner._continue_past(self.cfg(store), h))
+        self.assertEqual(h.evidence["resume"], {"check": "lease_lost"})
+        other.release()
+
+    def test_a_git_error_from_the_disposition_halts_rather_than_escaping(self):
+        self.opt_in()
+        store = self.store()
+        store.acquire()
+
+        def explode(repo, default_branch, ops=None, task_id=None, env=None):
+            raise gitread.GitError(["git", "checkout", "main"], 128, "bad ref main")
+
+        original = gitwrite.resume_disposition
+        gitwrite.resume_disposition = explode
+        try:
+            h = self.halt({"branch": "relay/T-1", "check": "tree_clean"})
+            self.assertFalse(runner._continue_past(self.cfg(store), h))
+        finally:
+            gitwrite.resume_disposition = original
+        self.assertEqual(h.evidence["resume"]["check"], "git_error")
+        self.assertIn("bad ref main", h.evidence["resume"]["stderr"])
+
+    def test_an_unexpected_exception_from_the_disposition_halts_rather_than_escaping(self):
+        self.opt_in()
+        store = self.store()
+        store.acquire()
+
+        def explode(repo, default_branch, ops=None, task_id=None, env=None):
+            raise RuntimeError("the disposition blew up")
+
+        original = gitwrite.resume_disposition
+        gitwrite.resume_disposition = explode
+        try:
+            h = self.halt({"branch": "relay/T-1", "check": "tree_clean"})
+            self.assertFalse(runner._continue_past(self.cfg(store), h))
+        finally:
+            gitwrite.resume_disposition = original
+        self.assertEqual(h.evidence["resume"]["check"], "unexpected_error")
+        self.assertEqual(h.evidence["resume"]["error_type"], "RuntimeError")
+
+
+class ContinuePastWithoutRepair(RunCase):
+    """The end-to-end regression for the bug the adversarial and correctness reviews both
+    found: a continued-past task's own branch is never deleted by this feature, so unless the
+    operator repairs it by hand (as they already must for any halt), the next run's pre flight
+    refuses it on no_task_branch. That refusal must stop the run, not repeat "continued past"
+    forever while reporting completed."""
+
+    def test_a_second_run_with_the_branch_still_in_place_halts_instead_of_looping_green(self):
+        text = MANIFEST.replace("__REPO__", self.repo).replace(
+            'command = ["true"]', 'command = %s' % json.dumps(["bash", "-c", GATE_REFUSES_SH % "src/t_2.py"]))
+        text += "\n[on_halt]\ncontinue_past_task_halt = true\n"
+        with open(self.manifest_path, "w") as handle:
+            handle.write(text)
+        self.manifest = mf.load(self.manifest_path)
+
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_success("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+        first = self.go()
+        self.assertEqual(first.exit_code, runner.EXIT_OK, first.message)
+        self.assertTrue(self.store().get("T-2")["continued_past"])
+        self.assertTrue(gitread.branch_exists(self.repo, "relay/T-2"))
+
+        second = self.go()
+        self.assertEqual(second.exit_code, runner.EXIT_HALTED, second.message)
+        self.assertEqual(second.halt_task, "T-2")
+        record = self.store().get("T-2")
+        self.assertEqual(record["halt_evidence"]["resume"], {"check": "no_task_branch"})
+        # Unchanged from before this feature existed: the operator's repair is to delete the
+        # stranded branch and fix what refused the gate, exactly as ResumeAfterHalt already
+        # proves for a full-stop halt.
+        _repo.git(self.repo, "branch", "-D", "relay/T-2")
+        with open(self.manifest_path, "w") as handle:
+            handle.write(MANIFEST.replace("__REPO__", self.repo)
+                        + "\n[on_halt]\ncontinue_past_task_halt = true\n")
+        self.manifest = mf.load(self.manifest_path)
+        self.task_success("T-2")
+        self.closeout_landed("T-2")
+        third = self.go()
+        self.assertEqual(third.exit_code, runner.EXIT_OK, third.message)
+        self.assertEqual(self.store().get("T-2")["status"], contracts.STATUS_LANDED)

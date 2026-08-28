@@ -47,8 +47,10 @@ task activity, `--for <seconds>` stops following at a bound and leaves the run g
 `--notify` fires a macOS notification on each phase event. A phase event is a task's log starting,
 a task's status moving, or the run reaching a terminal record.
 
-Exit codes: 0 fine, 1 the manifest or environment is wrong, 2 the run halted, 3 another runner
-holds the lease.
+Exit codes: 0 the run reached the end of the manifest, 1 the manifest or environment is wrong,
+2 the run halted, 3 another runner holds the lease. Under `on_halt.continue_past_task_halt`, 0
+can still mean one or more tasks halted and were stepped over: read `summary`'s check-by-hand
+list rather than the exit code alone.
 
 ## Author a manifest
 

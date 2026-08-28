@@ -311,7 +311,7 @@ class ContinuedPastChecks(CauseLineTable):
 
     def halted(self, task_id, continued_past):
         self.store.upsert(task_id, status=contracts.STATUS_HALTED,
-                          halt_class=contracts.HALT_GATE_REFUSED,
+                          halt_class=contracts.HALT_GATE_REFUSED, branch="relay/" + task_id,
                           halt_evidence={"branch": "main", "sha": "a" * 40, "log": "/gate.log"},
                           halt_message="gate refused", continued_past=continued_past,
                           findings=[], wall_seconds=1.0, active_seconds=1.0)
@@ -328,6 +328,7 @@ class ContinuedPastChecks(CauseLineTable):
         text = data["pending_checks"][0]["text"]
         self.assertIn("T-2", text)
         self.assertIn(contracts.HALT_GATE_REFUSED, text)
+        self.assertIn("relay/T-2", text, "the branch a rerun's own pre-flight will refuse on")
         self.assertTrue(data["tasks"][0]["continued_past"])
         self.assertIn(text, summary.render(data))
 

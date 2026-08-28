@@ -105,11 +105,15 @@ def _pending_checks(entries, run_status, halt_task, halt_class, state_dir):
                                    % (task_id, entry["excluded_reason"] or "no reason recorded")})
         if entry["status"] == contracts.STATUS_HALTED and entry["continued_past"]:
             # Issue #15. The run stepped over this task, so the halted line at the bottom
-            # of this list never names it; it needs its own.
+            # of this list never names it; it needs its own. The retry the record promises
+            # needs the branch named here too: it is what a rerun's own pre-flight will
+            # refuse on until the operator deletes it (the resume disposition never does).
+            branch_note = (" %s is still in place; delete it first." % entry["branch"]
+                          if entry["branch"] else "")
             checks.append({"kind": "continued_past", "task": task_id,
-                           "text": "%s halted with class %s and the run continued past it. "
-                                   "Repair by hand, then run again to resume."
-                                   % (task_id, entry["class"])})
+                           "text": "%s halted with class %s and the run continued past it."
+                                   "%s Repair by hand, then run again to resume."
+                                   % (task_id, entry["class"], branch_note)})
         if entry["status"] == contracts.STATUS_BLOCKED and entry["branch"]:
             checks.append({"kind": "stranded_branch", "task": task_id,
                            "text": "%s left %s in place. Keep or delete it by hand."
