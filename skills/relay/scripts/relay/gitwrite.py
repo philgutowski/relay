@@ -404,6 +404,35 @@ def timeout_disposition(repo, default_branch, branch):
     return TimeoutDisposition("halt", tree, current)
 
 
+def resume_disposition(repo, default_branch, ops=None, task_id=None, env=None):
+    """Issue #15: after a halt the manifest may continue past, could the next task start from
+    here? The same three reads pre-flight makes, in the order that keeps evidence intact: a
+    dirty tree refuses before any checkout, so whatever the halted task left is exactly where
+    it left it; a clean tree on the task branch is returned to the default, as `blocked_path`
+    does for a blocked task; then the default has to sit at the remote's head, which is the
+    check that tells a failed gate (default untouched) from a failed push (default ahead).
+
+    Never resets, stashes, or deletes. A repo that needs that is the operator's to repair, and
+    the refusal names the check so the record can say why the run stopped. The task branch is
+    left in place either way; pre-flight checks only the next task's own branch name."""
+    evidence = {}
+    porcelain = gitread.status_porcelain(repo)
+    evidence["tree"] = porcelain.strip().splitlines()[:10]
+    if porcelain.strip():
+        return PreflightResult(False, "tree_clean", evidence)
+    branch = gitread.current_branch(repo)
+    evidence["branch"] = branch
+    if branch != default_branch:
+        checkout(repo, default_branch, ops=ops, task_id=task_id, env=env)
+        evidence["checked_out_from"] = branch
+    local = gitread.rev_parse(repo, default_branch)
+    remote = gitread.rev_parse(repo, "origin/" + default_branch)
+    evidence.update(local_sha=local, remote_sha=remote)
+    if local is None or remote is None or local != remote:
+        return PreflightResult(False, "head_equals_remote", evidence)
+    return PreflightResult(True, None, evidence)
+
+
 def path_allowed(path, allowed_paths):
     """An entry ending in `/` is a directory prefix; anything else is an exact file path."""
     for entry in allowed_paths:

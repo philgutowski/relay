@@ -457,3 +457,54 @@ class GateProcessGroup(TailBase):
         self.assertEqual(result.returncode, 0)
         with open(self.gate_log) as handle:
             self.assertIn("gate ran fine", handle.read())
+
+
+class ResumeDisposition(TailBase):
+    """The runner's question after a halt: could the next task start from here? Composed from
+    the same reads pre-flight makes, plus the checkout back to the default that blocked_path
+    already performs. Never resets, stashes, or deletes anything."""
+
+    def disposition(self):
+        return gitwrite.resume_disposition(self.repo, "main", ops=self.ops, task_id=self.task_id)
+
+    def test_a_clean_task_branch_in_sync_with_the_remote_is_allowed_and_returns_to_default(self):
+        self.make_task_commit()
+        result = self.disposition()
+        self.assertTrue(result.ok, result.evidence)
+        self.assertEqual(gitread.current_branch(self.repo), "main")
+        self.assertTrue(gitread.branch_exists(self.repo, self.branch), "the task branch was removed")
+
+    def test_a_clean_default_already_in_sync_is_allowed_without_a_checkout(self):
+        result = self.disposition()
+        self.assertTrue(result.ok, result.evidence)
+        self.assertFalse(any(entry["op"] == "checkout" for entry in self.ops.entries))
+
+    def test_a_dirty_tree_on_the_task_branch_refuses_and_leaves_the_tree_alone(self):
+        self.make_task_commit()
+        with open(os.path.join(self.repo, "half-written.py"), "w") as handle:
+            handle.write("incomplete\n")
+        result = self.disposition()
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failed, "tree_clean")
+        self.assertEqual(gitread.current_branch(self.repo), self.branch)
+        self.assertTrue(os.path.exists(os.path.join(self.repo, "half-written.py")))
+        self.assertFalse(any(entry["op"] == "checkout" for entry in self.ops.entries))
+
+    def test_a_dirty_tree_on_the_default_refuses(self):
+        with open(os.path.join(self.repo, "scratch.txt"), "w") as handle:
+            handle.write("in progress\n")
+        result = self.disposition()
+        self.assertEqual(result.failed, "tree_clean")
+
+    def test_a_default_ahead_of_the_remote_refuses_naming_both_shas(self):
+        commit_on_branch(self.repo, "main", {"ahead.txt": "unpushed\n"}, "unpushed work")
+        result = self.disposition()
+        self.assertEqual(result.failed, "head_equals_remote")
+        self.assertEqual(result.evidence["remote_sha"], self.baseline)
+        self.assertNotEqual(result.evidence["local_sha"], self.baseline)
+
+    def test_a_stranded_branch_from_another_task_does_not_matter(self):
+        commit_on_branch(self.repo, "relay/T-9", {"src/other.py": "x = 1\n"}, "other task", base="main")
+        _repo.git(self.repo, "checkout", "-q", "main")
+        result = self.disposition()
+        self.assertTrue(result.ok, result.evidence)
