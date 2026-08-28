@@ -44,6 +44,17 @@ than any Task timeout, so a crashed Runner never blocks a repository for the len
 the cost of that choice is that every long operation a Runner performs has to keep renewing, and
 one that does not is how a Runner ends up acting without the claim it thinks it holds.
 
+### Follower
+A reader attached to a running Manifest, which decodes the Task processes' output and reports the
+run's phase events. It takes no Lease, decides nothing, and writes nothing, so a Follower can be
+started, stopped, and started again beside a live Runner without touching it.
+
+A Follower reports on a run rather than participating in one, so a run with no Follower is not
+diminished, only unobserved. It is also the only component that notifies, which means the same
+run halting with nobody following it announces itself to nobody. A Follower launched beside a run
+starts from a floor taken before that run began, because the state directory outlives any one run
+and its Task logs are appended to rather than replaced.
+
 ### Manifest
 The single file, one per project, carrying every project-specific fact a Runner needs: the Task
 list, the Tracker adapter to use, the Shipping mode, the permission allowlist and disallow list,

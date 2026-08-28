@@ -24,7 +24,7 @@ Resolve `<runner>` once, from this skill's own directory as the harness gave it 
 <runner> = <this skill's directory>/scripts/relay_cli.py
 ```
 
-The seven verbs:
+The seven verbs, with the follower options on the two that follow:
 
 ```bash
 python3 <runner> validate <manifest>            # check the manifest and its target repo
@@ -32,6 +32,7 @@ python3 <runner> validate <manifest> --list     # the same, plus the tracker's c
 python3 <runner> run <manifest>                 # run to completion or to a halt
 python3 <runner> run <manifest> --retry-blocked # the same, retrying records that read blocked
 python3 <runner> run <manifest> --detach        # the same, in its own session, logged to the state dir
+python3 <runner> run <manifest> --follow        # detach, then follow it here; implies --detach
 python3 <runner> status <manifest>              # what the run is doing; never takes the lease
 python3 <runner> tail <manifest>                # follow the tasks' activity decoded; never takes the lease
 python3 <runner> summary <manifest>             # the run summary as text
@@ -40,6 +41,11 @@ python3 <runner> verify <manifest> <task-id>    # re-run the landing verdict for
 python3 <runner> lease <manifest>               # who holds the lease
 python3 <runner> lease <manifest> --break       # clear it; operator's explicit call only
 ```
+
+`run --follow` and `tail` share three options: `--phases` prints phase events without the decoded
+task activity, `--for <seconds>` stops following at a bound and leaves the run going, and
+`--notify` fires a macOS notification on each phase event. A phase event is a task's log starting,
+a task's status moving, or the run reaching a terminal record.
 
 Exit codes: 0 fine, 1 the manifest or environment is wrong, 2 the run halted, 3 another runner
 holds the lease.
@@ -95,28 +101,40 @@ valid, and do not launch when the operator has said to stop before launch.
 
 ## Launch
 
-The runner outlives this session, so start it detached and stop. Do not wait on it.
+Launch and then stay with it. The operator should not have to open a second terminal to find out
+what their own run is doing.
 
 ```bash
-python3 <runner> run <manifest> --detach
+python3 <runner> run <manifest> --follow --phases --notify --for 540
 ```
 
-`--detach` starts the run in its own session, so a harness reaping this tool call's process
-group cannot end it, and logs to `runner.log` in the state directory. On macOS it wraps the run
-in `caffeinate -i` so the host stays awake; there is no `setsid` binary on macOS, so do not
-reach for one. Lid close is not supported: the machine must stay open for the whole run.
+Run that with your harness's command timeout set to its maximum, 600000 ms. The `--for 540` bound
+is nine minutes, chosen to end the follow inside that cap rather than be killed at it.
 
-A few seconds later, confirm it took the lease:
+`--follow` implies `--detach`, which starts the run in its own session, so a harness reaping this
+tool call's process group cannot end it, and logs to `runner.log` in the state directory. On macOS
+it wraps the run in `caffeinate -i` so the host stays awake; there is no `setsid` binary on macOS,
+so do not reach for one. Lid close is not supported: the machine must stay open for the whole run.
 
-```bash
-python3 <runner> status <manifest>
-```
+`--phases` is what makes this usable in a session. Without it the follower prints every tool call
+every task makes, which is right in a terminal and would consume this session's context in
+minutes. `--notify` reaches the operator when they have walked away.
 
-Then tell the operator three paths and stop: the state directory, the runner log
-(`runner.log` inside it), and the per task output log for the task now running. The state file is
-the contract between the runner and any later session, including yours.
+Three endings, and what to say for each:
 
-Tell them `tail` is how they watch it, in their own terminal rather than in this session:
+- **A run summary.** The run finished inside the bound. Explain it the way "Explain a halt" below
+  says, if it halted.
+- **`still running after 540 second(s)`.** The bound was reached and the run continues. Report
+  where it has got to, then hand the operator the bare `tail` command for their own terminal, and
+  say that `Ctrl+C` there stops the follower and leaves the run alive. Do not launch again.
+- **`the runner exited without writing a terminal record`.** The run never started, usually a held
+  lease or an invalid manifest. Read the runner log the line names and say what it was.
+
+The state directory, `runner.log` inside it, and the per task output logs are the paths a later
+session needs. The state file is the contract between the runner and any later session, including
+yours.
+
+The bare follower is for the operator's own terminal:
 
 ```bash
 python3 <runner> tail <manifest>
@@ -124,7 +142,8 @@ python3 <runner> tail <manifest>
 
 It follows the tasks in order, decoded, and exits when the run reaches a terminal record. Like
 `status` it takes no lease, so it is safe beside a live run, and `Ctrl+C` stops the follower
-without touching the runner. Do not run it yourself here: it does not return until the run ends.
+without touching the runner. Do not run it bare in this session: it has no bound, so it does not
+return until the run ends.
 
 ## Explain a halt
 
