@@ -179,6 +179,13 @@ The project's own mechanism that refuses a broken change independently of any ag
 such as a pre-push hook or continuous integration. Relay requires one to exist before it will run
 against a project, and verifies its presence rather than providing it.
 
+Those two forms are not interchangeable to the Runner, and the difference is where each spends its
+time. A gate wired into a pre-push hook runs inside the Runner's own push, so the gate's whole
+runtime is charged to that one command and has to fit whatever bound the push carries. A gate that
+runs after the push returns costs the Runner no time at all and is bounded separately, if at all.
+A project can therefore satisfy the requirement in either form and hand the Runner a very different
+problem.
+
 ### Qualifying properties
 The three conditions a project must meet before Relay can run against it: its Tasks are independent,
 the state carried between Tasks is durable in git or on the Tracker, and an External gate refuses
