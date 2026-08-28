@@ -56,6 +56,10 @@ cause that was not where it looked, a contract or seam whose rules are not visib
 a decision reversed with a reason, or a trap that cost real time. Routine work that taught
 nothing gets no document, and a blocked task is often where the best one is.
 
+The learnings the task process reported above are its own account, not a verdict: weigh them
+against what you see in the outcome, blockers, and findings, since the run may show more than
+the task noticed at the time, and an empty or reflexive entry there does not settle the question.
+
 If there is one, run exactly this:
 
     $compound_command
