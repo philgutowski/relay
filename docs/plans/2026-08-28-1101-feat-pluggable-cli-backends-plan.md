@@ -362,12 +362,12 @@ U7 is worth landing early even if a backend is later dropped, because it fixes a
 | U2 | Backend on the Task, default, and validation | `manifest.py`, `docs/examples/` | U1 |
 | U3 | Backend readiness preflight | `manifest.py`, `cli.py` | U2 |
 | U4 | Backend package and capability record | `backends/` | U1, U2 |
-| U5 | Launch seam per backend | `launch.py`, `run.py` | U4 |
+| U5 | Launch seam per backend | `launch.py`, `run.py`, `contracts.py` | U4 |
 | U6 | Evidence normalizers | `classify.py`, `tail.py`, `backends/` | U4, U5 |
 | U7 | Unreadable evidence is a Runner fault | `classify.py`, `run.py`, `contracts.py` | U6 |
 | U8 | Per-backend permission posture and skill form | `contracts.py`, `brief.py`, templates | U4, U6 |
 | U9 | Closeout on the Task's backend | `closeout.py`, `run.py` | U5, U8 |
-| U10 | Unenforced restrictions: record and bound | `run.py`, `classify.py`, `gitwrite.py` | U6, U9 |
+| U10 | Unenforced restrictions: record and bound | `run.py`, `classify.py`, `gitwrite.py`, `manifest.py` | U6, U9 |
 | U11 | Record and summary shape | `state.py`, `summary.py`, `contracts.py` | U5, U9 |
 | U12 | Test stubs for codex and grok | `tests/stub-claude/`, `tests/` | U5, U6 |
 | U13 | Rubric, skill, and docs | `SKILL.md`, `references/`, `README.md`, `CONCEPTS.md` | U2, U3, U10 |
