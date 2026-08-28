@@ -171,6 +171,11 @@ class PrTerminalTemplate(BriefCase):
         self.assertRegex(text, r"(?i)do not close")
         self.assertIn(contracts.LFG_TERMINAL_TOKEN, text)
 
+    def test_the_brief_asks_for_learnings_after_the_terminal_token(self):
+        text = self.render(self.pr_manifest_text(), name="pr.toml")
+        self.assertIn("Learnings:", text)
+        self.assertLess(text.index(contracts.LFG_TERMINAL_TOKEN), text.index("Learnings:"))
+
 
 class Determinism(BriefCase):
     def test_the_same_inputs_render_byte_identical_briefs(self):

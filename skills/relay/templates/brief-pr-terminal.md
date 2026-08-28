@@ -40,6 +40,10 @@ $blocked_followup
    opens the pull request.
 3. Stop when it prints its terminal token, `$lfg_token`. The runner reads the pull request and
    its checks itself; your report of them is not evidence.
+4. Before you stop, print one line: `Learnings: <one line, or "none">`. Use it for a cause that
+   was not where it looked, a contract or seam whose rules are not visible in the code, a
+   decision reversed with a reason, or a trap that cost real time. Print `Learnings: none` on an
+   ordinary run rather than filling it by reflex.
 
 ## If you cannot finish
 
