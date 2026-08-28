@@ -30,6 +30,10 @@ Blockers the task process reported:
 
 $blockers
 
+Learnings the task process reported:
+
+$learnings
+
 Denied tool calls the runner recorded in the task's transcript:
 
 $denials

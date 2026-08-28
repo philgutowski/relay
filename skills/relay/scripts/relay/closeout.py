@@ -171,6 +171,7 @@ def render(manifest, card, outcome, digest, comments, adapter, allowed_paths, la
         "timing": _timing_line(digest, wall_seconds, active_seconds),
         "gate": _gate_line(gate),
         "blockers": _bullets(envelope.get("blockers") or []),
+        "learnings": _bullets(envelope.get("learnings") or []),
         "denials": _bullets(_denial_lines(digest)),
         "findings": _bullets(_other_findings(digest)),
         "data_header": DATA_HEADER,
