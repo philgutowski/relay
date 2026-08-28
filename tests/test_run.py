@@ -687,3 +687,151 @@ class LeaseOwnership(RunCase):
         self.assertEqual(result.halt_class, contracts.HALT_RUNNER_CRASHED)
         self.assertEqual(gitread.rev_parse(self.repo, "origin/main"),
                          gitread.rev_parse(self.repo, "main"))
+
+
+GATE_REFUSES_SH = "test ! -e %s"
+
+PRE_PUSH_REFUSES_TASK = """#!/bin/bash
+# Refuse a push whose new commits mention the named task, and only that one.
+while read local_ref local_sha remote_ref remote_sha; do
+  if git log --format=%%s "$remote_sha..$local_sha" | grep -q "%s"; then
+    echo "hook refused the push of %s" >&2
+    exit 1
+  fi
+done
+exit 0
+"""
+
+
+class ContinuePastHalt(RunCase):
+    """Issue #15. With on_halt.continue_past_task_halt set, a halt contained to one task pauses
+    that task and the run goes on; a run scoped halt, or a repo the next task could not start
+    from, still stops the run exactly as before."""
+
+    def opt_in(self, gate=None):
+        text = MANIFEST.replace("__REPO__", self.repo)
+        text += "\n[on_halt]\ncontinue_past_task_halt = true\n"
+        if gate is not None:
+            text = text.replace('command = ["true"]', "command = %s" % json.dumps(list(gate)))
+        with open(self.manifest_path, "w") as handle:
+            handle.write(text)
+        self.manifest = mf.load(self.manifest_path)
+
+    def test_a_refused_gate_pauses_the_task_and_the_later_tasks_land(self):
+        self.opt_in(gate=["bash", "-c", GATE_REFUSES_SH % "src/t_2.py"])
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_success("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        records = self.store().records()
+        self.assertEqual(records["T-1"]["status"], contracts.STATUS_LANDED)
+        self.assertEqual(records["T-2"]["status"], contracts.STATUS_HALTED)
+        self.assertEqual(records["T-2"]["halt_class"], contracts.HALT_GATE_REFUSED)
+        self.assertTrue(records["T-2"]["continued_past"])
+        self.assertEqual(records["T-3"]["status"], contracts.STATUS_LANDED)
+        terminal = self.store().terminal()
+        self.assertEqual(terminal["run_status"], contracts.RUN_COMPLETED)
+        self.assertIsNone(terminal["halt_task"])
+        self.assertEqual(gitread.current_branch(self.repo), "main")
+        self.assertIn("relay/T-2", self.relay_branches(), "the paused task's branch was removed")
+
+    def test_a_dirty_timeout_still_stops_and_names_the_refused_check(self):
+        self.opt_in()
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.queue_entry("success.jsonl", DIRTY_AND_HANG_SH)
+        self.task_success("T-3")
+
+        outcome = self.go(timeout_overrides={"task_seconds": 2})
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED, outcome.message)
+        self.assertEqual(outcome.halt_task, "T-2")
+        record = self.store().get("T-2")
+        self.assertEqual(record["halt_class"], contracts.HALT_TIMEOUT)
+        self.assertFalse(record.get("continued_past"))
+        self.assertEqual(record["halt_evidence"]["resume"]["check"], "tree_clean")
+        self.assertIsNone(self.store().get("T-3"))
+
+    def test_opted_out_a_halt_records_no_disposition(self):
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.queue_entry("success.jsonl", DIRTY_AND_HANG_SH)
+        outcome = self.go(timeout_overrides={"task_seconds": 2})
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
+        record = self.store().get("T-2")
+        self.assertNotIn("resume", record["halt_evidence"])
+        self.assertFalse(record.get("continued_past"))
+
+    def test_a_run_scoped_halt_stops_without_consulting_the_repo(self):
+        class Exploding:
+            def __getattr__(self, name):
+                raise RuntimeError("the adapter blew up on %s" % name)
+
+        self.opt_in()
+        outcome = self.go(adapter=Exploding())
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
+        self.assertEqual(outcome.halt_class, contracts.HALT_UNEXPECTED_ERROR)
+        record = self.store().get("T-1")
+        self.assertNotIn("resume", record["halt_evidence"])
+        self.assertFalse(record.get("continued_past"))
+
+    def test_two_paused_tasks_around_a_landed_one_still_complete_the_run(self):
+        self.opt_in(gate=["bash", "-c", "test ! -e src/t_1.py -a ! -e src/t_3.py"])
+        self.task_success("T-1")
+        self.task_success("T-2")
+        self.closeout_landed("T-2")
+        self.task_success("T-3")
+
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        records = self.store().records()
+        for task_id in ("T-1", "T-3"):
+            self.assertEqual(records[task_id]["status"], contracts.STATUS_HALTED)
+            self.assertTrue(records[task_id]["continued_past"])
+        self.assertEqual(records["T-2"]["status"], contracts.STATUS_LANDED)
+        self.assertEqual(self.store().terminal()["run_status"], contracts.RUN_COMPLETED)
+
+    def test_a_paused_task_is_retried_on_the_next_run_with_no_new_flag(self):
+        self.opt_in(gate=["bash", "-c", GATE_REFUSES_SH % "src/t_2.py"])
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_success("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+        first = self.go()
+        self.assertEqual(first.exit_code, runner.EXIT_OK, first.message)
+
+        # The operator repairs the gate and discards the stranded branch, as for any halt.
+        _repo.git(self.repo, "branch", "-D", "relay/T-2")
+        self.opt_in()
+        self.task_success("T-2")
+        self.closeout_landed("T-2")
+        second = self.go()
+
+        self.assertEqual(second.exit_code, runner.EXIT_OK, second.message)
+        record = self.store().get("T-2")
+        self.assertEqual(record["status"], contracts.STATUS_LANDED)
+        self.assertFalse(record.get("continued_past"))
+
+    def test_a_push_refused_after_the_merge_stops_because_the_default_is_ahead(self):
+        self.opt_in()
+        hook = os.path.join(self.repo, ".git", "hooks", "pre-push")
+        with open(hook, "w") as handle:
+            handle.write(PRE_PUSH_REFUSES_TASK % ("T-2", "T-2"))
+        os.chmod(hook, 0o755)
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_success("T-2")
+        self.task_success("T-3")
+
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED, outcome.message)
+        self.assertEqual(outcome.halt_task, "T-2")
+        record = self.store().get("T-2")
+        self.assertEqual(record["halt_class"], contracts.HALT_GATE_REFUSED)
+        self.assertEqual(record["halt_evidence"]["resume"]["check"], "head_equals_remote")
+        self.assertFalse(record.get("continued_past"))
+        self.assertIsNone(self.store().get("T-3"))

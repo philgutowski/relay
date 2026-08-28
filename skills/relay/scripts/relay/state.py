@@ -33,7 +33,7 @@ RECORD_FIELDS = (
     "status", "baseline_sha", "baseline_tracker_status", "baseline_comment_id", "session_id",
     "branch", "landing_ref", "verify", "halt_class", "halt_evidence", "findings", "closeout",
     "started_at", "ended_at", "wall_seconds", "active_seconds", "transcript_path", "brief_sha256",
-    "excluded_reason",
+    "excluded_reason", "continued_past",
 )
 
 
