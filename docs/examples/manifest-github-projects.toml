@@ -54,6 +54,11 @@ editors = "Only the repository's own maintainers can edit these issues or commen
 merge_partial = false
 open_followup = true
 
+[on_halt]
+# Off, the first halt of any class stops the run. On, a halt contained to one task
+# pauses that task and the later independent tasks keep running (issue #15).
+continue_past_task_halt = false
+
 [[tasks]]
 id = "412"
 model = "opus"
