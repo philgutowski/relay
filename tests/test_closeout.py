@@ -360,7 +360,7 @@ class TranscriptTextIsData(CloseoutCase):
 
 
 class LearningsInBrief(CloseoutCase):
-    """T-7: the task's own reported learnings, rendered next to blockers so ce-compound's
+    """R8, R9: the task's own reported learnings, rendered next to blockers so ce-compound's
     non-interactive judgment sees them without ever reading the task transcript."""
 
     def carrying(self, learning):

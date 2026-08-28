@@ -235,8 +235,8 @@ class ParagraphBlockers(unittest.TestCase):
 
 
 class LearningsField(unittest.TestCase):
-    """T-7: the envelope's fifth, optional key. Parsed the same way as blockers and changed_files,
-    only ever present when an envelope was found at all."""
+    """R5, R6, R7: the envelope's fifth, optional key. Parsed the same way as blockers and
+    changed_files, only ever present when an envelope was found at all."""
 
     def test_a_bulleted_learning_is_captured(self):
         env = classify.parse_envelope(
