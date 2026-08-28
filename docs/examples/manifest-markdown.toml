@@ -55,6 +55,11 @@ editors = "Only the operator's own account edits tasks.md, and it is reviewed on
 merge_partial = true
 open_followup = false
 
+[on_halt]
+# Off, the first halt of any class stops the run. On, a halt contained to one task
+# pauses that task and the later independent tasks keep running (issue #15).
+continue_past_task_halt = false
+
 [[tasks]]
 id = "T-1"
 model = "sonnet"

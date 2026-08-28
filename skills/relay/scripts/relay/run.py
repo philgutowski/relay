@@ -167,8 +167,7 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
                 halt = _Halt(task.id, contracts.HALT_UNCLEAN_EXIT,
                              "a git command failed while handling %s: %s" % (task.id, exc),
                              {"task": task.id, "branch": gitwrite.task_branch_for(task.id),
-                              "args": exc.args_list, "returncode": exc.returncode,
-                              "stderr": (exc.stderr or "")[-2000:]})
+                              **_git_error_fields(exc)})
             except Exception as exc:
                 # A defect or an unanticipated library error. It still stops the way every
                 # other stop does, because an operator cannot act on a traceback.
@@ -180,13 +179,23 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
             else:
                 store.set_cursor(index + 1)
                 continue
+            # Issue #15: a halt contained to one task need not stop the rest. Decided from
+            # the repo, not the class, because the same class covers a failed gate command
+            # (default untouched) and a failed push after the merge (default ahead of origin).
+            continued = _continue_past(config, halt)
             # The message is the raiser's own sentence, kept beside the class's template
             # line. First live run: a retry refused under R48 halted as unclean_exit and the
             # summary said "left the tree dirty" about a clean tree, because the sentence that
             # explained the refusal was printed to stdout and never written down.
             store.upsert(halt.task_id, status=contracts.STATUS_HALTED,
                          halt_class=halt.halt_class, halt_evidence=halt.evidence,
-                         halt_message=halt.message)
+                         halt_message=halt.message, continued_past=continued)
+            if continued:
+                if stream is not None:
+                    stream("%s halted with class %s; continuing past it"
+                           % (halt.task_id, halt.halt_class))
+                store.set_cursor(index + 1)
+                continue
             store.write_terminal(contracts.RUN_HALTED, halt.task_id, halt.halt_class,
                                  contracts.CLI_VERSION_TESTED,
                                  cli_version_observed=observed_cli_version)
@@ -210,6 +219,58 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
             except Exception:
                 pass
         store.release()
+
+
+def _git_error_fields(exc):
+    """The evidence a GitError contributes wherever one is recorded."""
+    return {"args": exc.args_list, "returncode": exc.returncode,
+            "stderr": (exc.stderr or "")[-2000:]}
+
+
+def _continue_past(cfg, halt):
+    """Whether the run goes on past this halt (issue #15). True only when the manifest opted
+    in, the class is not run scoped, and the repo, returned to the default branch, is one the
+    next task's pre flight would accept. A refusal is recorded on the halt's evidence under
+    `resume` so the record says why the run stopped rather than continuing.
+
+    A failure inside the disposition is itself a stop: the evidence names it beside the
+    original halt, and the class stays the original's, because that is what the operator has
+    to repair first. Any exception, not only GitError: this runs outside the per task handler
+    that turns the unexpected into a named class, and a hung checkout raising TimeoutExpired
+    here would otherwise escape the loop as a traceback.
+
+    Two refusals never reach the disposition. A `no_task_branch` pre-flight refusal is this
+    same task's own branch from an earlier continued-past halt still in the way; nothing here
+    deletes it (Scope Boundaries), so allowing continuation would repeat the identical refusal
+    on every later run while the record keeps reading `continued_past` and the run keeps
+    reading `completed` -- a review finding on the first draft of this function caught it
+    passing on that exact case. And a lease already lost means the checkout below would mutate
+    a repo another runner may hold, the one mutation in this path with no heartbeat guard the
+    way `_merge_route`'s tail already has one."""
+    if not cfg.manifest.on_halt.continue_past_task_halt:
+        return False
+    if halt.halt_class in contracts.RUN_SCOPED_HALT_CLASSES:
+        return False
+    if halt.evidence.get("check") == "no_task_branch":
+        halt.evidence["resume"] = {"check": "no_task_branch"}
+        return False
+    if not cfg.store.heartbeat():
+        halt.evidence["resume"] = {"check": "lease_lost"}
+        return False
+    try:
+        result = gitwrite.resume_disposition(cfg.repo, cfg.default, ops=cfg.store,
+                                             task_id=halt.task_id, env=cfg.env)
+    except gitread.GitError as exc:
+        halt.evidence["resume"] = {"check": "git_error", **_git_error_fields(exc)}
+        return False
+    except Exception as exc:
+        halt.evidence["resume"] = {"check": "unexpected_error",
+                                   "error_type": type(exc).__name__, "error": str(exc)[:500]}
+        return False
+    if result.ok:
+        return True
+    halt.evidence["resume"] = dict(result.evidence, check=result.failed)
+    return False
 
 
 def _one_task(cfg, task):
@@ -279,7 +340,8 @@ def _one_task(cfg, task):
     store.upsert(task.id, status=contracts.STATUS_RUNNING, baseline_sha=baseline_sha,
                  baseline_tracker_status=card_status.get("status"),
                  baseline_comment_id=baseline_comment_id, branch=branch,
-                 brief_sha256=brief_sha, started_at=None, halt_class=None, findings=[])
+                 brief_sha256=brief_sha, started_at=None, halt_class=None, findings=[],
+                 continued_past=False)
 
     launched = launch.launch(
         manifest, task, brief_text, store.path("logs", task.id + ".stdout.log"),

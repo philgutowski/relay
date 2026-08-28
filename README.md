@@ -88,7 +88,9 @@ record.
 
 The run halts rather than continuing past an outcome it cannot confirm, and the summary names the
 halt class, its cause, and what a human still has to check. Repair by hand, then run again: the
-runner re-verifies what halted and resumes at the first task that did not land.
+runner re-verifies what halted and resumes at the first task that did not land. A manifest may opt
+into continuing past a halt contained to one task instead (`on_halt.continue_past_task_halt`); the
+summary still lists that task as a check-by-hand item, and the same repair-and-rerun path applies.
 
 ## Where things are
 

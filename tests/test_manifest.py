@@ -77,6 +77,20 @@ class CompleteManifest(ManifestCase):
         self.assertIn("timeouts.task_minutes = 120", names)
         self.assertIn("closeout.model = 'sonnet'", names)
 
+    def test_on_halt_defaults_off_by_name_and_reads_true_when_set(self):
+        """Issue #15: continuing past a halt is opt in, and the default is named like every
+        other default so nothing applies silently (KTD11)."""
+        m = self.load()
+        self.assertFalse(m.on_halt.continue_past_task_halt)
+        result = mf.validate(m)
+        self.assertTrue(result.ok, result.errors)
+        self.assertIn("on_halt.continue_past_task_halt = False", result.defaults_applied)
+        m = self.load(self.base + "\n[on_halt]\ncontinue_past_task_halt = true\n")
+        self.assertTrue(m.on_halt.continue_past_task_halt)
+        result = mf.validate(m)
+        self.assertTrue(result.ok, result.errors)
+        self.assertFalse(any("on_halt" in d for d in result.defaults_applied))
+
     def test_frozen(self):
         m = self.load()
         with self.assertRaises(Exception):

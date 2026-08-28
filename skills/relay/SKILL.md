@@ -47,8 +47,10 @@ task activity, `--for <seconds>` stops following at a bound and leaves the run g
 `--notify` fires a macOS notification on each phase event. A phase event is a task's log starting,
 a task's status moving, or the run reaching a terminal record.
 
-Exit codes: 0 fine, 1 the manifest or environment is wrong, 2 the run halted, 3 another runner
-holds the lease.
+Exit codes: 0 the run reached the end of the manifest, 1 the manifest or environment is wrong,
+2 the run halted, 3 another runner holds the lease. Under `on_halt.continue_past_task_halt`, 0
+can still mean one or more tasks halted and were stepped over: read `summary`'s check-by-hand
+list rather than the exit code alone.
 
 ## Author a manifest
 
@@ -58,9 +60,12 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
 1. Ask which repo and which tracker (jira, github, or markdown), then write a draft manifest and
    run `validate <manifest> --list` to read the candidate tasks back.
 2. Confirm with the operator, one question at a time: which tasks to include and in what order;
-   the model and effort for each; any task to exclude and why; and the two degraded path
-   answers, `on_blocked.merge_partial` and `on_blocked.open_followup`. A value the operator
-   gives goes into the manifest verbatim. Recommend when asked; never substitute your
+   the model and effort for each; any task to exclude and why; and the three degraded path
+   answers, `on_blocked.merge_partial`, `on_blocked.open_followup`, and
+   `on_halt.continue_past_task_halt`. The third trades a mid run stop for throughput: on, a
+   halt contained to one task pauses that task and the later independent tasks keep running,
+   so several halts in a row surface only in the summary; off, the first halt stops the run.
+   A value the operator gives goes into the manifest verbatim. Recommend when asked; never substitute your
    recommendation for an answer they already gave, including timeouts and status names. The shipping mode is
    `local_merge`, where the runner merges and pushes. `pr_terminal` is named in the schema and
    refused by `validate`: the run loop has no pull request sequence, so every task under it

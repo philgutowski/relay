@@ -138,6 +138,15 @@ The Runner's classification of one Task process exit, drawn from a closed set an
 session transcript plus git and Tracker evidence. Every class carries the evidence its Cause line
 needs, so an operator learns why a Task did not land without reading a transcript.
 
+Three classes are run scoped and always stop the run, named in `contracts.RUN_SCOPED_HALT_CLASSES`:
+each puts something outside the failing Task in question, the remote, the Lease, or the Runner
+itself. Any other halt can be continued past when the Manifest opts in with
+`on_halt.continue_past_task_halt` and the repository, after the Runner returns it to the default
+branch, is one the next Task could start from: a clean tree at the remote's head. The Runner checks
+that rather than inferring it from the class, because one class can leave the repository usable or
+not. A Task continued past stays halted, is listed by the summary as a check by hand, and is retried
+on the next run like any other halt.
+
 ### Cause line
 The one sentence a run summary prints to say why a Task did not land, and the only diagnosis an
 operator who was not watching gets. Each is a fixed template belonging to a Halt class, filled from

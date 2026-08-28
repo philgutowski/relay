@@ -236,23 +236,35 @@ def reset_hard(repo, ref, ops=None, task_id=None, env=None):
 PREFLIGHT_CHECKS = ("tree_clean", "on_default", "head_equals_remote", "no_task_branch")
 
 
+def _tree_is_clean(repo, evidence):
+    """The `tree_clean` check, shared by pre-flight and the resume disposition. Records the
+    first ten status lines as evidence either way."""
+    porcelain = gitread.status_porcelain(repo)
+    evidence["tree"] = porcelain.strip().splitlines()[:10]
+    return not porcelain.strip()
+
+
+def _head_equals_remote(repo, default_branch, evidence):
+    """The `head_equals_remote` check, shared the same way. Both shas go into the evidence so
+    a refusal can name them."""
+    local = gitread.rev_parse(repo, default_branch)
+    remote = gitread.rev_parse(repo, "origin/" + default_branch)
+    evidence.update(local_sha=local, remote_sha=remote)
+    return local is not None and remote is not None and local == remote
+
+
 def preflight(repo, default_branch, task_branch, env=None):
     """R16: a task process starts from a clean tree on the default branch, in sync with the
     remote, with no pre-existing task branch. Returns the name of the first check that failed,
     which is what the summary prints and what the halted record carries."""
     evidence = {}
-    porcelain = gitread.status_porcelain(repo)
-    evidence["tree"] = porcelain.strip().splitlines()[:10]
-    if porcelain.strip():
+    if not _tree_is_clean(repo, evidence):
         return PreflightResult(False, "tree_clean", evidence)
     branch = gitread.current_branch(repo)
     evidence["branch"] = branch
     if branch != default_branch:
         return PreflightResult(False, "on_default", evidence)
-    local = gitread.rev_parse(repo, default_branch)
-    remote = gitread.rev_parse(repo, "origin/" + default_branch)
-    evidence.update(local_sha=local, remote_sha=remote)
-    if local is None or remote is None or local != remote:
+    if not _head_equals_remote(repo, default_branch, evidence):
         return PreflightResult(False, "head_equals_remote", evidence)
     if gitread.branch_exists(repo, task_branch):
         evidence["task_branch"] = task_branch
@@ -402,6 +414,30 @@ def timeout_disposition(repo, default_branch, branch):
     if tree == "clean" and current in (branch, default_branch):
         return TimeoutDisposition("blocked", tree, current)
     return TimeoutDisposition("halt", tree, current)
+
+
+def resume_disposition(repo, default_branch, ops=None, task_id=None, env=None):
+    """Issue #15: after a halt the manifest may continue past, could the next task start from
+    here? The same three reads pre-flight makes, in the order that keeps evidence intact: a
+    dirty tree refuses before any checkout, so whatever the halted task left is exactly where
+    it left it; a clean tree on the task branch is returned to the default, as `blocked_path`
+    does for a blocked task; then the default has to sit at the remote's head, which is the
+    check that tells a failed gate (default untouched) from a failed push (default ahead).
+
+    Never resets, stashes, or deletes. A repo that needs that is the operator's to repair, and
+    the refusal names the check so the record can say why the run stopped. The task branch is
+    left in place either way; pre-flight checks only the next task's own branch name."""
+    evidence = {}
+    if not _tree_is_clean(repo, evidence):
+        return PreflightResult(False, "tree_clean", evidence)
+    branch = gitread.current_branch(repo)
+    evidence["branch"] = branch
+    if branch != default_branch:
+        checkout(repo, default_branch, ops=ops, task_id=task_id, env=env)
+        evidence["checked_out_from"] = branch
+    if not _head_equals_remote(repo, default_branch, evidence):
+        return PreflightResult(False, "head_equals_remote", evidence)
+    return PreflightResult(True, None, evidence)
 
 
 def path_allowed(path, allowed_paths):

@@ -99,6 +99,14 @@ class OnBlocked:
 
 
 @dataclass(frozen=True)
+class OnHalt:
+    """Issue #15. Off, a halt of any class stops the run. On, a halt outside
+    contracts.RUN_SCOPED_HALT_CLASSES pauses that task and the run continues when the repo
+    passes gitwrite.resume_disposition."""
+    continue_past_task_halt: bool
+
+
+@dataclass(frozen=True)
 class Task:
     id: str
     model: str
@@ -119,6 +127,7 @@ class Manifest:
     gate: Gate
     qualifying: Qualifying
     on_blocked: OnBlocked
+    on_halt: OnHalt
     tasks: tuple
     raw: dict = field(repr=False, compare=False)
     defaults_applied: tuple = ()
@@ -175,6 +184,7 @@ def load(path):
     gate = raw["gate"]
     q = raw["qualifying"]
     ob = raw.get("on_blocked", {})
+    oh = raw.get("on_halt", {})
 
     project = Project(
         repo=os.path.expanduser(str(p.get("repo", ""))),
@@ -219,6 +229,9 @@ def load(path):
         merge_partial=bool(pick(ob, "on_blocked", "merge_partial", False)),
         open_followup=bool(pick(ob, "on_blocked", "open_followup", False)),
     )
+    on_halt = OnHalt(
+        continue_past_task_halt=bool(pick(oh, "on_halt", "continue_past_task_halt", False)),
+    )
     raw_tasks = raw.get("tasks", [])
     if not isinstance(raw_tasks, list) or not all(isinstance(entry, dict) for entry in raw_tasks):
         raise ManifestError("tasks must be an array of tables ([[tasks]]), not a single [tasks] table")
@@ -243,6 +256,7 @@ def load(path):
         gate=gate_obj,
         qualifying=qualifying,
         on_blocked=on_blocked,
+        on_halt=on_halt,
         tasks=tasks,
         raw=raw,
         defaults_applied=tuple(defaults),
