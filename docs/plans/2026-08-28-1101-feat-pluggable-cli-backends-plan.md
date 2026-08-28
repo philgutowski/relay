@@ -254,7 +254,7 @@ R25. A backend is recorded as enforcing restrictions at launch only when it has 
 
 - The compound-engineering plugin installs natively on both alternates through their own plugin systems. Neither install exists on this machine yet, so U1 performs both by hand. U1 also records how each CLI reports an installed plugin's version, since R17's floor check needs a query that exists.
 - Observed on this machine: `codex-cli 0.149.0` at `/opt/homebrew/bin/codex`, `grok 1.0.5` at `~/.grok/bin/grok`, `claude 2.1.250`. Note that `contracts.CLI_VERSION_TESTED` currently pins `2.1.245`, so Claude has already drifted. `~/.grok/bin` must be on the Runner's `PATH` or a Grok Task refuses at preflight.
-- Grok Build's headless flags mirror Claude Code's closely: `-p/--single`, `-s/--session-id` (runner-chosen UUID for a new conversation), `-m/--model`, `--effort`, `--permission-mode` with the same `dontAsk` and `bypassPermissions` vocabulary, `--allow`/`--deny` accepting Claude-style `Bash(...)` rules, and `--output-format streaming-json`. Sessions persist under `~/.grok/sessions/<url-encoded-cwd>/<session-id>/` with `updates.jsonl` as the authoritative log. Whether a `--deny` rule is actually refused, and whether an unrecognized rule spelling is rejected or silently accepted, is demonstrated in U1 under R25 rather than inferred from the flag list.
+- Grok Build's headless flags mirror Claude Code's closely: `-p/--single`, `-s/--session-id` (runner-chosen UUID for a new conversation), `-m/--model`, `--effort`, `--permission-mode` sharing the `dontAsk` and `bypassPermissions` spellings, `--allow`/`--deny` accepting Claude-style `Bash(...)` rules, and `--output-format streaming-json`. Sessions persist under `~/.grok/sessions/<url-encoded-cwd>/<session-id>/` with `updates.jsonl` as the authoritative log. Whether a `--deny` rule is actually refused, and whether an unrecognized rule spelling is rejected or silently accepted, is demonstrated in U1 under R25 rather than inferred from the flag list. **U1 outcome: the vocabulary is shared but the behavior is not. `dontAsk` cancels every tool call rather than approving it, so Grok's posture is `auto`; see the amendment under KTD6. `--deny` does refuse, and a malformed rule is rejected at launch rather than silently accepted.**
 - Codex `exec` runs non-interactively with `--sandbox workspace-write` as its non-bypass posture, assigns its own session id, and offers `--output-last-message <file>` and `--json`. It has no per-tool deny flag. Two of its sandbox settings are bypass postures, `danger-full-access` and `--dangerously-bypass-approvals-and-sandbox`, and both are forbidden.
 - All three CLIs share the operator's home directory and keep credentials in files there, `~/.codex/auth.json` and `~/.grok/auth.json` among them. R23's environment scrub does not reach those, and neither does Codex's write sandbox, which bounds writes rather than reads. U1 records each backend's credential storage so the boundary rests on observation.
 - Neither alternate writes state into a working tree, so the dirty-tree risk from CLI droppings is assumed absent and confirmed in U1.
@@ -263,13 +263,20 @@ R25. A backend is recorded as enforcing restrictions at launch only when it has 
 
 **Deferred to Planning: all resolved.**
 
-**Deferred to implementation, resolved by U1's spike**
+**Deferred to implementation, resolved by U1's spike. U1 ran 2026-08-28; every answer below is
+an observation against the installed CLI, and the artifacts are in `tests/fixtures/backends/`.**
 
-- The exact skill invocation form on Grok. Codex is `$ce-plan`; Claude is the `compound-engineering:` prefix.
-- Whether Grok's `--allow` rule vocabulary accepts a bare `Skill` entry, which `closeout.BASE_TOOLS` includes and Grok's documented prefix list does not name. U1 asserts this specifically rather than discovering it incidentally.
-- The event shape each alternate emits on stdout, which fixes the normalizers in U6.
-- Whether `codex exec` accepts a Brief-length prompt as a positional argument, given the launcher passes a closed stdin unconditionally.
-- Whether Grok's `updates.jsonl` is flushed on process exit, since the Claude equivalent tolerates a missing predicted path by globbing.
+- The exact skill invocation form on Grok. Codex is `$ce-plan`; Claude is the `compound-engineering:` prefix. **Resolved: Grok is a bare `/ce-plan`. Its `available_commands` event registers plugin skills under bare names with no plugin namespace, so the Claude prefix would not resolve. All three forms now differ, which is what KTD15's four call sites have to carry.**
+- Whether Grok's `--allow` rule vocabulary accepts a bare `Skill` entry, which `closeout.BASE_TOOLS` includes and Grok's documented prefix list does not name. U1 asserts this specifically rather than discovering it incidentally. **Resolved: accepted without error. A malformed rule is a useful contrast, refused at launch with `malformed rule: missing closing parenthesis` rather than silently ignored, so a bad spelling fails loudly rather than reaching the argv unenforced.**
+- The event shape each alternate emits on stdout, which fixes the normalizers in U6. **Resolved and captured. Codex emits `{"type": "item.started"|"item.completed", "item": {"type": "command_execution"|"agent_message"|"file_change"|...}}` around `thread.started` and `turn.completed`. Grok emits one small object per token, `{"type": "text"|"thought", "data": "..."}`, so a final message is assembled by concatenating a contiguous run of them, and terminates on `{"type": "end", "stopReason": ...}`. Grok's per-token shape is why its stdout fixtures are an order of magnitude longer than Codex's for comparable work.**
+- Whether `codex exec` accepts a Brief-length prompt as a positional argument, given the launcher passes a closed stdin unconditionally. **Resolved: yes. A 4.5KB Brief passed positionally ran the full pipeline. Codex prints `Reading additional input from stdin...` to the same stream, which is the non-JSON line every Codex stdout fixture carries and the reason U6's normalizer must skip non-JSON lines rather than fail on them.**
+- Whether Grok's `updates.jsonl` is flushed on process exit, since the Claude equivalent tolerates a missing predicted path by globbing. **Resolved: yes, present and complete after exit, at `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` with the cwd percent-encoded. Grok writes several other files in that directory, including `chat_history.jsonl`, `events.jsonl`, and a `subagents/` tree, so the locator must name `updates.jsonl` rather than taking the directory.**
+
+**One stop condition was tested and did not fire.** All seven pipeline stages ran on both
+alternates: plan with its own document review, work, simplify, review, the project gate, the
+tracker write, and the compound judgment. Codex landed T-6 and blocked correctly on T-8; Grok
+landed T-14 and blocked correctly on T-15. No backend showed the partial degradation KTD1's risk
+row anticipated.
 
 ---
 
@@ -287,7 +294,19 @@ KTD4. **Codex needs no session-id recovery, and readability is a per-backend pre
 
 KTD5. **Evidence that could not be read is a Runner fault, never the Task's silence.** Unreadable evidence stops falling through to `no_envelope` and routes to `unexpected_error`, whose documented remedy already says the fault is in the runner or the manifest rather than the task. It must also stop satisfying the rescue route in `run._routable()`. Rationale: today an unreadable transcript is recorded as "the process ran and printed no envelope, with no findings", and with commits on the branch and the card in the in-review status the rescue route merges anyway. That is a latent defect for Claude and would be the routine path on any backend whose evidence went missing. Governs R13, R20.
 
-KTD6. **Per-backend permission posture, with every forbidden spelling named.** The forbidden mode is a tuple per backend, not a scalar. Claude and Grok use `--permission-mode dontAsk` and forbid `bypassPermissions`. Codex uses `--sandbox workspace-write` and forbids both `--dangerously-bypass-approvals-and-sandbox` and `--sandbox danger-full-access`. Rationale: the existing refusal of a bypass posture is a safety floor, and a spelling the refusal does not know is a spelling that reaches the argv. `contracts.DISALLOWED_TOOLS` already carries eleven entries for five operations for exactly this reason. Governs R6, R10.
+KTD6. **Per-backend permission posture, with every forbidden spelling named.** The forbidden mode is a tuple per backend, not a scalar. Claude uses `--permission-mode dontAsk` and forbids `bypassPermissions`. **Grok uses `--permission-mode auto` and forbids both `bypassPermissions` and `dontAsk`** (amended by U1, see below). Codex uses `--sandbox workspace-write` and forbids both `--dangerously-bypass-approvals-and-sandbox` and `--sandbox danger-full-access`. Rationale: the existing refusal of a bypass posture is a safety floor, and a spelling the refusal does not know is a spelling that reaches the argv. `contracts.DISALLOWED_TOOLS` already carries eleven entries for five operations for exactly this reason. Governs R6, R10.
+
+> **Amended 2026-08-28 by U1, which disproved this entry's original claim about Grok.** The
+> entry read that Grok, like Claude, uses `dontAsk`, taken from the flag list. Grok accepts
+> `dontAsk` at launch and then cancels every tool call the Task makes, reporting `User cancelled
+> the execution for tool run_terminal_command` with nobody present to have cancelled anything. A
+> Task under it does no work at all, so it is not a usable posture, let alone a safety floor.
+> Reproduced five times: two full pipeline runs that died partway through planning, and three
+> single-command probes. `auto` runs the Task and still refuses a denied call, demonstrated in
+> `tests/fixtures/backends/grok/denial-refusal.jsonl`, so it is Grok's non-bypass posture and
+> `dontAsk` joins its forbidden tuple as a mode that silently produces nothing. The lesson is the
+> one the plan already knew in a different form: a flag list is not behavior, which is why R25
+> demands a demonstrated refusal rather than a documented one.
 
 KTD7. **What a backend cannot refuse at launch is bounded at the landing and audited afterwards, and neither control substitutes for the other.** The landing bound diffs the Task commit against a Task path bound and refuses the merge when it falls outside; it observes commit scope only and cannot see which tools ran. The audit scans the normalized evidence for disallowed calls after the process exits; it is detection, not prevention, since a matched call has already executed. Together they cover scope and visibility, not enforcement. **The reusable pieces are `gitwrite.path_allowed()` applied to `gitread.diff_name_only()` inside a new non-destructive helper. `gitwrite.closeout_scope_check()` itself is not reused: its failure path calls `reset_hard()`, which would destroy the Task branch this bound is meant to preserve.** This is a plan-time addition on top of the settled decision, which committed only to carrying the restriction in the Brief and recording it unenforced. Governs R21, R24.
 
@@ -375,7 +394,10 @@ flowchart TB
   B4 -->|no| B6["land with a finding"]
 ```
 
-**Per-backend launch facts.** These are the values the capability record carries. U1 confirms each against the installed CLI before any of it is written down as a pin.
+**Per-backend launch facts.** These are the values the capability record carries. **U1 ran on
+2026-08-28 and every row below is now an observation rather than a proposal; the live values are
+pinned in `contracts.BACKEND_PINS` and the artifacts behind them are in
+`tests/fixtures/backends/`.** Rows U1 changed are marked.
 
 | Fact | claude | codex | grok |
 |---|---|---|---|
@@ -383,14 +405,17 @@ flowchart TB
 | Session id | runner-chosen `--session-id` | assigned by the CLI, not needed (KTD4) | runner-chosen `-s` |
 | Structured output | `--output-format stream-json --verbose` | `--json` | `--output-format streaming-json` |
 | Final message | from the transcript | `--output-last-message <file>` | from the transcript |
-| Permission posture | `--permission-mode dontAsk` | `--sandbox workspace-write` | `--permission-mode dontAsk` |
-| Forbidden spellings | `bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox`, `danger-full-access` | `bypassPermissions` |
-| Tool allow and deny | `--allowedTools` / `--disallowedTools` | none | `--allow` / `--deny` |
-| Enforces at launch | demonstrated in U1 | no | demonstrated in U1 |
+| Permission posture | `--permission-mode dontAsk` | `--sandbox workspace-write` | **`--permission-mode auto`, changed by U1: `dontAsk` cancels every tool call** |
+| Forbidden spellings | `bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox`, `danger-full-access` | **`bypassPermissions`, `dontAsk`** |
+| Writable directories | not bounded by the CLI | **`-C <repo>` plus `--add-dir <repo>/.git`, added by U1: without it every write under `.git/` is refused and no Task can commit** | not bounded by the CLI |
+| Tool allow and deny | `--allowedTools` / `--disallowedTools` | none | `--allow` / `--deny`, a malformed rule is refused at launch and a bare `Skill` entry is accepted |
+| Enforces at launch | **yes, refusal captured** | no, and no flag exists to make it | **yes, refusal captured** |
 | Evidence sources | session jsonl | stdout log plus last-message file | `updates.jsonl` |
 | Readable when | transcript parses | last-message file exists and one event decoded | log parses |
-| Skill invocation | `compound-engineering:<name>` | `$<name>` | confirmed in U1 |
-| Credential variables and files | confirmed in U1 | confirmed in U1 | confirmed in U1 |
+| Skill invocation | `compound-engineering:<name>` | `$<name>` | **`/<name>`, bare, no plugin namespace** |
+| Credential file | `~/.claude/.credentials.json` | `~/.codex/auth.json` | `~/.grok/auth.json` |
+| Credential prefixes | `ANTHROPIC_`, `CLAUDE_` | `CODEX_`, `OPENAI_` | `GROK_`, `XAI_` |
+| Writes into the working tree | no | no | no |
 
 ### Assumptions
 
@@ -449,6 +474,30 @@ U1 is a spike and everything depends on it. **U7 depends on nothing but U1 and l
 - For each backend claiming enforcement, a captured refusal exists; where none exists, the recorded capability says it does not enforce.
 
 **Verification:** Six artifact shapes exist per backend under `tests/fixtures/backends/`: a session transcript, a stdout stream, a final message carrying an Envelope, a blocked Envelope with prose blockers, a Closeout message whose terminal line sits past the 200 character head, and, for a backend claiming enforcement, a captured refusal. All seven pipeline stages are observed on each backend. A spike that cannot produce these for a backend has found a blocker, and the Goal Capsule's stop condition applies.
+
+**Outcome, 2026-08-28. U1 is complete and no stop condition fired.** All six shapes exist for all
+three backends, every seven-stage pipeline ran, and the pins are in `contracts.BACKEND_PINS`.
+`tests/fixtures/backends/README.md` records which task produced which artifact.
+
+Four findings changed the plan rather than only filling it in. Each is written into the entry it
+contradicts rather than only here.
+
+1. **Grok's `dontAsk` is not a usable posture.** It cancels every tool call instead of approving
+   it, so a Task under it does nothing. `auto` both runs the Task and refuses a denied call.
+   KTD6 carries the amendment and `dontAsk` is now in Grok's forbidden tuple.
+2. **Grok's skill form is a bare `/ce-plan`.** No plugin namespace. This closes an Outstanding
+   Question, and it means all three backends differ, which is the case KTD15 exists for.
+3. **Codex cannot commit without `--add-dir <repo>/.git`.** Its `workspace-write` sandbox refuses
+   every write beneath `.git/`, so branch creation and commit both fail. U5 must pass it.
+4. **Codex prints a non-JSON line onto its own JSON stream** (`Reading additional input from
+   stdin...`). Every Codex stdout fixture carries exactly one. U6 already planned to tolerate
+   this; the fixtures now prove it is not hypothetical.
+
+Two facts worth carrying into U12 and U14. Grok emits one JSON object per token, so its stdout
+for comparable work is an order of magnitude larger than Codex's, which is a real cost in fixture
+size and Follower decode volume. And running two backends against one repository at the same time
+produced a genuine `.git/index.lock` collision during this spike, which is the Lease's own
+rationale demonstrated by accident.
 
 ### U7. Unreadable evidence is a Runner fault
 
@@ -941,7 +990,7 @@ The work is not landed through Relay running against Relay, for the reason in U1
 **External, verified by running the installed binaries.**
 
 - `codex exec --help`, version 0.149.0: `--sandbox` with `read-only`, `workspace-write`, `danger-full-access`; `--dangerously-bypass-approvals-and-sandbox`; `--json`; `-o/--output-last-message <FILE>`; no per-tool deny flag.
-- `grok --help`, version 1.0.5: `-p/--single`, `-s/--session-id` for a new conversation, `--permission-mode` with `dontAsk` and `bypassPermissions`, `--allow`/`--deny` accepting Claude-style rules, `--tools`/`--disallowed-tools`, `--max-turns`, `--output-format`.
+- `grok --help`, version 1.0.5: `-p/--single`, `-s/--session-id` for a new conversation, `--permission-mode` with `default`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`, `--allow`/`--deny` accepting Claude-style rules, `--tools`/`--disallowed-tools`, `--max-turns`, `--output-format`. **This is the flag list, and U1 found the behavior behind it differs: `dontAsk` is accepted and then cancels every tool call. See the KTD6 amendment. Read this entry as what the CLI advertises, not what it does.**
 - Version output shapes, checked directly: `claude` leads with a digit; `codex-cli 0.149.0` and `grok 1.0.5 (...)` lead with a name token, so the current leading-digit parse returns nothing for both.
 - Credential storage observed on this machine: `~/.codex/auth.json` and `~/.grok/auth.json`, which is why R23 is scoped to the environment.
 - The compound-engineering plugin's own `README.md` and its `.codex-plugin/` and `.grok-plugin/` manifests document both install paths, and state that Codex invokes skills as `$skill-name`.

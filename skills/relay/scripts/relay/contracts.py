@@ -11,7 +11,9 @@ import re
 # The plugin and CLI versions these pins were read from.
 PLUGIN_NAME = "compound-engineering"
 PLUGIN_MIN_VERSION = "3.23.4"
-CLI_VERSION_TESTED = "2.1.245"
+# Claude's own pin. U11 turns this into one entry per backend; until then the alternates' tested
+# versions live in BACKEND_PINS below. Re-verified against the installed binary in U1.
+CLI_VERSION_TESTED = "2.1.250"
 
 # Source paths are relative to the installed plugin root, for the pin check test.
 # Each entry: (constant name, string that must appear in the source, source path).
@@ -107,6 +109,109 @@ CLI_FLAGS = (
 PERMISSION_MODE = "dontAsk"
 FORBIDDEN_PERMISSION_MODE = "bypassPermissions"
 OUTPUT_FORMAT = "stream-json"
+
+# Per-backend launch facts, every one observed in U1 by running the installed CLI against
+# ~/Documents/PhilAI/relay-proof/target on 2026-08-28. Nothing here is read from documentation.
+# U4 reads this into the capability record; until it exists this is the record.
+#
+# The fixtures these were taken from are in tests/fixtures/backends/, one directory per backend,
+# and tests/fixtures/backends/README.md names which task produced which file.
+BACKEND_PINS = {
+    "claude": {
+        "binary": "claude",
+        "version_tested": "2.1.250",
+        # `claude --version` leads with the number, so the leading-digit parse works here and
+        # nowhere else. See the two entries below.
+        "version_output_sample": "2.1.250 (Claude Code)",
+        "plugin_version": "3.23.4",
+        "plugin_query": ("claude", "plugin", "list"),
+        "headless_flag": "-p",
+        "session_id_choosable": True,
+        "permission_mode": "dontAsk",
+        "forbidden_permission_modes": ("bypassPermissions",),
+        "output_format": ("--output-format", "stream-json", "--verbose"),
+        "allow_flag": "--allowedTools",
+        "deny_flag": "--disallowedTools",
+        # Demonstrated, not assumed (R25): tests/fixtures/backends/claude/denial-refusal.jsonl
+        # holds a refused `rm -rf`, and the target file was still present afterwards.
+        "enforces_at_launch": True,
+        "skill_form": "compound-engineering:%s",
+        "evidence": "session jsonl under ~/.claude/projects/<slug>/<session-id>.jsonl",
+        "credential_prefixes": ("ANTHROPIC_", "CLAUDE_"),
+        "credential_file": "~/.claude/.credentials.json",
+        "nesting_markers": ("CLAUDECODE", "CLAUDE_CODE_"),
+        "writes_into_worktree": False,
+    },
+    "codex": {
+        "binary": "codex",
+        "version_tested": "0.149.0",
+        # Leads with a name token, so the leading-digit parse returns None. KTD8 is why parsing
+        # is per-backend rather than one regex.
+        "version_output_sample": "codex-cli 0.149.0",
+        "plugin_version": "3.23.4",
+        "plugin_query": ("codex", "plugin", "list"),
+        "headless_flag": "exec",
+        # Codex assigns its own thread id, so the runner names the evidence instead (KTD4).
+        "session_id_choosable": False,
+        "permission_mode": "workspace-write",
+        "forbidden_permission_modes": ("danger-full-access",
+                                       "--dangerously-bypass-approvals-and-sandbox"),
+        "output_format": ("--json",),
+        "allow_flag": None,
+        "deny_flag": None,
+        # No per-tool deny flag exists, so no refusal can be demonstrated and R25 records it as
+        # not enforcing. R19's acceptance sentence, R21's landing bound, and R24's audit are the
+        # compensating controls. Codex does refuse some `rm -f` shapes on its own, but that is
+        # its own built-in judgment and not something the manifest's disallow list can reach.
+        "enforces_at_launch": False,
+        "skill_form": "$%s",
+        "evidence": "stdout log plus --output-last-message file; session jsonl at "
+                    "~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread-id>.jsonl",
+        "credential_prefixes": ("CODEX_", "OPENAI_"),
+        "credential_file": "~/.codex/auth.json",
+        "nesting_markers": ("CODEX_SANDBOX", "CODEX_HOME"),
+        "writes_into_worktree": False,
+        # U1 finding, not in the plan. Under `--sandbox workspace-write` every write beneath
+        # .git/ is refused ("Unable to create '.../.git/index.lock': Operation not permitted"),
+        # so a Task cannot branch or commit at all. Passing the repository's own .git as an
+        # extra writable directory is what makes the sandbox usable for Relay's purposes.
+        "extra_writable_dirs": ("<repo>/.git",),
+    },
+    "grok": {
+        "binary": "grok",
+        "version_tested": "1.0.5",
+        "version_output_sample": "grok 1.0.5 (5115b46bc909) [stable]",
+        "plugin_version": "3.23.4",
+        "plugin_query": ("grok", "plugin", "list"),
+        "headless_flag": "-p",
+        "session_id_choosable": True,
+        # U1 finding, and a correction to the plan's Assumptions and KTD6. Grok accepts
+        # `dontAsk` at launch and then cancels every tool call the task makes, reporting
+        # "User cancelled the execution for tool `run_terminal_command`" with no human present
+        # to have cancelled anything. Reproduced five times: two full pipeline runs that died
+        # partway through planning, and three single-command probes. `auto` is the mode that
+        # runs the task AND still refuses a denied call, so it is the non-bypass posture here.
+        "permission_mode": "auto",
+        "forbidden_permission_modes": ("bypassPermissions", "dontAsk"),
+        "output_format": ("--output-format", "streaming-json"),
+        "allow_flag": "--allow",
+        "deny_flag": "--deny",
+        # Demonstrated (R25): tests/fixtures/backends/grok/denial-refusal.jsonl holds
+        # "Denied by permission policy: deny rule on bash matching \"rm -rf*\"", captured with
+        # the target directory still present afterwards. A malformed rule is refused at launch
+        # ("malformed rule: missing closing parenthesis") rather than silently accepted, and a
+        # bare `Skill` entry, which closeout.BASE_TOOLS carries, is accepted.
+        "enforces_at_launch": True,
+        # U1 finding, resolving the plan's open question. Grok registers plugin skills under
+        # bare names, with no plugin namespace, so the Claude prefix would not resolve.
+        "skill_form": "/%s",
+        "evidence": "~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl",
+        "credential_prefixes": ("GROK_", "XAI_"),
+        "credential_file": "~/.grok/auth.json",
+        "nesting_markers": ("GROK_SANDBOX",),
+        "writes_into_worktree": False,
+    },
+}
 
 # R10 disallow list with every variant spelling. Defence in depth; landing safety rests on the
 # runner owning merge and push.

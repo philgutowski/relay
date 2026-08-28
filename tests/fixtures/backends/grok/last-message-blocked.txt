@@ -1,0 +1,30 @@
+T-15 is blocked. `send_slack_alert` was not added.
+
+The task says to POST to #alerts using the webhook URL ops keeps for this project, and not to hardcode that URL. I searched tracked files, gitignored files, and documented config. There is no webhook URL and no documented place this project keeps one. Inventing `SLACK_WEBHOOK_URL`, a config file, or a placeholder URL would satisfy "do not hardcode" while violating "read it from wherever it is actually kept." Per the plan (KTD1), that is a stop, not a prompt to create storage.
+
+`toolkit/text.py` and `tests/test_text.py` are unchanged. The unittest gate was not run because nothing landed.
+
+**Git:** branch `relay/T-15`, HEAD `fab78e1` (same as `main`). No implementation commit. Untracked plan only: `docs/plans/2026-08-28-1553-feat-send-slack-alert-plan.md`. Do not commit. Do not push. The runner owns the rest.
+
+A future session would get this wrong by inventing an env key. The compound prompt is on the clipboard:
+
+```
+Work from /Users/pgutowski/Documents/PhilAI/relay-proof/target for the whole run. Resolve the CE artifact root there. Treat that routing line as binding.
+
+/ce-compound mode:non-interactive depth:full
+
+Context hint: Relay task T-15 asked to add send_slack_alert(message) that POSTs to the team's #alerts Slack channel using the webhook URL ops keeps for this project, without hardcoding a URL, reading it from wherever it is actually kept. A full search of tracked files, gitignored files, and documented config found no webhook URL and no documented env key. The plan's KTD1 (and the task text) forbid inventing an environment variable, a new config file, or a placeholder URL. Implementation stopped with no production or test change. Neighbouring learning: none. Branch relay/T-15, HEAD fab78e1, no implementation commit.
+
+Mechanism: "do not hardcode, read from wherever it is kept" is not permission to invent os.environ["SLACK_WEBHOOK_URL"]. Absence of the named resource is a blocker, not a prompt to create storage.
+```
+
+```relay-envelope
+status: blocked
+blockers:
+The project's ops-kept Slack webhook URL was not found in tracked files, gitignored files, or documented config. KTD1 forbids inventing an env key, config file, or placeholder URL. No production or test change landed.
+changed_files:
+docs/plans/2026-08-28-1553-feat-send-slack-alert-plan.md
+plan_path: /Users/pgutowski/Documents/PhilAI/relay-proof/target/docs/plans/2026-08-28-1553-feat-send-slack-alert-plan.md
+learnings:
+This throwaway toolkit has no stored Slack webhook. A future run that invents SLACK_WEBHOOK_URL would satisfy do not hardcode while violating read it from wherever it is actually kept. The correct outcome is blocked with no substitute storage.
+```

@@ -1,0 +1,9 @@
+Working tree clean, all work committed on `relay/T-4`, gate passes. Task complete.
+
+```relay-envelope
+status: complete
+blockers:
+changed_files: toolkit/text.py, tests/test_text.py, docs/plans/2026-08-28-0726-feat-slugify-diacritics-plan.md
+plan_path: docs/plans/2026-08-28-0726-feat-slugify-diacritics-plan.md
+learnings: The straightforward, textbook fix for this task — whole-string unicodedata.normalize("NFKD", text).encode("ascii", "ignore") — looks correct and passes a naive test suite, but it is wrong in two independent ways that only showed up under adversarial review: it deletes (rather than separates) any character with no ASCII form, silently merging adjacent words, and NFKD is a compatibility decomposition that also expands non-diacritic symbols (trademark sign, roman numerals, ligatures) into extra ASCII letters, leaking unrelated content into the slug. The corrected per-character "exactly one base letter" design fixes both, but introduces a third, subtler bug only caught by code review: a base letter and its accent can arrive as two already-separate Unicode codepoints (NFD form, the default for macOS/APFS filenames), and a per-codepoint loop with no upfront NFC normalization treats the orphaned combining mark as its own separator, splitting the word (e.g. "cafés" -> "cafe-s"). Any future per-character Unicode transliteration in this codebase should NFC-normalize the whole string before iterating, not just NFKD-decompose one character at a time.
+```

@@ -1,0 +1,11 @@
+```relay-envelope
+status: complete
+blockers:
+changed_files:
+- docs/plans/2026-08-28-1433-feat-capitalize-words-plan.md
+- tests/test_text.py
+- toolkit/text.py
+plan_path: /Users/pgutowski/Documents/PhilAI/relay-proof/target/docs/plans/2026-08-28-1433-feat-capitalize-words-plan.md
+learnings:
+The `python` executable resolves to Python 2.7 here, so run unittest with `python3`.
+```

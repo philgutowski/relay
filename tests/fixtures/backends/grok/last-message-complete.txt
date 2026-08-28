@@ -1,0 +1,13 @@
+`is_palindrome(text)` is on `relay/T-14`. It NFC-composes the string, keeps letters and digits, lowercases, drops combining marks that `str.lower()` injects, then compares to the reverse. Tests cover `Racecar`, the Panama phrase, and `hello`. `python -m unittest discover` is 27 passing. Head is `8ba7db7`. `tasks.md` was not edited.
+
+```relay-envelope
+status: complete
+blockers:
+changed_files:
+toolkit/text.py
+tests/test_text.py
+docs/plans/2026-08-28-1516-feat-is-palindrome-plan.md
+plan_path: /Users/pgutowski/Documents/PhilAI/relay-proof/target/docs/plans/2026-08-28-1516-feat-is-palindrome-plan.md
+learnings:
+str.lower can expand one letter into a base letter plus a combining mark, so a keep-alnum then lowercase then reverse palindrome compare must filter isalnum again after lower. Latin capital I with dot otherwise returns False as a one letter palindrome.
+```

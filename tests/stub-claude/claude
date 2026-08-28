@@ -86,7 +86,7 @@ def next_entry(queue):
 
 def main(argv):
     if argv[:1] == ["--version"]:
-        print(os.environ.get("RELAY_STUB_CLI_VERSION", "2.1.245 (Claude Code)"))
+        print(os.environ.get("RELAY_STUB_CLI_VERSION", "2.1.250 (Claude Code)"))
         return 0
 
     flags = parse_args(argv)

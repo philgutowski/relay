@@ -1,0 +1,3 @@
+T-6 was already recorded once in `tasks.md`: its line is checked and ends with `(1ce15ab)`, in existing commit `b147246` that changes only the tracker. I made no duplicate edit or commit. The outcome and plan show straightforward use of the stated whitespace-tokenizing/capitalization contract; there were no blockers, reversals, hidden seams, or non-obvious cause to preserve. A compound document would add no durable guidance for a future session, so documentation is skipped.
+
+Documentation skipped

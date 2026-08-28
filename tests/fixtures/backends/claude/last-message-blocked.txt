@@ -1,0 +1,9 @@
+I've completed the implementation, but step 7 requires moving a tracker card and commenting the head commit — no manifest, board, project key, or card ID for T-1 was ever supplied in this session, and no Atlassian cloudId was given. I have no way to identify which tracker or card this task corresponds to, so I can't perform that write safely (guessing a project/cloudId risks writing to the wrong system). Everything else is done: implementation, tests, simplify pass, review, and the gate all completed and are committed on `relay/T-1` at commit `28af68e`.
+
+```relay-envelope
+status: blocked
+blockers:
+Cannot move/comment the tracker card for T-1 — no manifest, tracker board/project identifier, cloudId, or card ID was provided in this session, so the tracker write in step 7 cannot be safely targeted. Code, tests, simplify pass, review, and gate are all complete and committed.
+changed_files: toolkit/stats.py, tests/test_stats.py, docs/plans/2026-08-26-median-stats.md
+plan_path: docs/plans/2026-08-26-median-stats.md
+```
