@@ -39,6 +39,7 @@ class Fixtures(unittest.TestCase):
         self.assertTrue(r["envelope"]["fenced"])
         self.assertEqual(r["envelope"]["changed_files"], ["core/thing.py", "tests/test_thing.py"])
         self.assertEqual(r["envelope"]["blockers"], [])
+        self.assertEqual(r["envelope"]["learnings"], [])
         self.assertEqual(r["envelope"]["plan_path"], "docs/plans/2026-08-25-1400-feat-t1-plan.md")
         self.assertEqual(r["findings"], [])
         self.assertEqual(r["malformed_lines"], 0)
@@ -232,6 +233,71 @@ class ParagraphBlockers(unittest.TestCase):
         env = classify.parse_envelope("status: complete\nblockers:\nchanged_files:\n- a.py\nplan_path: p.md\n")
         self.assertEqual(env["blockers"], [])
         self.assertEqual(env["changed_files"], ["a.py"])
+
+
+class LearningsField(unittest.TestCase):
+    """R5, R6, R7: the envelope's fifth, optional key. Parsed the same way as blockers and
+    changed_files, only ever present when an envelope was found at all."""
+
+    def test_a_bulleted_learning_is_captured(self):
+        env = classify.parse_envelope(
+            "```relay-envelope\nstatus: complete\nlearnings:\n"
+            "- the timeout was upstream, not in this service\n```")
+        self.assertEqual(env["learnings"], ["the timeout was upstream, not in this service"])
+
+    def test_an_absent_learnings_key_is_empty(self):
+        env = classify.parse_envelope("status: complete\nblockers: none\nchanged_files:\n- a.py\nplan_path: p.md\n")
+        self.assertEqual(env["learnings"], [])
+
+    def test_a_present_but_empty_learnings_key_stays_empty(self):
+        env = classify.parse_envelope("status: complete\nlearnings:\nplan_path: p.md\n")
+        self.assertEqual(env["learnings"], [])
+
+    def test_a_multi_line_learnings_paragraph_stops_at_the_next_key(self):
+        env = classify.parse_envelope(
+            "status: complete\nlearnings:\nfirst line of prose\nsecond line of prose\n\nplan_path: p.md\n")
+        self.assertEqual(env["learnings"], ["first line of prose", "second line of prose"])
+
+    def test_a_colon_led_line_inside_learnings_truncates_there(self):
+        """KTD2: `_list_after`'s shared paragraph branch stops at any bare word followed by a
+        colon, not only the real envelope keys."""
+        env = classify.parse_envelope(
+            "status: complete\nlearnings:\nthe cause was subtle\nCause: the timeout was upstream\n")
+        self.assertEqual(env["learnings"], ["the cause was subtle"])
+
+    def test_a_status_shaped_line_inside_learnings_overrides_the_declared_status(self):
+        """Adversarial review on T-7: STATUS_RE scans the whole block and the last match wins
+        (classify.py's own `matches[-1]`), so a learnings line that itself reads as a status
+        declaration silently reclassifies the task. Pre-existing in `_list_after`'s shared
+        parsing (the same shape already reaches `blockers` today); pinned here, not fixed, since
+        changing how `status` is read is out of scope for the learnings key (R10). The brief's ask
+        (`brief-local-merge.md`) warns the task away from writing a line shaped this way."""
+        env = classify.parse_envelope(
+            "status: complete\nlearnings:\nStatus: failed to reproduce until I disabled caching\n")
+        self.assertEqual(env["status"], "failed")
+
+    def test_a_present_learning_reaches_the_digest_through_classify(self):
+        """The testing reviewer on T-7: prove the extraction through classify.classify() end to
+        end, not only through parse_envelope() directly."""
+        import json
+        import tempfile
+        lines = [
+            {"type": "assistant", "isSidechain": False, "message": {"role": "assistant", "content": [
+                {"type": "text", "text": (
+                    "```relay-envelope\nstatus: complete\nblockers:\nchanged_files:\n"
+                    "plan_path: docs/plans/x.md\nlearnings:\n"
+                    "- the retry helper already existed; no need to write a new one\n```")}]}},
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+            for line in lines:
+                handle.write(json.dumps(line) + "\n")
+        r = classify.classify(handle.name, EXITED)
+        os.unlink(handle.name)
+        self.assertEqual(r["envelope"]["learnings"],
+                         ["the retry helper already existed; no need to write a new one"])
+
+    def test_no_status_line_yields_no_envelope_even_with_learnings_present(self):
+        self.assertIsNone(classify.parse_envelope("learnings:\n- something\n"))
 
 
 class FindingLines(unittest.TestCase):

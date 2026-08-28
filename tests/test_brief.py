@@ -107,6 +107,13 @@ class LocalMergeTemplate(BriefCase):
         self.assertIn("```" + contracts.ENVELOPE_FENCE_TAG, text)
         self.assertIn(contracts.ENVELOPE_STATUS_COMPLETE, text)
         self.assertIn(contracts.ENVELOPE_BLOCKERS_KEY, text)
+        self.assertIn(contracts.ENVELOPE_LEARNINGS_KEY, text)
+
+    def test_the_learnings_ask_names_what_belongs_there_and_that_it_may_be_left_empty(self):
+        text = self.render()
+        self.assertRegex(text, r"(?i)trap\s+that\s+cost\s+real\s+time")
+        self.assertRegex(text, r"(?i)judge\s+whether")
+        self.assertRegex(text, r"(?i)leave\s+it\s+empty")
 
 
 class DegradedPath(BriefCase):
@@ -163,6 +170,11 @@ class PrTerminalTemplate(BriefCase):
         text = self.render(self.pr_manifest_text(), name="pr.toml")
         self.assertRegex(text, r"(?i)do not close")
         self.assertIn(contracts.LFG_TERMINAL_TOKEN, text)
+
+    def test_the_brief_asks_for_learnings_after_the_terminal_token(self):
+        text = self.render(self.pr_manifest_text(), name="pr.toml")
+        self.assertIn("Learnings:", text)
+        self.assertLess(text.index(contracts.LFG_TERMINAL_TOKEN), text.index("Learnings:"))
 
 
 class Determinism(BriefCase):
