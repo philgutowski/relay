@@ -10,7 +10,7 @@ import re
 import unittest
 
 import _paths
-from relay import cli, contracts, summary
+from relay import cli, contracts, summary, tail
 from test_run import RunCase
 
 
@@ -41,6 +41,15 @@ class CliCase(RunCase):
         self.task_success("T-3")
         self.closeout_landed("T-3")
         return self.call("run", self.manifest_path)
+
+    def wait_for_terminal(self, seconds=120):
+        """Wait out a detached runner this case left going, so tearDown does not delete the
+        state directory under it."""
+        import time
+        deadline = time.time() + seconds
+        while time.time() < deadline and not self.store().terminal():
+            time.sleep(0.2)
+        return self.store().terminal()
 
     def halted_run(self):
         """T-2's process reports status complete and creates no branch, so the runner has
@@ -131,6 +140,142 @@ class DetachedRun(CliCase):
             self.assertIn("relay run completed", handle.read())
 
 
+class DetachCommand(CliCase):
+    """U4: the argv a detached runner is started with.
+
+    Pinned here rather than by watching `runner.log` grow, because a test that polls a log while
+    a run is in flight is a race against the run finishing first.
+    """
+
+    def test_the_interpreter_runs_unbuffered(self):
+        argv = cli.detach_command("/x/relay_cli.py", "/x/manifest.toml", False)
+        self.assertEqual(argv[1], "-u")
+        self.assertEqual(argv[2], "/x/relay_cli.py")
+
+    def test_the_verb_and_the_manifest_follow_the_entry_point(self):
+        argv = cli.detach_command("/x/relay_cli.py", "/x/manifest.toml", False)
+        self.assertEqual(argv[3:], ["run", "/x/manifest.toml"])
+
+    def test_retry_blocked_is_carried_through_only_when_asked(self):
+        self.assertIn("--retry-blocked", cli.detach_command("/e", "/m", True))
+        self.assertNotIn("--retry-blocked", cli.detach_command("/e", "/m", False))
+
+
+class FollowedRun(CliCase):
+    """U3: `run --follow` launches the runner, follows it from the launch, and reports."""
+
+    def queue_complete(self):
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_blocked("T-2")
+        self.closeout_blocked("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+
+    def test_a_followed_run_detaches_follows_and_prints_the_summary(self):
+        self.queue_complete()
+        code, out = self.call("run", self.manifest_path, "--follow")
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("runner detached: pid", out)
+        self.assertIn("following: %s" % self.store().dir, out)
+        self.assertIn("relay run completed", out)
+        self.assertEqual(self.store().terminal()["run_status"], contracts.RUN_COMPLETED)
+
+    def test_follow_implies_detach_so_the_detach_line_is_printed_without_the_flag(self):
+        """The detach line is the observable that separates the two paths: a foreground run
+        never prints one."""
+        self.queue_complete()
+        _, followed = self.call("run", self.manifest_path, "--follow")
+        self.assertIn("runner detached: pid", followed)
+
+    def test_a_followed_halted_run_exits_halted_and_names_the_class(self):
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.queue_entry("success.jsonl", None)
+        code, out = self.call("run", self.manifest_path, "--follow")
+        self.assertEqual(code, cli.EXIT_HALTED, out)
+        self.assertIn(contracts.HALT_UNCLEAN_EXIT, out)
+
+    def test_a_second_followed_run_does_not_replay_the_first(self):
+        """The state directory is keyed on the manifest path, and the runner appends to the task
+        logs, so without a floor the second launch would replay the first run."""
+        self.queue_complete()
+        self.call("run", self.manifest_path, "--follow")
+        first = self.store().terminal()["written_at"]
+        self.queue_complete()
+        code, out = self.call("run", self.manifest_path, "--follow")
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertNotEqual(self.store().terminal()["written_at"], first)
+        # Every task landed or blocked in the first run, so the second launches none of them and
+        # writes no task log. Without a floor the follower would still replay all three.
+        self.assertNotIn("== T-1 %s ==" % tail.PHASE_TASK, out)
+        self.assertNotIn("stub_done", out)
+
+    def test_the_bound_returns_at_once_and_says_the_run_continues(self):
+        self.queue_complete()
+        code, out = self.call("run", self.manifest_path, "--follow", "--for", "0")
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("the run continues", out)
+        self.assertIn("relay tail", out)
+        self.assertNotIn("relay run completed", out)
+        self.wait_for_terminal()
+
+    def test_phases_prints_the_events_without_the_decoded_activity(self):
+        self.queue_complete()
+        code, out = self.call("run", self.manifest_path, "--follow", "--phases")
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("== T-1 %s ==" % tail.PHASE_TASK, out)
+        self.assertIn("T-1 is now %s" % contracts.STATUS_LANDED, out)
+        self.assertNotIn("stub_done", out)
+
+    def test_a_runner_that_dies_without_a_record_ends_the_follow_with_its_own_code(self):
+        """A second runner cannot take the lease, so it exits 3 having written nothing. Without
+        R16 the follower would sit until its bound with nothing to report."""
+        holder = self.store()
+        self.assertTrue(holder.acquire().ok)
+        try:
+            code, out = self.call("run", self.manifest_path, "--follow")
+        finally:
+            holder.release()
+        self.assertEqual(code, cli.EXIT_LEASE, out)
+        self.assertIn("without writing a terminal record", out)
+
+    def test_an_interrupt_leaves_the_run_alive_and_names_the_way_back(self):
+        self.queue_complete()
+        original = cli.tail_module.follow
+
+        def interrupt(*_args, **_kwargs):
+            raise KeyboardInterrupt()
+
+        cli.tail_module.follow = interrupt
+        try:
+            code, out = self.call("run", self.manifest_path, "--follow")
+        finally:
+            cli.tail_module.follow = original
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("the run continues", out)
+        self.assertIn("relay tail %s" % self.manifest_path, out)
+        self.wait_for_terminal()
+
+    def test_notifications_are_off_unless_the_flag_is_given(self):
+        """The suite is hermetic by construction: no case passes --notify, so no case can fire
+        one. This pins the default rather than trusting it."""
+        seen = []
+        original = cli.notify.build
+
+        def record(enabled, **kwargs):
+            seen.append(enabled)
+            return original(False)
+
+        cli.notify.build = record
+        try:
+            self.complete_run()
+            self.call("tail", self.manifest_path)
+        finally:
+            cli.notify.build = original
+        self.assertEqual(seen, [False])
+
+
 class StatusVerb(CliCase):
     def test_status_prints_the_terminal_record_and_the_cursor(self):
         self.complete_run()
@@ -155,6 +300,57 @@ class StatusVerb(CliCase):
         code, out = self.call("status", self.manifest_path)
         self.assertEqual(code, cli.EXIT_OK)
         self.assertIn("no state", out)
+
+    def test_an_unchanged_manifest_prints_no_stale_line(self):
+        self.complete_run()
+        _, out = self.call("status", self.manifest_path)
+        self.assertNotIn("stale state", out)
+        self.assertNotIn("not in this manifest", out)
+
+
+class StatusAgainstAShrunkManifest(CliCase):
+    """U5: the state directory is keyed on the manifest's real path, so editing the manifest in
+    place keeps everything the previous, longer run left behind."""
+
+    def shrink_to_one_task(self):
+        """Drop the T-2 and T-3 task blocks, keeping the path so the state directory is reused."""
+        with open(self.manifest_path) as handle:
+            text = handle.read()
+        head, _, _ = text.partition('[[tasks]]\nid = "T-2"')
+        with open(self.manifest_path, "w") as handle:
+            handle.write(head)
+
+    def shrunk_status(self):
+        self.complete_run()
+        self.shrink_to_one_task()
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        return out
+
+    def test_the_cursor_is_reported_with_the_reason_it_looks_wrong(self):
+        out = self.shrunk_status()
+        self.assertIn("cursor: 3 of 1 task(s)", out)
+        self.assertIn("stale state", out)
+        self.assertIn("longer manifest", out)
+
+    def test_the_records_outside_the_manifest_are_marked_and_the_one_inside_is_not(self):
+        out = self.shrunk_status()
+        for line in out.splitlines():
+            if line.startswith("  T-1 "):
+                self.assertNotIn("not in this manifest", line)
+            if line.startswith("  T-2 ") or line.startswith("  T-3 "):
+                self.assertIn("not in this manifest", line)
+
+    def test_the_terminal_record_is_attributed_to_the_previous_run(self):
+        out = self.shrunk_status()
+        self.assertIn("terminal record: %s (of that previous run)" % contracts.RUN_COMPLETED, out)
+
+    def test_a_stale_status_still_takes_no_lease(self):
+        self.complete_run()
+        self.shrink_to_one_task()
+        before = json.dumps(self.store().read(), sort_keys=True)
+        self.call("status", self.manifest_path)
+        self.assertEqual(json.dumps(self.store().read(), sort_keys=True), before)
 
 
 class TailVerb(CliCase):

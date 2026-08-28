@@ -24,13 +24,20 @@ The log sequence comes from the Manifest and the cursor advances on what exists 
 the three cases a cursor does not: a Task excluded before launch writes no log at all, a Task
 whose Closeout never ran writes no closeout log, and a `tail` started late begins mid list.
 
+A follower launched beside a run starts from a floor rather than from the top of the files. The
+state directory is keyed on the Manifest's path, so a second run against the same Manifest finds
+the previous run's Task logs still there (`launch.py` appends) and the previous run's terminal
+record still in `state.json`. Without a floor, `run --follow` would replay the whole previous run
+and then end at once on its record, since a record already present wins. `read_floor` is taken
+before the runner is launched, which is what makes "only what this launch produced" exact.
+
 Nothing here takes the Lease. `tail` is a reader, the same rule `status` follows.
 """
 import json
 import os
 import time
 
-from . import contracts
+from . import contracts, notify
 
 # Bounds on one printed event. A task process writes messages far longer than a terminal line,
 # and a follower that reflows them is unreadable next to the tool calls between them.
@@ -48,6 +55,18 @@ POLL_SECONDS = 1.0
 # Phase names for the two logs a Task can produce, in the order the runner writes them.
 PHASE_TASK = "task"
 PHASE_CLOSEOUT = "closeout"
+
+
+class _Gone:
+    """What `follow` returns when the process it was launched beside exited without writing a
+    terminal record. Distinct from None, which is the deadline, and from a run status, because
+    the three endings map to three different exit codes."""
+
+    def __repr__(self):
+        return "<runner gone>"
+
+
+GONE = _Gone()
 
 
 def _argument_of(tool_input):
@@ -120,6 +139,22 @@ def candidates(manifest, store):
     return entries
 
 
+def _size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def read_floor(manifest, store):
+    """What is already on disk, read before a run is launched, so a follower given it reports
+    only what that launch produces. Carries every candidate log's current size and the terminal
+    record present at the time.
+    """
+    return {"offsets": {path: _size(path) for _id, _phase, path in candidates(manifest, store)},
+            "terminal": store.terminal()}
+
+
 class _Reader:
     """One log file, read forward from where the last read stopped, and the Task and phase it
     belongs to so the follower can name it.
@@ -128,15 +163,23 @@ class _Reader:
     appending and a read lands mid line routinely. The fragment is completed by the next read.
     """
 
-    def __init__(self, task_id, phase, path):
+    def __init__(self, task_id, phase, path, start_offset=0):
         self.task_id = task_id
         self.phase = phase
         self.path = path
-        self.offset = 0
+        self.start_offset = start_offset
+        self.offset = start_offset
         self.buffer = b""
 
-    def exists(self):
-        return os.path.exists(self.path)
+    def active(self):
+        """True once this file carries bytes past where this follower started.
+
+        Not `os.path.exists`. A follower given a floor seeds its offset at the size of a log a
+        previous run left behind, and that file exists. Driving the frontier off existence would
+        push the cursor past every earlier Task on the first poll, and the output this run is
+        about to append to them would never be drained.
+        """
+        return _size(self.path) > self.start_offset
 
     def drain(self):
         """The complete lines appended since the last call. A missing file drains to nothing,
@@ -156,49 +199,109 @@ class _Reader:
         return parts
 
 
-def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS):
+def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS, floor=None,
+           deadline_seconds=None, clock=time.monotonic, phases_only=False, notifier=None,
+           runner_alive=None):
     """Follow the run's logs until it reaches a terminal record. Returns that record's
     `run_status`, which the caller maps to an exit code.
 
-    `sleep` is injected so a test can advance a scripted run between polls instead of waiting on
-    a clock. Never acquires either Lease: this reads `state.json` and the log files and writes
-    nothing, the same rule `status` follows.
+    Three other endings, each its own return value because each maps to a different exit code.
+    `None` means the `deadline_seconds` bound was reached and the run is still going. `GONE` means
+    `runner_alive` reported the launched process had exited and it never wrote a record.
+
+    `floor` is what `read_floor` returned before the run was launched; passing it makes this
+    follower report only what that launch produced. `sleep` and `clock` are injected so a test can
+    advance a scripted run between polls instead of waiting on a wall clock. Never acquires either
+    Lease: this reads `state.json` and the log files and writes nothing, the same rule `status`
+    follows.
     """
+    offsets = (floor or {}).get("offsets") or {}
+    terminal_floor = (floor or {}).get("terminal")
+    has_floor = floor is not None
+
     # One reader per distinct log. `tail` does not validate the Manifest, so it accepts shapes
     # `validate` refuses: a Task listed twice would otherwise get two readers on one file and
     # replay it once each, and an empty Task list leaves nothing to index.
     readers = []
     seen = set()
-    for task_id, phase, path in candidates(manifest, store):
+    for task_id, phase_name, path in candidates(manifest, store):
         if path not in seen:
             seen.add(path)
-            readers.append(_Reader(task_id, phase, path))
+            readers.append(_Reader(task_id, phase_name, path, start_offset=offsets.get(path, 0)))
     announced = set()
     cursor = 0
     waiting_said = False
+    # None until the first poll fills it. A follower against a store that already holds records
+    # must take them as its baseline rather than announcing history as news (R17).
+    statuses = None
+    deadline = None if deadline_seconds is None else clock() + deadline_seconds
 
     stream("following: %s" % store.dir)
 
+    def announce(text):
+        """One phase event: a line, and a notification when the operator asked for them. Both
+        come from one call so the printed line and the notification cannot drift."""
+        stream(text)
+        if notifier is not None:
+            notifier(notify.TITLE, text)
+
     def emit(index):
         """Drain one candidate and print what it produced, with its phase header the first time
-        that file appears. The header is what tells one Task's output from the next (R9)."""
+        that file appears. The header is what tells one Task's output from the next (R9), and it
+        is a phase event, so it survives `phases_only` while the decoded lines do not."""
         reader = readers[index]
-        if not reader.exists():
+        if not reader.active():
             return
         if index not in announced:
             announced.add(index)
-            stream("")
-            stream("== %s %s ==" % (reader.task_id, reader.phase))
+            if not phases_only:
+                stream("")
+            announce("== %s %s ==" % (reader.task_id, reader.phase))
+        if phases_only:
+            return
         for raw in reader.drain():
             for event in decode(raw):
                 stream(event)
 
+    def note_statuses():
+        """Announce every record whose status moved since the last poll."""
+        nonlocal statuses
+        current = {task_id: record.get("status") for task_id, record in store.records().items()}
+        if statuses is not None:
+            for task_id in sorted(current):
+                if current[task_id] != statuses.get(task_id):
+                    announce("%s is now %s" % (task_id, current[task_id]))
+        statuses = current
+
     def frontier():
-        """The highest candidate that exists on disk, or -1 when the run has written none."""
+        """The highest candidate this follower has seen output on, or -1 when there is none."""
         for index in range(len(readers) - 1, -1, -1):
-            if readers[index].exists():
+            if readers[index].active():
                 return index
         return -1
+
+    def terminal_now():
+        """The terminal record this run wrote, or None. A record identical to the one the floor
+        captured belongs to the previous run against this state directory, so it is not this
+        run's ending."""
+        record = store.terminal()
+        if record is None or (has_floor and record == terminal_floor):
+            return None
+        return record
+
+    def finish(record):
+        run_status = record.get("run_status")
+        if record.get("halt_task"):
+            announce("run %s on %s with class %s"
+                     % (run_status, record.get("halt_task"), record.get("halt_class")))
+        else:
+            announce("run %s" % run_status)
+        return run_status
+
+    def drain_the_rest():
+        for index in range(cursor, len(readers)):
+            emit(index)
+        note_statuses()
 
     while True:
         edge = frontier()
@@ -213,13 +316,26 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS)
             cursor += 1
         if cursor < len(readers):
             emit(cursor)
+        note_statuses()
 
-        terminal = store.terminal()
-        if terminal is not None:
+        record = terminal_now()
+        if record is not None:
             # Read after the drain, then drain again: the record and the last lines of the last
             # log are written by different processes, and this is what stops the record winning
             # the race and cutting the ending off.
-            for index in range(cursor, len(readers)):
-                emit(index)
-            return terminal.get("run_status")
+            drain_the_rest()
+            return finish(record)
+
+        if runner_alive is not None and not runner_alive():
+            # The process exited. Drain once more and read the record again before calling it a
+            # silent death, because the exit and the record are the same race the read above
+            # guards, in the other direction.
+            drain_the_rest()
+            record = terminal_now()
+            if record is not None:
+                return finish(record)
+            return GONE
+
+        if deadline is not None and clock() >= deadline:
+            return None
         sleep(poll_seconds)

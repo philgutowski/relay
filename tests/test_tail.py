@@ -204,7 +204,7 @@ class FollowCase(unittest.TestCase):
     def terminal(self, run_status=contracts.RUN_COMPLETED):
         self.store.write_terminal(run_status)
 
-    def go(self, script=(), limit=40):
+    def go(self, script=(), limit=40, **kwargs):
         """Follow, running one scripted step per sleep. The script mutates the filesystem and the
         state store the way a live runner would, between polls."""
         steps = list(script)
@@ -217,7 +217,11 @@ class FollowCase(unittest.TestCase):
             if steps:
                 steps.pop(0)()
 
-        return tail.follow(self.manifest, self.store, self.stream, sleep=sleep, poll_seconds=0)
+        return tail.follow(self.manifest, self.store, self.stream, sleep=sleep, poll_seconds=0,
+                           **kwargs)
+
+    def floor(self):
+        return tail.read_floor(self.manifest, self.store)
 
 
 class FollowAfterTheRun(FollowCase):
@@ -366,6 +370,239 @@ class FollowOnAManifestValidateWouldReject(FollowCase):
         self.terminal()
         self.go()
         self.assertEqual(self.text.count("said once"), 1)
+
+
+class FollowFromAFloor(FollowCase):
+    """U2: a follower launched beside a run reports only what that launch produced.
+
+    The state directory is keyed on the manifest's path, so a second run against the same
+    manifest finds the previous run's logs (the runner appends to them) and the previous run's
+    terminal record. Every case here is that second run.
+    """
+
+    def test_lines_already_on_disk_are_not_replayed_and_new_ones_are(self):
+        self.append("T-1", say("the previous run said this"))
+        floor = self.floor()
+        self.go(floor=floor, script=[
+            lambda: self.append("T-1", say("this run says this")),
+            lambda: self.terminal(),
+        ])
+        self.assertNotIn("the previous run said this", self.text)
+        self.assertIn("this run says this", self.text)
+
+    def test_the_terminal_record_of_the_previous_run_does_not_end_the_follow(self):
+        self.terminal()
+        floor = self.floor()
+        status = self.go(floor=floor, script=[
+            lambda: self.append("T-1", say("this run started")),
+            lambda: self.terminal(contracts.RUN_HALTED),
+        ])
+        self.assertEqual(status, contracts.RUN_HALTED)
+        self.assertIn("this run started", self.text)
+
+    def test_output_appended_to_an_early_task_still_reaches_the_operator(self):
+        """The cursor stranding case. Every log already exists, so a frontier driven by existence
+        would jump to the last candidate on the first poll and never drain T-1 again."""
+        for task_id in ("T-1", "T-2", "T-3"):
+            self.append(task_id, say("previous %s" % task_id))
+            self.append(task_id, say("previous %s closeout" % task_id), phase=tail.PHASE_CLOSEOUT)
+        floor = self.floor()
+        self.go(floor=floor, script=[
+            lambda: self.append("T-1", say("this run T-1")),
+            lambda: self.append("T-1", say("this run T-1 closeout"), phase=tail.PHASE_CLOSEOUT),
+            lambda: self.append("T-2", say("this run T-2")),
+            lambda: self.terminal(),
+        ])
+        for body in ("this run T-1", "this run T-1 closeout", "this run T-2"):
+            self.assertIn(body, self.text)
+        self.assertNotIn("previous T-1", self.text)
+
+    def test_a_floor_over_an_empty_state_directory_behaves_like_no_floor(self):
+        floor = self.floor()
+        status = self.go(floor=floor, script=[
+            lambda: self.append("T-1", say("first line")),
+            lambda: self.terminal(),
+        ])
+        self.assertEqual(status, contracts.RUN_COMPLETED)
+        self.assertIn("first line", self.text)
+
+    def test_a_zero_byte_log_prints_no_phase_header(self):
+        open(self.log("T-1"), "wb").close()
+        self.terminal()
+        self.go()
+        self.assertNotIn("== T-1", self.text)
+
+
+class FollowBounded(FollowCase):
+    def test_the_deadline_returns_none_and_names_no_ending(self):
+        clock = iter([0, 0, 5, 30, 60, 90])
+        status = self.go(deadline_seconds=10, clock=lambda: next(clock), script=[
+            lambda: self.append("T-1", say("still going")),
+        ])
+        self.assertIsNone(status)
+        self.assertIn("still going", self.text)
+        self.assertNotIn("run completed", self.text)
+
+    def test_a_zero_bound_returns_after_one_poll(self):
+        self.assertIsNone(self.go(deadline_seconds=0, clock=lambda: 0))
+
+    def test_a_run_that_ends_before_the_bound_returns_its_status(self):
+        clock = iter([0, 1, 2, 3, 4, 5])
+        status = self.go(deadline_seconds=1000, clock=lambda: next(clock),
+                         script=[lambda: self.terminal()])
+        self.assertEqual(status, contracts.RUN_COMPLETED)
+
+
+class FollowWatchesTheProcess(FollowCase):
+    """R16: a runner that dies before writing a record leaves a follower with nothing to wait
+    for, so the follower watches the process too."""
+
+    def test_a_process_that_exits_without_a_record_ends_the_follow(self):
+        alive = {"n": 2}
+
+        def runner_alive():
+            alive["n"] -= 1
+            return alive["n"] > 0
+
+        self.assertIs(self.go(runner_alive=runner_alive), tail.GONE)
+
+    def test_the_last_lines_are_drained_before_the_follow_gives_up(self):
+        alive = {"n": 2}
+
+        def runner_alive():
+            alive["n"] -= 1
+            if alive["n"] == 0:
+                self.append("T-1", say("its last words"))
+            return alive["n"] > 0
+
+        self.assertIs(self.go(runner_alive=runner_alive), tail.GONE)
+        self.assertIn("its last words", self.text)
+
+    def test_a_record_written_on_the_same_poll_as_the_exit_wins_over_gone(self):
+        """The exit and the terminal record are written by one process in that order, so a
+        follower that noticed the exit first must read the record again before giving up."""
+        alive = {"n": 2}
+
+        def runner_alive():
+            alive["n"] -= 1
+            if alive["n"] == 0:
+                self.terminal(contracts.RUN_HALTED)
+            return alive["n"] > 0
+
+        self.assertEqual(self.go(runner_alive=runner_alive), contracts.RUN_HALTED)
+
+    def test_a_live_process_is_followed_normally(self):
+        status = self.go(runner_alive=lambda: True,
+                         script=[lambda: self.append("T-1", say("working")),
+                                 lambda: self.terminal()])
+        self.assertEqual(status, contracts.RUN_COMPLETED)
+        self.assertIn("working", self.text)
+
+
+class PhaseEvents(FollowCase):
+    def record(self, task_id, status):
+        self.store.upsert(task_id, status=status)
+
+    def test_a_status_change_is_announced(self):
+        self.go(script=[
+            lambda: self.record("T-1", contracts.STATUS_RUNNING),
+            lambda: self.record("T-1", contracts.STATUS_LANDED),
+            lambda: self.terminal(),
+        ])
+        self.assertIn("T-1 is now %s" % contracts.STATUS_RUNNING, self.text)
+        self.assertIn("T-1 is now %s" % contracts.STATUS_LANDED, self.text)
+
+    def test_a_status_that_did_not_move_is_announced_once(self):
+        self.go(script=[
+            lambda: self.record("T-1", contracts.STATUS_RUNNING),
+            lambda: None,
+            lambda: None,
+            lambda: self.terminal(),
+        ])
+        self.assertEqual(self.text.count("T-1 is now %s" % contracts.STATUS_RUNNING), 1)
+
+    def test_records_already_present_at_the_first_poll_are_the_baseline_not_news(self):
+        """R17: a follower against a store that already holds records must not announce history
+        as though it just happened."""
+        self.record("T-1", contracts.STATUS_LANDED)
+        self.record("T-2", contracts.STATUS_BLOCKED)
+        self.go(script=[lambda: self.terminal()])
+        self.assertNotIn("is now", self.text)
+
+    def test_the_terminal_phase_event_names_the_run_status(self):
+        self.terminal()
+        self.go()
+        self.assertIn("run %s" % contracts.RUN_COMPLETED, self.text)
+
+    def test_the_terminal_phase_event_of_a_halt_names_the_task_and_the_class(self):
+        self.store.write_terminal(contracts.RUN_HALTED, halt_task="T-2",
+                                  halt_class=contracts.HALT_GATE_REFUSED)
+        self.go()
+        self.assertIn("T-2", self.text)
+        self.assertIn(contracts.HALT_GATE_REFUSED, self.text)
+
+
+class PhasesOnly(FollowCase):
+    def test_the_decoded_activity_is_suppressed_and_the_headers_are_not(self):
+        self.append("T-1", say("a decoded sentence"))
+        self.terminal()
+        self.go(phases_only=True)
+        self.assertNotIn("a decoded sentence", self.text)
+        self.assertIn("== T-1 %s ==" % tail.PHASE_TASK, self.text)
+
+    def test_status_changes_and_the_ending_still_reach_the_operator(self):
+        self.go(phases_only=True, script=[
+            lambda: self.store.upsert("T-1", status=contracts.STATUS_LANDED),
+            lambda: self.terminal(),
+        ])
+        self.assertIn("T-1 is now %s" % contracts.STATUS_LANDED, self.text)
+        self.assertIn("run %s" % contracts.RUN_COMPLETED, self.text)
+
+    def test_the_same_run_without_the_flag_prints_the_activity(self):
+        self.append("T-1", say("a decoded sentence"))
+        self.terminal()
+        self.go()
+        self.assertIn("a decoded sentence", self.text)
+
+
+class Notifications(FollowCase):
+    def sent(self):
+        fired = []
+        return fired, lambda title, body: fired.append((title, body))
+
+    def test_one_notification_per_phase_event_and_none_for_activity(self):
+        fired, notifier = self.sent()
+        self.append("T-1", say("decoded activity nobody should be notified about"))
+        self.go(notifier=notifier, script=[
+            lambda: self.store.upsert("T-1", status=contracts.STATUS_LANDED),
+            lambda: self.terminal(),
+        ])
+        bodies = [body for _title, body in fired]
+        self.assertIn("== T-1 %s ==" % tail.PHASE_TASK, bodies)
+        self.assertIn("T-1 is now %s" % contracts.STATUS_LANDED, bodies)
+        self.assertIn("run %s" % contracts.RUN_COMPLETED, bodies)
+        self.assertFalse([body for body in bodies if "decoded activity" in body])
+
+    def test_every_notification_carries_the_relay_title(self):
+        fired, notifier = self.sent()
+        self.terminal()
+        self.go(notifier=notifier)
+        self.assertTrue(fired)
+        self.assertEqual({title for title, _body in fired}, {"Relay"})
+
+    def test_attaching_a_notifier_does_not_change_what_is_printed(self):
+        def run_once(notifier):
+            self.append("T-1", say("one"))
+            self.terminal()
+            self.go(notifier=notifier)
+            return [line.replace(self.store.dir, "<state>") for line in self.lines]
+
+        quiet = run_once(None)
+        self.tearDown()
+        self.setUp()
+        fired, notifier = self.sent()
+        self.assertEqual(run_once(notifier), quiet)
+        self.assertTrue(fired)
 
 
 class FollowTakesNoLease(FollowCase):
