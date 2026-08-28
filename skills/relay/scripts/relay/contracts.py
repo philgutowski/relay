@@ -250,6 +250,10 @@ DIGEST_KEYS = frozenset((
     "malformed_lines",
     "tool_calls",
     "findings",
+    # R13, KTD5: True when the evidence source could not be read, so `findings` is None rather
+    # than empty. A reader that cannot tell "we looked and found none" from "we could not look"
+    # reports a runner fault as the task's silence.
+    "findings_unavailable",
     "envelope",
     "last_message",
     "last_message_tail",

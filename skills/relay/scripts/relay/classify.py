@@ -10,7 +10,9 @@ Two joins do the work (KTD6). A denial is a `tool_result` whose content matches 
 regex; joined by id to its `tool_use` it yields the tool name and the path or argument it was
 denied on. A substitution is a `Skill` tool_use whose `input.skill` lacks the required prefix.
 Classes assigned here are the ones the transcript alone can decide: timeout (from the launch
-result), blocked_envelope, no_envelope, and path_gate. gate_refused, partial_landing,
+result), blocked_envelope, no_envelope, path_gate, and unexpected_error when the transcript
+itself would not open, which is the runner's fault and never the task's silence (KTD5).
+gate_refused, partial_landing,
 tracker_write_denied as a class, remote_advanced, closeout_out_of_scope, and ci_undecided need
 git or tracker evidence and are assigned by verify (U8); the findings here attach to them.
 """
@@ -182,6 +184,7 @@ def classify(transcript_path, launch_result, write_tool_patterns=None):
         "malformed_lines": 0,
         "tool_calls": 0,
         "findings": [],
+        "findings_unavailable": False,
         "envelope": None,
         "last_message": None,
         "halt_class": None,
@@ -257,12 +260,24 @@ def classify(transcript_path, launch_result, write_tool_patterns=None):
     envelope = parse_envelope(last_text) if last_text else None
     result["envelope"] = envelope
 
-    # Precedence (KTD6): timeout beats all; then the envelope; a path_gate finding on a blocked
-    # or absent envelope is the more specific cause. A complete envelope leaves the class to
-    # verify, so halt_class stays None and routable is True.
+    # Precedence (KTD6): timeout beats all; then an evidence source that would not open; then
+    # the envelope; a path_gate finding on a blocked or absent envelope is the more specific
+    # cause. A complete envelope leaves the class to verify, so halt_class stays None and
+    # routable is True.
     has_path_gate = any(f["class"] == contracts.HALT_PATH_GATE for f in result["findings"])
     if timed_out:
+        # KTD4: a killed process that never wrote its evidence is the timeout class, not a
+        # runner fault, so this stays ahead of the unreadable branch below.
         result["halt_class"] = contracts.HALT_TIMEOUT
+    elif not result["transcript_present"]:
+        # R13, R20, KTD5. An absent evidence source is not an empty one. Falling through to
+        # no_envelope claimed the process ran and printed nothing, which is a statement about
+        # the task that nobody observed, and it handed run._routable the one class its rescue
+        # route merges on. The fault is the runner's, so the class is the runner fault one and
+        # the transcript derived findings are unavailable rather than none found.
+        result["halt_class"] = contracts.HALT_UNEXPECTED_ERROR
+        result["findings"] = None
+        result["findings_unavailable"] = True
     elif envelope and envelope["status"] == contracts.ENVELOPE_STATUS_COMPLETE:
         result["routable"] = True
     elif envelope:

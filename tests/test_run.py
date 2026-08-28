@@ -10,9 +10,11 @@ import tempfile
 import textwrap
 import unittest
 
+from types import SimpleNamespace
+
 import _paths
 import _repo
-from relay import contracts, gitread, manifest as mf, run as runner, state, verify
+from relay import classify, contracts, gitread, manifest as mf, run as runner, state, verify
 
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
 
@@ -169,11 +171,17 @@ class RunCase(unittest.TestCase):
     def queue_entry(self, fixture, git_sh=None, exit_code=0, sleep=0, stream=None):
         """`stream` is the opt in stdout fixture (see the stub's queue protocol). Left None, the
         stub prints only system and result lines, which is what every case but the tail ones
-        wants."""
+        wants.
+
+        `fixture` of None writes no transcript at all, which is how a process that left the
+        runner nothing to read is staged (R20).
+        """
         self.entry += 1
         entry_dir = os.path.join(self.queue, str(self.entry))
         os.makedirs(entry_dir)
-        entry = {"fixture": os.path.join(TRANSCRIPTS, fixture), "exit": exit_code, "sleep": sleep}
+        entry = {"exit": exit_code, "sleep": sleep}
+        if fixture:
+            entry["fixture"] = os.path.join(TRANSCRIPTS, fixture)
         if stream:
             entry["stream"] = stream
         with open(os.path.join(entry_dir, "entry.json"), "w") as handle:
@@ -365,6 +373,75 @@ class BlockedByPathGate(RunCase):
         self.assertEqual(records["T-2"]["halt_class"], contracts.HALT_PATH_GATE)
         self.assertIn(contracts.HALT_PATH_GATE, [f["class"] for f in records["T-2"]["findings"]])
         self.assertEqual(records["T-3"]["status"], contracts.STATUS_LANDED)
+
+
+class UnreadableEvidenceNeverRescues(RunCase):
+    """R20, KTD5. The no envelope rescue route merges on commits plus a card in the in review
+    status. Evidence the runner could not read used to arrive at that route wearing the
+    no_envelope class, so a task nobody ever observed could merge code on the strength of a
+    card someone moved by hand.
+
+    `_routable` is exercised directly here because the markdown adapter reports only open or
+    closed, so the end to end path in this module can never reach the rescue branch at all (see
+    test_manifest's markdown warning). The direct call is the only place both sides of the
+    narrowing, the refusal and the merge that must survive it, can be put beside each other.
+    """
+
+    def stage_branch_with_commits(self):
+        """What the rescue route reads on the git side: a task branch carrying work that is not
+        on main yet."""
+        from test_gitwrite import commit_on_branch
+        self.baseline_sha = gitread.rev_parse(self.repo, "main")
+        commit_on_branch(self.repo, "relay/T-1", {"src/t_1.py": "value = 1\n"}, "T-1 work",
+                         base="main")
+        _repo.git(self.repo, "checkout", "-q", "main")
+
+    def digest_for(self, fixture):
+        """A real classify digest, so the test proves the seam between the two modules rather
+        than a hand written dict that can agree with nothing."""
+        digest = classify.classify(os.path.join(TRANSCRIPTS, fixture),
+                                   SimpleNamespace(timed_out=False, exit_code=0))
+        digest["task_id"] = "T-1"
+        return digest
+
+    def routable(self, digest, card_status="in review"):
+        adapter = SimpleNamespace(status=lambda task_id: {"status": card_status})
+        return runner._routable(self.manifest, adapter, digest, self.repo, "relay/T-1",
+                                self.baseline_sha)
+
+    def test_the_rescue_route_refuses_a_run_whose_evidence_could_not_be_read(self):
+        self.stage_branch_with_commits()
+        digest = self.digest_for("does-not-exist.jsonl")
+        routable, note = self.routable(digest)
+        self.assertFalse(routable, "unreadable evidence merged through the rescue route")
+        self.assertIn("could not", note or "")
+
+    def test_the_rescue_route_still_merges_a_readable_run_that_printed_no_envelope(self):
+        """The narrowing is a narrowing, not a removal. This is the same branch, commits, and
+        card as the case above, with evidence the runner actually opened."""
+        self.stage_branch_with_commits()
+        digest = self.digest_for("no_envelope.jsonl")
+        self.assertEqual(digest["halt_class"], contracts.HALT_NO_ENVELOPE)
+        routable, note = self.routable(digest)
+        self.assertTrue(routable, note)
+        self.assertIn("in review", note or "")
+
+    def test_a_task_that_left_no_transcript_is_a_runner_fault_and_its_branch_is_not_merged(self):
+        """End to end: the class on the record is the runner fault one, and the commits the
+        process did leave behind stay on the stranded branch."""
+        self.queue_entry(None, TASK_BRANCH_SH % ("T-1", "t_1", "T-1"))
+        self.closeout_blocked("T-1")
+        self.task_success("T-2")
+        self.closeout_landed("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        record = self.store().get("T-1")
+        self.assertEqual(record["halt_class"], contracts.HALT_UNEXPECTED_ERROR)
+        self.assertIn("relay/T-1", self.relay_branches())
+        self.assertNotIn("- [x] T-1 Add the brief renderer", self.tracker_at_remote())
 
 
 class ExcludedByScan(RunCase):

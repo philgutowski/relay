@@ -96,6 +96,12 @@ def _routable(manifest, adapter, digest, repo, branch, baseline_sha):
         # nothing to merge, and the runner says so rather than trusting the claim.
         return has_commits, (None if has_commits else
                              "the envelope read complete but the branch carries no commits")
+    if digest.get("findings_unavailable"):
+        # R20, KTD5. The route reads the card and the branch as a stronger signal than a silent
+        # process. Evidence the runner could not read is not a silent process, it is a runner
+        # fault, and classifying it as one is not enough on its own: the check has to be here
+        # too, or a card someone moved by hand merges work nobody ever observed.
+        return False, "the evidence could not be read, so the no envelope route does not apply"
     if digest.get("halt_class") != contracts.HALT_NO_ENVELOPE:
         return False, None
     if not has_commits:
@@ -485,6 +491,15 @@ def _blocked_route(ctx, halt_class):
         "blocker": blockers[0] if blockers else "no blocker text in the envelope",
         "last_message": ctx.digest.get("last_message") or "(no final message)",
     }
+    if ctx.digest.get("findings_unavailable"):
+        # unexpected_error reaches here now that unreadable evidence is a runner fault (KTD5),
+        # and its line asks for fields no transcript could have supplied.
+        evidence.update({
+            "task": ctx.task.id,
+            "error_type": "unreadable evidence",
+            "error": "the transcript at %s could not be read"
+                     % (ctx.digest.get("transcript_path") or "an unknown path"),
+        })
     evidence.update(ctx.digest.get("timeout") or {})
     ctx.store.upsert(ctx.task.id, status=contracts.STATUS_BLOCKED, halt_class=halt_class,
                      branch=stranded["branch"], findings=ctx.findings,
