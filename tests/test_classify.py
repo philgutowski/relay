@@ -234,6 +234,40 @@ class ParagraphBlockers(unittest.TestCase):
         self.assertEqual(env["changed_files"], ["a.py"])
 
 
+class LearningsField(unittest.TestCase):
+    """T-7: the envelope's fifth, optional key. Parsed the same way as blockers and changed_files,
+    only ever present when an envelope was found at all."""
+
+    def test_a_bulleted_learning_is_captured(self):
+        env = classify.parse_envelope(
+            "```relay-envelope\nstatus: complete\nlearnings:\n"
+            "- the timeout was upstream, not in this service\n```")
+        self.assertEqual(env["learnings"], ["the timeout was upstream, not in this service"])
+
+    def test_an_absent_learnings_key_is_empty(self):
+        env = classify.parse_envelope("status: complete\nblockers: none\nchanged_files:\n- a.py\nplan_path: p.md\n")
+        self.assertEqual(env["learnings"], [])
+
+    def test_a_present_but_empty_learnings_key_stays_empty(self):
+        env = classify.parse_envelope("status: complete\nlearnings:\nplan_path: p.md\n")
+        self.assertEqual(env["learnings"], [])
+
+    def test_a_multi_line_learnings_paragraph_stops_at_the_next_key(self):
+        env = classify.parse_envelope(
+            "status: complete\nlearnings:\nfirst line of prose\nsecond line of prose\n\nplan_path: p.md\n")
+        self.assertEqual(env["learnings"], ["first line of prose", "second line of prose"])
+
+    def test_a_colon_led_line_inside_learnings_truncates_there(self):
+        """KTD2: `_list_after`'s shared paragraph branch stops at any bare word followed by a
+        colon, not only the real envelope keys."""
+        env = classify.parse_envelope(
+            "status: complete\nlearnings:\nthe cause was subtle\nCause: the timeout was upstream\n")
+        self.assertEqual(env["learnings"], ["the cause was subtle"])
+
+    def test_no_status_line_yields_no_envelope_even_with_learnings_present(self):
+        self.assertIsNone(classify.parse_envelope("learnings:\n- something\n"))
+
+
 class FindingLines(unittest.TestCase):
     """`classify.finding_line` feeds the closeout brief, which the Closeout process reads when it
     writes the tracker card. The same table `tests/test_summary.py` renders through the summary

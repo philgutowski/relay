@@ -53,6 +53,9 @@ ENVELOPE_STATUSES = (ENVELOPE_STATUS_COMPLETE, ENVELOPE_STATUS_BLOCKED, ENVELOPE
 ENVELOPE_BLOCKERS_KEY = "blockers"
 ENVELOPE_CHANGED_FILES_KEY = "changed_files"
 ENVELOPE_PLAN_PATH_KEY = "plan_path"
+# Relay's own addition to the envelope, not part of the plugin's return-to-caller contract the
+# four keys above pin against (docs/backlog.md line two).
+ENVELOPE_LEARNINGS_KEY = "learnings"
 COMPOUND_NON_INTERACTIVE = "mode:non-interactive"
 COMPOUND_DEPTH_LIGHTWEIGHT = "depth:lightweight"
 COMPOUND_DEPTH_FULL = "depth:full"

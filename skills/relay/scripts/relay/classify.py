@@ -143,6 +143,7 @@ def parse_envelope(text):
         "blockers": _list_after(block, contracts.ENVELOPE_BLOCKERS_KEY),
         "changed_files": _list_after(block, contracts.ENVELOPE_CHANGED_FILES_KEY),
         "plan_path": plan.group(1) if plan else None,
+        "learnings": _list_after(block, contracts.ENVELOPE_LEARNINGS_KEY),
     }
 
 
