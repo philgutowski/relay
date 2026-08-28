@@ -529,6 +529,21 @@ class PhaseEvents(FollowCase):
         self.go(script=[lambda: self.terminal()])
         self.assertNotIn("is now", self.text)
 
+    def test_a_floor_baselines_the_statuses_from_before_the_launch(self):
+        """A runner can reach its first upsert before the follower's first read. With a floor
+        that transition is still news, because the baseline predates the launch."""
+        self.record("T-1", contracts.STATUS_PENDING)
+        floor = self.floor()
+        self.record("T-1", contracts.STATUS_RUNNING)
+        self.go(floor=floor, script=[lambda: self.terminal()])
+        self.assertIn("T-1 is now %s" % contracts.STATUS_RUNNING, self.text)
+
+    def test_a_floor_still_does_not_announce_what_was_true_before_the_launch(self):
+        self.record("T-1", contracts.STATUS_LANDED)
+        floor = self.floor()
+        self.go(floor=floor, script=[lambda: self.terminal()])
+        self.assertNotIn("is now", self.text)
+
     def test_the_terminal_phase_event_names_the_run_status(self):
         self.terminal()
         self.go()

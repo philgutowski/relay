@@ -220,13 +220,14 @@ def cmd_status(args, env, out):
     # The state directory is keyed on the manifest's real path, so editing the manifest in place
     # keeps the directory and everything the previous run left in it. Say so rather than clamping
     # the number: the cursor and the terminal record are true facts, about a run this manifest no
-    # longer describes.
+    # longer describes. "different" rather than "longer", because a manifest whose tasks were
+    # swapped for others of the same count reaches here too.
     ids = {task.id for task in manifest.tasks}
     records = store.records()
     stale = cursor > len(manifest.tasks) or any(task_id not in ids for task_id in records)
     if stale:
         out.write("stale state: this directory is keyed on the manifest path and holds a run of "
-                  "a longer manifest than the one loaded now\n")
+                  "a different manifest from the one loaded now\n")
     lease = store.lease()
     if lease:
         out.write("lease: pid %s on %s\n" % (lease.get("holder_pid"), lease.get("hostname")))

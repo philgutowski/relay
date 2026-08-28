@@ -148,11 +148,18 @@ def _size(path):
 
 def read_floor(manifest, store):
     """What is already on disk, read before a run is launched, so a follower given it reports
-    only what that launch produces. Carries every candidate log's current size and the terminal
-    record present at the time.
+    only what that launch produces. Carries every candidate log's current size, the terminal
+    record present at the time, and every Task's status at the time.
+
+    The statuses are the baseline for phase events. Taking them here rather than on the
+    follower's first poll is what stops a runner that reaches its first `store.upsert` before the
+    follower's first read from having that first transition swallowed as history.
     """
+    state = store.read() or {}
     return {"offsets": {path: _size(path) for _id, _phase, path in candidates(manifest, store)},
-            "terminal": store.terminal()}
+            "terminal": state.get("terminal"),
+            "statuses": {task_id: record.get("status")
+                         for task_id, record in (state.get("tasks") or {}).items()}}
 
 
 class _Reader:
@@ -231,9 +238,11 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
     announced = set()
     cursor = 0
     waiting_said = False
-    # None until the first poll fills it. A follower against a store that already holds records
-    # must take them as its baseline rather than announcing history as news (R17).
-    statuses = None
+    # The baseline for phase events. A follower must not announce history as news, so a follower
+    # with no floor takes its first poll as the baseline. A follower with one takes the statuses
+    # read before the run was launched, which is tighter: everything the run then does is news,
+    # including a first transition the runner wrote before this loop's first read.
+    statuses = (floor or {}).get("statuses") if has_floor else None
     deadline = None if deadline_seconds is None else clock() + deadline_seconds
 
     stream("following: %s" % store.dir)

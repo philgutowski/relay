@@ -331,7 +331,7 @@ class StatusAgainstAShrunkManifest(CliCase):
         out = self.shrunk_status()
         self.assertIn("cursor: 3 of 1 task(s)", out)
         self.assertIn("stale state", out)
-        self.assertIn("longer manifest", out)
+        self.assertIn("different manifest", out)
 
     def test_the_records_outside_the_manifest_are_marked_and_the_one_inside_is_not(self):
         out = self.shrunk_status()
