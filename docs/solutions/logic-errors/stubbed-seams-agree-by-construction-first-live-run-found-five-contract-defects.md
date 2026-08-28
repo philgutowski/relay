@@ -222,6 +222,16 @@ markdown tracked repo with a local bare origin and two one function tasks takes 
 up and is the only instrument that has found a defect on any of these seams. The stub cannot,
 by construction.
 
+**A stubbed seam agrees by construction, and a stubbed subprocess is free by construction.**
+The list above is every message contract this run found broken, but cost is the second thing a
+stub cannot produce, and it breaks a different kind of bound. `push_timeout_for` in
+`docs/solutions/logic-errors/push-inherited-the-read-sized-git-timeout-so-the-pre-push-gate-outran-it.md`
+is the counterexample: no contract in the list above changed, and a live run was still the only
+instrument that found the defect, because `tests/_repo.py`'s fixture repositories carry no
+`pre-push` hook, so every push in the suite returns in milliseconds. Any runner bound sized
+against real work, a subprocess timeout, a retry budget, a rate limit, is unproven until a live
+run pays the cost the stub was never asked to pay.
+
 **One exception: when the contract change is to the Runner package itself, the run that lands
 it is not the run that can verify it.** The Runner is one long lived process that imports
 `run.py`, `state.py`, and the rest of `skills/relay/scripts/relay/` once, at launch. A Task
@@ -254,6 +264,10 @@ should point.
 
 ## Related Issues
 
+- `docs/solutions/logic-errors/push-inherited-the-read-sized-git-timeout-so-the-pre-push-gate-outran-it.md`
+  is the counterexample behind this doc's Prevention amendment: no message contract changed, and
+  a live run was still the only way to find it, because the fixtures never pay the cost a real
+  `pre-push` hook adds to a push.
 - `docs/solutions/logic-errors/cause-line-contract-split-degraded-to-placeholders.md` is the
   same shape one layer down: a contract split between a declaration and scattered satisfiers,
   verified by nothing that joins them. Its rule is to write the set level test that performs
