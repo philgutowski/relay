@@ -26,7 +26,10 @@ A Runner is one process for the length of a Manifest, so the code it runs is the
 when it started. Where Relay drives its own repository, a Task that lands a change to the Runner's
 own code does not change the Runner already running, and that run's own record is written by the
 older code. What a Task lands becomes visible inside the same run only where the Runner reads
-something at the moment it uses it rather than loading it once at the start.
+something at the moment it uses it rather than loading it once at the start. A change spanning both
+kinds is the case that does more than go unobserved: the run holds the half it loaded at the start
+and reads the half it takes at the moment of use, and stops at the first use that needs the two to
+agree.
 
 ### Lease
 The claim a Runner holds while it drives a Manifest, which is what stops two Runners from
@@ -64,6 +67,27 @@ Its own turn ending and the process exiting are the same event, so anything it s
 background is at the mercy of that exit rather than surviving it. This is why the Runner's own
 bounding of the whole group is a backstop rather than the first line of defense: what usually
 kills a background command is the process's own turn ending, not the Runner noticing afterward.
+
+### Brief
+The instruction text a Runner hands a process it launches, rendered for that process alone from a
+template plus the Task's own facts. There is one shape per Shipping mode for a Task process, and one
+for a Closeout process.
+
+A Brief renders deterministically, so the same inputs produce the same text and a re-run after a
+halt does not change what a process was told. Its template is read at the moment of rendering rather
+than held from the Runner's start, which is what lets a Task change the Brief that later processes in
+the same run receive, and equally what lets a template naming a value the running Runner cannot yet
+supply stop the run outright.
+
+### Envelope
+The structured block a Task process prints at the end of its work to report what it did: whether it
+completed, was blocked, or failed, the blockers if any, the files it changed, the plan it worked
+from, and anything it judged worth keeping as a learning.
+
+An Envelope is a claim, not evidence. The Runner reads it to classify how a Task process exited, and
+never to decide whether the Task landed, which is Verify-landed's job from git and the Tracker
+alone. A Task process that exits without one gets its own Halt class rather than the benefit of the
+doubt.
 
 ### Closeout process
 A separate short agent invocation the Runner launches after every Task process exit except a
