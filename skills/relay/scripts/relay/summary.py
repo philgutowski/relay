@@ -84,6 +84,7 @@ def _task_entry(store, record):
         "branch": record.get("branch"),
         "closeout": record.get("closeout"),
         "excluded_reason": record.get("excluded_reason"),
+        "continued_past": bool(record.get("continued_past")),
         "wall_seconds": record.get("wall_seconds"),
         "active_seconds": record.get("active_seconds"),
         "verify_failed": failed,
@@ -102,6 +103,13 @@ def _pending_checks(entries, run_status, halt_task, halt_class, state_dir):
             checks.append({"kind": "excluded", "task": task_id,
                            "text": "%s was skipped: %s. Run it attended."
                                    % (task_id, entry["excluded_reason"] or "no reason recorded")})
+        if entry["status"] == contracts.STATUS_HALTED and entry["continued_past"]:
+            # Issue #15. The run stepped over this task, so the halted line at the bottom
+            # of this list never names it; it needs its own.
+            checks.append({"kind": "continued_past", "task": task_id,
+                           "text": "%s halted with class %s and the run continued past it. "
+                                   "Repair by hand, then run again to resume."
+                                   % (task_id, entry["class"])})
         if entry["status"] == contracts.STATUS_BLOCKED and entry["branch"]:
             checks.append({"kind": "stranded_branch", "task": task_id,
                            "text": "%s left %s in place. Keep or delete it by hand."
