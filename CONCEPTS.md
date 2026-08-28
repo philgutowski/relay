@@ -89,6 +89,21 @@ never to decide whether the Task landed, which is Verify-landed's job from git a
 alone. A Task process that exits without one gets its own Halt class rather than the benefit of the
 doubt.
 
+### Digest
+The record the Runner builds by reading a Task process's transcript once, holding the Envelope
+alongside what the Runner itself observed: whether the process timed out, its exit status, how
+many tool calls it made, and the Halt class the Runner assigned. The Runner holds it in memory and
+renders pieces of it into the Closeout process's own Brief before launching that process; it is
+also written once per Task as a durable record, though nothing in the run loop reads that file
+back, so the Closeout process itself never sees the Digest directly, only what the Runner rendered
+from it.
+
+A Digest is not the same claim as the Envelope it carries. The Envelope is the Task process's own
+account of what happened; the Digest is the Runner's account of the process's exit, built without
+trusting that account, and the Envelope is only one field inside it. An optional field's presence
+in the Digest proves the Runner's transcript parsing found it, never that a later stage, such as a
+rendered Brief, actually carries it forward.
+
 ### Closeout process
 A separate short agent invocation the Runner launches after every Task process exit except a
 timeout that left the tree dirty. It has two ordered duties: write the Task's outcome to the Tracker (the closing reference
