@@ -108,5 +108,68 @@ class CapabilityRecord(unittest.TestCase):
         self.assertIsNone(cap.deny_flag)
 
 
+class SharedSurface(unittest.TestCase):
+    def test_every_backend_implements_exactly_the_interface(self):
+        from relay import backends
+
+        for name in mf.BACKENDS:
+            module = backends.build(name)
+            for method in backends.INTERFACE:
+                self.assertTrue(
+                    callable(getattr(module, method, None)),
+                    "%s lacks %s" % (name, method),
+                )
+            public = {
+                attr for attr in dir(module)
+                if not attr.startswith("_") and callable(getattr(module, attr))
+            }
+            self.assertEqual(public, set(backends.INTERFACE), "%s exposes more than the interface" % name)
+
+    def test_parse_version_reads_each_observed_sample(self):
+        from relay import backends
+
+        for name in mf.BACKENDS:
+            module = backends.build(name)
+            sample = module.CAPABILITY.version_output_sample
+            self.assertEqual(module.parse_version(sample), module.CAPABILITY.version_tested, name)
+
+    def test_parse_version_returns_none_rather_than_raising(self):
+        from relay import backends
+
+        for name in mf.BACKENDS:
+            module = backends.build(name)
+            self.assertIsNone(module.parse_version(""))
+            self.assertIsNone(module.parse_version("update available"))
+
+    def test_qualify_skill_interpolates_the_pin_form(self):
+        from relay import backends
+
+        self.assertEqual(backends.build("claude").qualify_skill("ce-plan"), "compound-engineering:ce-plan")
+        self.assertEqual(backends.build("codex").qualify_skill("ce-plan"), "$ce-plan")
+        self.assertEqual(backends.build("grok").qualify_skill("ce-plan"), "/ce-plan")
+
+    def test_deferred_callables_exist_and_do_not_read_fixtures(self):
+        from relay import backends
+
+        deferred = (
+            "build_args",
+            "evidence_sources",
+            "readable",
+            "normalize_transcript",
+            "normalize_stream",
+        )
+        fixture_root = os.path.join(_paths.FIXTURES_DIR, "backends")
+
+        def boom(*_args, **_kwargs):
+            raise AssertionError("deferred callables must not read fixtures")
+
+        with mock.patch("builtins.open", boom):
+            for name in mf.BACKENDS:
+                module = backends.build(name)
+                for method in deferred:
+                    getattr(module, method)()
+        self.assertTrue(os.path.isdir(fixture_root))
+
+
 if __name__ == "__main__":
     unittest.main()

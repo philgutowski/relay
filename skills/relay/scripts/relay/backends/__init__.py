@@ -17,9 +17,14 @@ The interface, with the shapes each callable returns:
     normalize_stream(...)        -> normalized lines, origin U6 fills the body
     qualify_skill(name)          -> the skill invocation string for this backend
 """
+import re
 from dataclasses import dataclass
 
 from .. import contracts
+
+# Same leading digit token launch.cli_version uses today. Claude's parse is this match
+# on the stripped stdout. Codex and Grok skip the first name token and apply it to the rest.
+_VERSION_TOKEN_RE = re.compile(r"^(\d[\w.\-]*)")
 
 BACKENDS = ("claude", "codex", "grok")
 
@@ -67,6 +72,43 @@ def _record(name):
     """The frozen pin copy for one backend. Backend modules call this and do not
     import Capability, so the type object is not a public callable on the module."""
     return Capability(**contracts.BACKEND_PINS[name])
+
+
+def _parse_leading_digit(text):
+    """A version only when stripped stdout leads with a digit. Never raises."""
+    if text is None:
+        return None
+    stripped = str(text).strip()
+    if not stripped:
+        return None
+    match = _VERSION_TOKEN_RE.match(stripped)
+    return match.group(1) if match else None
+
+
+def _parse_after_name_token(text):
+    """Skip the leading name token, then take a leading digit version. Never raises."""
+    if text is None:
+        return None
+    stripped = str(text).strip()
+    if not stripped:
+        return None
+    parts = stripped.split()
+    if len(parts) < 2:
+        return None
+    match = _VERSION_TOKEN_RE.match(parts[1])
+    return match.group(1) if match else None
+
+
+def _empty_args(*_args, **_kwargs):
+    return []
+
+
+def _empty_sources(*_args, **_kwargs):
+    return ()
+
+
+def _none(*_args, **_kwargs):
+    return None
 
 
 def build(name):
