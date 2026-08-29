@@ -141,6 +141,7 @@ BACKEND_PINS = {
         "credential_file": "~/.claude/.credentials.json",
         "nesting_markers": ("CLAUDECODE", "CLAUDE_CODE_"),
         "writes_into_worktree": False,
+        "extra_writable_dirs": (),
     },
     "codex": {
         "binary": "codex",
@@ -210,6 +211,7 @@ BACKEND_PINS = {
         "credential_file": "~/.grok/auth.json",
         "nesting_markers": ("GROK_SANDBOX",),
         "writes_into_worktree": False,
+        "extra_writable_dirs": (),
     },
 }
 
