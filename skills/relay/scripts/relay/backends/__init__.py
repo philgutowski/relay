@@ -49,6 +49,7 @@ class Capability:
     version_output_sample: str
     plugin_version: str
     plugin_query: tuple
+    plugin_version_pattern: str
     headless_flag: str
     session_id_choosable: bool
     permission_mode: str

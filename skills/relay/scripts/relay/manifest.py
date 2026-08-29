@@ -13,10 +13,12 @@ remote, identity, and CE artifact root checks; pass `check_repo=False` to skip t
 """
 import os
 import re
+import shutil
+import subprocess
 import tomllib
 from dataclasses import dataclass, field
 
-from . import contracts, gitread
+from . import backends, contracts, gitread
 
 ADAPTERS = ("jira", "github", "markdown")
 # The CLI a Task process runs on (R1). Every backend runs the identical pipeline through the
@@ -334,7 +336,54 @@ def task_allowed_paths(manifest):
     return tuple(manifest.permissions.task_allowed_paths) or None
 
 
-def validate(manifest, check_repo=True, env=None):
+def _version_parts(value):
+    """A comparable version tuple, or None when a plugin did not report one."""
+    match = re.fullmatch(r"\d+(?:\.\d+)+", str(value or "").strip())
+    return tuple(int(part) for part in match.group(0).split(".")) if match else None
+
+
+def _plugin_version(capability, output):
+    """Extract this backend's compound-engineering version from its recorded list output."""
+    try:
+        match = re.search(capability.plugin_version_pattern, output or "")
+    except re.error:
+        return None
+    return match.group("version") if match else None
+
+
+def _run_plugin_query(capability, env):
+    """Run the capability-recorded query behind one seam for deterministic validation tests."""
+    return subprocess.run(capability.plugin_query, capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, env=env, timeout=15)
+
+
+def _backend_readiness_errors(manifest, env):
+    """Return environment failures for each distinct backend without raising from validation."""
+    errors = []
+    path = env.get("PATH")
+    for name in sorted({task.backend for task in manifest.tasks if task.backend in BACKENDS}):
+        capability = backends.build(name).CAPABILITY
+        if not shutil.which(capability.binary, path=path):
+            errors.append("backend %s binary %r is missing from PATH" % (name, capability.binary))
+            continue
+        try:
+            completed = _run_plugin_query(capability, env)
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append("backend %s plugin probe failed: %s" % (name, exc))
+            continue
+        version = _plugin_version(capability, completed.stdout) if completed.returncode == 0 else None
+        floor = _version_parts(contracts.PLUGIN_MIN_VERSION)
+        observed = _version_parts(version)
+        if observed is None:
+            errors.append("backend %s has no readable %s plugin at or above %s"
+                          % (name, contracts.PLUGIN_NAME, contracts.PLUGIN_MIN_VERSION))
+        elif observed < floor:
+            errors.append("backend %s has %s plugin %s, below required %s"
+                          % (name, contracts.PLUGIN_NAME, version, contracts.PLUGIN_MIN_VERSION))
+    return errors
+
+
+def validate(manifest, check_repo=True, check_environment=False, env=None):
     """Apply every rule from plan U2 step 2. Returns a ValidationResult; never raises for a
     rule failure, so the CLI can print every problem at once."""
     result = ValidationResult(defaults_applied=list(manifest.defaults_applied))
@@ -415,6 +464,14 @@ def validate(manifest, check_repo=True, env=None):
              "so KTD6's route for a task that exits without an envelope cannot fire; such a task is "
              "always treated as blocked under this adapter" % manifest.tracker.in_review_status)
 
+    # KTD10, R22: Jira's Closeout writes through Claude's configured Atlassian MCP tools. This
+    # is a manifest-shape error, so it remains visible to schema-only validation.
+    if adapter == "jira":
+        for task in manifest.tasks:
+            if task.backend in BACKENDS and task.backend != "claude":
+                err("tracker.adapter jira is incompatible with backend %s: its Closeout tools "
+                    "are available only on claude" % task.backend)
+
     # R2, R5: every task has id, model, effort; an excluded task has a reason.
     seen = set()
     for index, task in enumerate(manifest.tasks):
@@ -457,6 +514,9 @@ def validate(manifest, check_repo=True, env=None):
         if manifest.project.default_branch is None and gitread.default_branch(repo) is None:
             err("project.default_branch is unset and refs/remotes/origin/HEAD is not set in the repo")
         docs_root = docs_root_for(repo)
+    if check_environment:
+        err_list = _backend_readiness_errors(manifest, os.environ if env is None else env)
+        result.errors.extend(err_list)
     result.allowed_paths = completed_allowed_paths(manifest, docs_root)
     return result
 

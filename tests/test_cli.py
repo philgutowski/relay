@@ -8,9 +8,10 @@ import json
 import os
 import re
 import unittest
+from unittest import mock
 
 import _paths
-from relay import cli, contracts, summary, tail
+from relay import cli, contracts, manifest as manifest_module, summary, tail
 from test_run import RunCase
 
 
@@ -108,6 +109,13 @@ class RunVerb(CliCase):
         code, out = self.call("run", self.manifest_path)
         self.assertEqual(code, cli.EXIT_CONFIG)
         self.assertIn("qualifying.gate", out)
+        self.assertIsNone(self.store().read())
+
+    def test_a_missing_backend_binary_is_refused_before_any_process_starts(self):
+        with mock.patch.object(manifest_module.shutil, "which", return_value=None):
+            code, out = self.call("run", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_CONFIG)
+        self.assertIn("backend claude binary", out)
         self.assertIsNone(self.store().read())
 
     def test_a_halted_run_exits_halted(self):

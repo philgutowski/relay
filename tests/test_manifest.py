@@ -3,6 +3,8 @@ import os
 import re
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 import _paths
 import _repo
@@ -287,6 +289,68 @@ class Backends(ManifestCase):
         result = mf.validate(self.load(text))
         self.assertFalse(result.ok)
         self.assertEqual(sum("backend" in e for e in result.errors), len(self.load(text).tasks))
+
+
+class BackendReadiness(ManifestCase):
+    """U3: capability-record preflight runs for CLI validation, not schema reads."""
+
+    def environment(self):
+        return dict(os.environ, PATH="/test-bin")
+
+    def plugin_result(self, output, code=0):
+        return SimpleNamespace(returncode=code, stdout=output, stderr="")
+
+    def claude_plugin_output(self, version="3.23.4"):
+        return "  ❯ compound-engineering@compound-engineering-plugin\n    Version: %s" % version
+
+    def test_missing_binary_names_the_backend_before_launch(self):
+        with mock.patch.object(mf.shutil, "which", return_value=None) as which, \
+                mock.patch.object(mf, "_run_plugin_query") as run:
+            result = mf.validate(self.load(), check_repo=False, check_environment=True, env=self.environment())
+        self.assertFalse(result.ok)
+        self.assertTrue(any("claude" in error and "binary" in error for error in result.errors))
+        which.assert_called_once_with("claude", path="/test-bin")
+        run.assert_not_called()
+
+    def test_missing_plugin_is_distinct_from_missing_binary(self):
+        with mock.patch.object(mf.shutil, "which", return_value="/test-bin/claude"), \
+                mock.patch.object(mf, "_run_plugin_query", return_value=self.plugin_result("other-plugin 9.0.0")):
+            result = mf.validate(self.load(), check_repo=False, check_environment=True, env=self.environment())
+        self.assertFalse(result.ok)
+        self.assertTrue(any("claude" in error and "plugin" in error for error in result.errors))
+        self.assertFalse(any("binary" in error for error in result.errors))
+
+    def test_below_floor_plugin_is_refused(self):
+        with mock.patch.object(mf.shutil, "which", return_value="/test-bin/claude"), \
+                mock.patch.object(mf, "_run_plugin_query", return_value=self.plugin_result(self.claude_plugin_output("3.0.0"))):
+            result = mf.validate(self.load(), check_repo=False, check_environment=True, env=self.environment())
+        self.assertFalse(result.ok)
+        self.assertTrue(any("3.23.4" in error for error in result.errors))
+
+    def test_each_distinct_backend_is_probed_once(self):
+        text = self.base.replace('id = "T-2"', 'id = "T-2"\nbackend = "claude"', 1)
+        with mock.patch.object(mf.shutil, "which", return_value="/test-bin/claude") as which, \
+                mock.patch.object(mf, "_run_plugin_query", return_value=self.plugin_result(self.claude_plugin_output())) as run:
+            result = mf.validate(self.load(text), check_repo=False, check_environment=True, env=self.environment())
+        self.assertTrue(result.ok, result.errors)
+        which.assert_called_once()
+        run.assert_called_once()
+
+    def test_schema_validation_skips_backend_environment_probes(self):
+        def boom(*_args, **_kwargs):
+            raise AssertionError("schema validation must not probe backends")
+
+        with mock.patch.object(mf.shutil, "which", boom), mock.patch.object(mf, "_run_plugin_query", boom):
+            result = mf.validate(self.load())
+        self.assertTrue(result.ok, result.errors)
+
+    def test_jira_codex_pair_is_refused_without_environment_probes(self):
+        text = self.base.replace('adapter = "markdown"\nfile = "tracker.md"',
+                                 'adapter = "jira"\nsite = "example.atlassian.net"\nproject_key = "XX"')
+        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("jira" in error and "codex" in error for error in result.errors))
 
 
 class TaskAllowedPaths(ManifestCase):

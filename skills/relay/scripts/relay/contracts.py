@@ -126,6 +126,8 @@ BACKEND_PINS = {
         "version_output_sample": "2.1.250 (Claude Code)",
         "plugin_version": "3.23.4",
         "plugin_query": ("claude", "plugin", "list"),
+        "plugin_version_pattern": (r"(?ims)^\s*❯\s*compound-engineering@compound-engineering-plugin\s+"
+                                   r"Version:\s*(?P<version>\d+(?:\.\d+)+)"),
         "headless_flag": "-p",
         "session_id_choosable": True,
         "permission_mode": "dontAsk",
@@ -152,6 +154,8 @@ BACKEND_PINS = {
         "version_output_sample": "codex-cli 0.149.0",
         "plugin_version": "3.23.4",
         "plugin_query": ("codex", "plugin", "list"),
+        "plugin_version_pattern": (r"(?im)^compound-engineering@compound-engineering-plugin\s+"
+                                   r"installed,\s+enabled\s+(?P<version>\d+(?:\.\d+)+)\s+"),
         "headless_flag": "exec",
         # Codex assigns its own thread id, so the runner names the evidence instead (KTD4).
         "session_id_choosable": False,
@@ -184,7 +188,9 @@ BACKEND_PINS = {
         "version_tested": "1.0.5",
         "version_output_sample": "grok 1.0.5 (5115b46bc909) [stable]",
         "plugin_version": "3.23.4",
-        "plugin_query": ("grok", "plugin", "list"),
+        "plugin_query": ("grok", "plugin", "list", "--json"),
+        "plugin_version_pattern": (r'(?s)"name"\s*:\s*"compound-engineering".*?'
+                                   r'"version"\s*:\s*"(?P<version>\d+(?:\.\d+)+)"'),
         "headless_flag": "-p",
         "session_id_choosable": True,
         # U1 finding, and a correction to the plan's Assumptions and KTD6. Grok accepts
