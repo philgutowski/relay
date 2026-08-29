@@ -79,6 +79,18 @@ background is at the mercy of that exit rather than surviving it. This is why th
 bounding of the whole group is a backstop rather than the first line of defense: what usually
 kills a background command is the process's own turn ending, not the Runner noticing afterward.
 
+### Backend
+The CLI that runs a Task process and that Task's Closeout process, one of `claude`, `codex`, or
+`grok`. A Task names its backend. A Manifest may default it. Absence of every backend key means
+`claude`. The Runner launches on that CLI. It does not choose or change the backend during a run.
+
+### Capability record
+The frozen facts the Runner reads about one backend: whether it enforces tool restrictions at
+launch, its permission flags and forbidden spellings, the version it was tested against, how to
+query its plugin, its credential prefixes and nesting markers, and whether the session id is
+runner chosen. The launch seam, the readiness probe, and the Brief inserts all read this record
+rather than a second per backend table.
+
 ### Brief
 The instruction text a Runner hands a process it launches, rendered for that process alone from a
 template plus the Task's own facts. There is one shape per Shipping mode for a Task process, and one
