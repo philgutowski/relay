@@ -345,6 +345,6 @@ def startup_reverify(manifest, store, adapter, pr_probe=None, env=None, now=time
             continue
         store.upsert(task_id, status=contracts.STATUS_LANDED, halt_class=contracts.HALT_LANDED,
                      landing_ref=record.get("landing_ref") or verdict.evidence.get("landing_ref"),
-                     verify=verdict.as_dict())
+                     verify=verdict.as_dict(), continued_past=False)
         promoted.append(task_id)
     return promoted

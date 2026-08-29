@@ -303,3 +303,54 @@ class LinesFromTheFirstLiveRun(unittest.TestCase):
                           halt_evidence={"branch": "relay/T-1"},
                           halt_message="left the tree dirty on relay/T-1", findings=[])
         self.assertEqual(self.text().count("left the tree dirty on relay/T-1"), 1)
+
+
+class ContinuedPastChecks(CauseLineTable):
+    """Issue #15: a task the run continued past is a check by hand item of its own, and the
+    single task a halted run stopped on is still listed exactly once."""
+
+    def halted(self, task_id, continued_past):
+        self.store.upsert(task_id, status=contracts.STATUS_HALTED,
+                          halt_class=contracts.HALT_GATE_REFUSED, branch="relay/" + task_id,
+                          halt_evidence={"branch": "main", "sha": "a" * 40, "log": "/gate.log"},
+                          halt_message="gate refused", continued_past=continued_past,
+                          findings=[], wall_seconds=1.0, active_seconds=1.0)
+
+    def kinds(self, task_ids):
+        data = self.summarise(task_ids)
+        return data, [(check["kind"], check["task"]) for check in data["pending_checks"]]
+
+    def test_a_continued_past_task_in_a_completed_run_is_listed_by_class(self):
+        self.halted("T-2", True)
+        self.store.write_terminal(contracts.RUN_COMPLETED)
+        data, kinds = self.kinds(["T-2"])
+        self.assertEqual(kinds, [("continued_past", "T-2")])
+        text = data["pending_checks"][0]["text"]
+        self.assertIn("T-2", text)
+        self.assertIn(contracts.HALT_GATE_REFUSED, text)
+        self.assertIn("relay/T-2", text, "the branch a rerun's own pre-flight will refuse on")
+        self.assertTrue(data["tasks"][0]["continued_past"])
+        self.assertIn(text, summary.render(data))
+
+    def test_the_task_a_run_halted_on_is_listed_once(self):
+        self.halted("T-2", False)
+        self.store.write_terminal(contracts.RUN_HALTED, "T-2", contracts.HALT_GATE_REFUSED)
+        _, kinds = self.kinds(["T-2"])
+        self.assertEqual([k for k, _ in kinds], ["halted"])
+
+    def test_a_halted_run_lists_a_continued_past_task_and_its_stop_separately(self):
+        self.halted("T-1", True)
+        self.halted("T-3", False)
+        self.store.write_terminal(contracts.RUN_HALTED, "T-3", contracts.HALT_GATE_REFUSED)
+        _, kinds = self.kinds(["T-1", "T-3"])
+        self.assertEqual(sorted(kinds), [("continued_past", "T-1"), ("halted", "T-3")])
+
+    def test_landed_and_blocked_records_are_untouched(self):
+        self.store.upsert("T-1", status=contracts.STATUS_LANDED, halt_class=contracts.HALT_LANDED,
+                          landing_ref="b" * 40, findings=[])
+        self.store.upsert("T-2", status=contracts.STATUS_BLOCKED,
+                          halt_class=contracts.HALT_BLOCKED_ENVELOPE, branch="relay/T-2",
+                          halt_evidence={"blocker": "x"}, findings=[])
+        self.store.write_terminal(contracts.RUN_COMPLETED)
+        _, kinds = self.kinds(["T-1", "T-2"])
+        self.assertEqual(kinds, [("stranded_branch", "T-2")])

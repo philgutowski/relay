@@ -71,6 +71,19 @@ class OwnVocabulary(unittest.TestCase):
         for cls in contracts.FINDING_CLASSES:
             self.assertIn(cls, contracts.LINE_CLASSES)
 
+    def test_the_run_scoped_halt_classes_are_the_three_that_implicate_every_later_task(self):
+        """Issue #15: a halt the runner may continue past is decided from the repo, not from
+        its class. Only these three always stop, because each one puts something outside the
+        failing task in question: the remote, the lease, or the runner itself."""
+        self.assertEqual(sorted(contracts.RUN_SCOPED_HALT_CLASSES), sorted((
+            contracts.HALT_REMOTE_ADVANCED,
+            contracts.HALT_RUNNER_CRASHED,
+            contracts.HALT_UNEXPECTED_ERROR,
+        )))
+        for cls in contracts.RUN_SCOPED_HALT_CLASSES:
+            self.assertIn(cls, contracts.HALT_CLASSES)
+            self.assertNotIn(cls, contracts.FINDING_CLASSES)
+
     def test_disallow_list_covers_the_four_r10_operations(self):
         joined = "\n".join(contracts.DISALLOWED_TOOLS)
         for fragment in ("git push --force", "git reset --hard", "rm -rf", "git clean"):

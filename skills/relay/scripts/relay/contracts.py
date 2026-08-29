@@ -303,6 +303,18 @@ HALT_CLASSES = (
     HALT_UNEXPECTED_ERROR,
 )
 
+# Classes that always stop the whole run (issue #15). Each puts something outside the failing
+# task in question, so no later task's assumptions hold. Every other class is a candidate for
+# continuing past when the manifest opts in, decided from the repo's state after the halt by
+# gitwrite.resume_disposition rather than from the class name: the same class can leave the
+# repo usable (a gate command that failed on the task branch) or not (a push that failed after
+# the merge, leaving the default ahead of origin), and only the repo can tell them apart.
+RUN_SCOPED_HALT_CLASSES = (
+    HALT_REMOTE_ADVANCED,   # origin moved under the runner; every later baseline is suspect
+    HALT_RUNNER_CRASHED,    # the lease was lost; another runner may be live in this repo
+    HALT_UNEXPECTED_ERROR,  # a defect or library error with unknown blast radius
+)
+
 # Classes that are findings attached to a record rather than the record's own class.
 FINDING_CLASSES = (
     HALT_DENIED_TOOL,
