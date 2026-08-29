@@ -8,9 +8,10 @@ component: runner
 severity: high
 root_cause: missing_workflow_step
 resolution_type: workflow_improvement
+last_updated: 2026-08-28
 related_components: [manifest, task-process, permission-mode]
 applies_when:
-  - "launching claude -p with --permission-mode dontAsk"
+  - "launching claude -p with --permission-mode dontAsk (Claude backend only, see the Scope note)"
   - "a task's plan touches a path under .claude/ (skill, hook, or settings file)"
   - "the allowlist explicitly names Edit and Write"
   - "the run has no human present to approve a permission prompt"
@@ -30,6 +31,18 @@ Relay runs one fresh headless `claude -p` process per task, serially, with no hu
 whole design rests on a task process being able to finish its work alone. `dontAsk` is the chosen
 permission mode (R10, R11), because a tool outside the allowlist is denied outright rather than
 raising a prompt nobody is there to answer.
+
+**Scope, added 2026-08-28. Everything below is a Claude backend fact.** When this was written Claude
+was Relay's only backend, so it reads as universal and is not. The pluggable backends work recorded
+a per backend permission posture in `contracts.BACKEND_PINS`: Claude keeps `dontAsk`, Grok uses
+`auto` and carries `dontAsk` in its forbidden tuple because there it cancels every tool call rather
+than approving one, and Codex uses `--sandbox workspace-write` and has no permission mode concept at
+all. See `grok-accepts-dontask-then-cancels-every-tool-call.md`, which is the descendant of this doc
+and carries that evidence; the two read as a pair. Note the current state precisely: those pins are
+recorded but nothing reads them yet, and `launch.build_args` still passes the single global
+`contracts.PERMISSION_MODE` for every task, so today every Relay run really is a `dontAsk` run and
+this doc is accurate as written. It becomes Claude-only the moment the launch seam starts resolving
+the posture per backend.
 
 On 2026-08-25 the design was proved by hand against a Jira-tracked repo. A gitignored shell runner
 launched a single process for card IW-83:
@@ -245,7 +258,16 @@ a task it cannot finish over discovering it at the end.
 ## When to Apply
 
 Apply the pre-flight scan on every task, always, before the task process launches. It costs one
-`grep` and it is the cheapest check in the pipeline.
+`grep` and it is the cheapest check in the pipeline. `run.py` does exactly this, unconditionally,
+with no backend awareness, which is correct while every task is a Claude task.
+
+Once tasks can run on another backend, that unconditional call needs a decision this doc cannot make
+for you, because the gate's existence off Claude is unestablished. The failure modes are asymmetric
+and worth naming: scanning a backend that has no such gate costs a false exclusion, a task routed to
+attended that could have run alone, while skipping the scan on a backend that does have one costs
+the full hour this doc was written about. Prefer the false exclusion until someone runs the probe.
+Note also that the exclusion reason the runner writes names `dontAsk` explicitly, so a non Claude
+task excluded by this scan would carry a reason that does not describe its own backend.
 
 Apply the routing decision that follows from it when any of these hold:
 
@@ -263,10 +285,24 @@ Do not apply this reasoning to MCP writes. Verified in the same run under the sa
 `mcp__atlassian__transitionJiraIssue` succeeded with no prompt and no error. Tracker writes are not
 affected by the path gate and need no workaround.
 
-Re-test the boundary when the Claude Code CLI version moves. The behavior is observed on CLI 2.1.245
-and is documented nowhere, so it carries no stability guarantee in either direction. A future version
-could widen the gate or remove it, and either change should show up as a change in this pre-flight's
-hit rate rather than as a surprise at minute fifty.
+Re-test the boundary on two axes, not one. This instruction originally named only the first.
+
+**When the Claude Code CLI version moves.** The behavior is observed on CLI 2.1.245 and is documented
+nowhere, so it carries no stability guarantee in either direction. A future version could widen the
+gate or remove it, and either change should show up as a change in this pre-flight's hit rate rather
+than as a surprise at minute fifty.
+
+**This trigger has fired and the re-test is outstanding, as of 2026-08-28.**
+`contracts.CLI_VERSION_TESTED` now reads `2.1.250`, bumped against the installed binary during the
+backends spike. Nothing in that spike exercised the `.claude/` path gate, so whether it still behaves
+as described at 2.1.250 is unverified. Treat the gate as observed on 2.1.245 and unconfirmed since.
+
+**When the backend changes.** A permission mode's spelling on another vendor's CLI is not a promise
+about its behavior, which the descendant doc establishes for `dontAsk` on Grok. Whether a `.claude/`
+path gate exists at all on Codex or Grok is unestablished: the backends spike tested permission
+postures and denials, not this gate. Do not assume it carries, and do not assume it does not. Until
+someone runs the probe, a `.claude/` hit on a non Claude backend is an open question rather than a
+known refusal.
 
 ## Examples
 
@@ -316,6 +352,12 @@ the last, and whether the tracker said so.
 
 ## Related
 
+- `docs/solutions/workflow-issues/grok-accepts-dontask-then-cancels-every-tool-call.md`: the direct
+  descendant, and the reason this doc is now scoped to the Claude backend. It found that Grok accepts
+  `dontAsk` and then cancels every tool call rather than approving one, so a Task under it does no
+  work at all. This doc generalizes that an allowlist is a claim about tools and not about paths;
+  that one generalizes that a permission mode is a claim about vocabulary and not about behavior.
+  Same family, one term further out, and the pair is worth reading together.
 - `docs/brainstorms/2026-08-25-1240-feat-relay-outer-loop-plan.md`: R5 (exclude a task from
   unattended runs with a reason) is the mechanism this learning reuses; R4, R7, R10, R11, R17, R19,
   R23, R37, and AE2 are the requirements it sharpens.

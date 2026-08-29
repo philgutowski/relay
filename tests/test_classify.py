@@ -114,10 +114,55 @@ class Fixtures(unittest.TestCase):
         self.assertFalse(r["routable"])
         self.assertEqual(r["envelope"]["status"], "complete")
 
-    def test_missing_transcript_is_no_envelope_not_a_crash(self):
+    def test_missing_transcript_is_a_runner_fault_not_a_crash(self):
+        """R20, KTD5. Reading nothing is still not fatal, but the class is the runner fault one.
+
+        no_envelope would be a claim about the task, that the process ran and printed no
+        envelope, and nobody observed that. The runner never opened the evidence.
+        """
         r = classify.classify(os.path.join(FIXTURES, "does-not-exist.jsonl"), EXITED)
         self.assertFalse(r["transcript_present"])
+        self.assertEqual(r["halt_class"], contracts.HALT_UNEXPECTED_ERROR)
+        self.assertFalse(r["routable"])
+
+    def test_missing_transcript_records_findings_as_unavailable_not_as_none_found(self):
+        """R13. A reader has to be able to tell "we looked and found none" from "we could not
+        look", so the marker is set and the no_envelope finding is never appended."""
+        r = classify.classify(os.path.join(FIXTURES, "does-not-exist.jsonl"), EXITED)
+        self.assertTrue(r["findings_unavailable"])
+        self.assertIsNone(r["findings"])
+
+    def test_a_readable_run_with_no_envelope_still_reports_its_findings_as_available(self):
+        """The narrowing must not swallow the ordinary silent task: the evidence opened, the
+        envelope was genuinely absent, and both the class and the finding stand."""
+        r = run("no_envelope.jsonl")
+        self.assertTrue(r["transcript_present"])
+        self.assertFalse(r["findings_unavailable"])
         self.assertEqual(r["halt_class"], contracts.HALT_NO_ENVELOPE)
+        self.assertIn(contracts.HALT_NO_ENVELOPE, classes(r))
+
+    def test_a_timed_out_run_whose_transcript_is_missing_is_still_the_timeout_class(self):
+        """KTD4: a killed process that never wrote its evidence is the timeout class, not a
+        runner fault. Timeout keeps beating everything."""
+        r = classify.classify(os.path.join(FIXTURES, "does-not-exist.jsonl"), TIMED_OUT)
+        self.assertEqual(r["halt_class"], contracts.HALT_TIMEOUT)
+
+    def test_the_digest_carries_the_unavailable_marker_and_the_pinned_key_set_still_matches(self):
+        """The marker is part of the digest contract, so it survives the write to disk that
+        run.py and closeout.py read, and classify still sets exactly DIGEST_KEYS."""
+        import json
+        import tempfile
+        r = classify.classify(os.path.join(FIXTURES, "does-not-exist.jsonl"), EXITED)
+        self.assertIn("findings_unavailable", contracts.DIGEST_KEYS)
+        self.assertEqual(set(r), set(contracts.DIGEST_KEYS))
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            path = handle.name
+        classify.write_digest(r, path)
+        with open(path, encoding="utf-8") as handle:
+            written = json.load(handle)
+        os.unlink(path)
+        self.assertTrue(written["findings_unavailable"])
+        self.assertIsNone(written["findings"])
 
 
 class DenialTargets(unittest.TestCase):

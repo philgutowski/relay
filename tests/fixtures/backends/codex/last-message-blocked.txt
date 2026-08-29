@@ -1,0 +1,9 @@
+```relay-envelope
+status: blocked
+blockers:
+- The project’s Slack webhook URL source/key is absent from the checkout, configuration, history, and environment.
+- The required success and failure behavior is unspecified.
+changed_files:
+plan_path: not created; ce-plan blocked before artifact creation
+learnings:
+```

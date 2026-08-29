@@ -221,6 +221,14 @@ runs after the push returns costs the Runner no time at all and is bounded separ
 A project can therefore satisfy the requirement in either form and hand the Runner a very different
 problem.
 
+The pre-push form carries a further cost the other does not: it inherits the git process's own
+environment, which can include scoping variables git sets to let the hook find the repository it
+is gating. Anything the hook spawns that also shells out to git, such as a suite that builds its
+own throwaway repositories to test against, inherits those same variables when git sets them and
+can be silently redirected back at the repository the hook is protecting. A gate that runs after
+the push, in its own job environment, does not share
+this exposure.
+
 ### Qualifying properties
 The three conditions a project must meet before Relay can run against it: its Tasks are independent,
 the state carried between Tasks is durable in git or on the Tracker, and an External gate refuses

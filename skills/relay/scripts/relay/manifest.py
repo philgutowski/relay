@@ -19,6 +19,12 @@ from dataclasses import dataclass, field
 from . import contracts, gitread
 
 ADAPTERS = ("jira", "github", "markdown")
+# The CLI a Task process runs on (R1). Every backend runs the identical pipeline through the
+# compound-engineering plugin installed natively on it; what differs is the launch seam, which
+# contracts.BACKEND_PINS records. A manifest naming none of these puts every Task on claude, so a
+# manifest written before backends existed loads and runs exactly as it did.
+BACKENDS = ("claude", "codex", "grok")
+DEFAULT_BACKEND = "claude"
 SHIPPING_MODES = ("local_merge", "pr_terminal")
 # Named in the schema and refused by `validate`. Every read side piece of pr_terminal exists and
 # is unit tested (`gitwrite.find_pr`, `gitwrite.poll_ci`, the `pr_probe` seam in `verify.verify`)
@@ -61,6 +67,13 @@ class Tracker:
 class Permissions:
     allowed: tuple
     disallowed: tuple
+    # KTD13, R21: the paths a Task's own commit may touch, in gitwrite.path_allowed()'s
+    # directory-prefix grammar. Empty means the whole repository, so the bound is opt in and a
+    # refusal means an operator narrowed it deliberately. Read it through task_allowed_paths()
+    # rather than directly, because empty here means unbounded and path_allowed() reads an empty
+    # list as "allow nothing". This is not [closeout] allowed_paths, which bounds what the
+    # Closeout process may commit; the two are different sets over different processes.
+    task_allowed_paths: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -113,6 +126,10 @@ class Task:
     effort: str
     excluded: bool
     reason: str | None
+    # R1: the CLI this Task's own process and its Closeout both run on. Resolved at load time
+    # from the Task's own key, else [defaults] backend, else claude, so every Task carries a
+    # concrete value and no consumer has to re-resolve it.
+    backend: str = DEFAULT_BACKEND
 
 
 @dataclass(frozen=True)
@@ -185,6 +202,7 @@ def load(path):
     q = raw["qualifying"]
     ob = raw.get("on_blocked", {})
     oh = raw.get("on_halt", {})
+    dflt = raw.get("defaults", {})
 
     project = Project(
         repo=os.path.expanduser(str(p.get("repo", ""))),
@@ -211,6 +229,7 @@ def load(path):
     permissions = Permissions(
         allowed=_tuple(perms.get("allowed", [])),
         disallowed=_tuple(perms.get("disallowed", [])),
+        task_allowed_paths=_tuple(perms.get("task_allowed_paths", [])),
     )
     timeouts_obj = Timeouts(
         task_minutes=pick(timeouts, "timeouts", "task_minutes", contracts.DEFAULT_TASK_TIMEOUT_MINUTES),
@@ -235,6 +254,12 @@ def load(path):
     raw_tasks = raw.get("tasks", [])
     if not isinstance(raw_tasks, list) or not all(isinstance(entry, dict) for entry in raw_tasks):
         raise ManifestError("tasks must be an array of tables ([[tasks]]), not a single [tasks] table")
+    # KTD11: the manifest-level backend is reported through the same helper every other default
+    # uses, so a run never silently supplies one. A Task inheriting a value the operator wrote in
+    # [defaults] is not a defaulted value, which is why only the table-level miss is recorded.
+    # `backend` is read with .get rather than `in`, so an empty string reaches validate and is
+    # refused there instead of being quietly replaced by claude.
+    default_backend = pick(dflt, "defaults", "backend", DEFAULT_BACKEND)
     tasks = tuple(
         Task(
             id=str(entry.get("id", "")),
@@ -242,6 +267,7 @@ def load(path):
             effort=str(entry.get("effort", "")),
             excluded=bool(entry.get("excluded", False)),
             reason=entry.get("reason"),
+            backend=str(entry["backend"]) if "backend" in entry else str(default_backend),
         )
         for entry in raw_tasks
     )
@@ -294,6 +320,20 @@ def completed_allowed_paths(manifest, docs_root):
     return paths
 
 
+def task_allowed_paths(manifest):
+    """R21, KTD13: the paths a Task's commit may touch, or None for the whole repository.
+
+    None and an empty list are different answers and callers must not collapse them.
+    `gitwrite.path_allowed()` reads an empty list as "allow nothing", so a caller that passed the
+    raw tuple through would refuse every merge on the common manifest that never set the field.
+    None means there is no bound to check and the caller skips the check entirely.
+
+    This is not `completed_allowed_paths()`, which bounds the Closeout process to the docs root
+    and the tracker file. That set would refuse every code Task's own commit.
+    """
+    return tuple(manifest.permissions.task_allowed_paths) or None
+
+
 def validate(manifest, check_repo=True, env=None):
     """Apply every rule from plan U2 step 2. Returns a ValidationResult; never raises for a
     rule failure, so the CLI can print every problem at once."""
@@ -321,6 +361,19 @@ def validate(manifest, check_repo=True, env=None):
             disallowed.append(pattern)
             warn("permissions.disallowed was missing %s; added" % pattern)
     result.disallowed = disallowed
+    # R21, KTD13. Unset is the common case and means the whole repository, so only a set value is
+    # checked. An entry is a directory prefix ending in `/` or an exact file path, and a leading
+    # slash or a `..` segment would never match a git path, which reports paths relative to the
+    # repository root, so a bound written that way would silently refuse every merge.
+    if not _is_string_list(manifest.permissions.task_allowed_paths):
+        err("permissions.task_allowed_paths must be an array of repository-relative paths")
+    else:
+        for entry in manifest.permissions.task_allowed_paths:
+            if not entry.strip():
+                err("permissions.task_allowed_paths must not contain an empty entry")
+            elif entry.startswith("/") or ".." in entry.split("/"):
+                err("permissions.task_allowed_paths entries are relative to the repository root "
+                    "and must not start with / or contain ..: %r" % entry)
 
     # R3, R56: four qualifying sentences, each non-empty.
     for key in QUALIFYING_KEYS:
@@ -369,6 +422,9 @@ def validate(manifest, check_repo=True, env=None):
         for key in ("id", "model", "effort"):
             if not getattr(task, key):
                 err("%s.%s is required" % (label, key))
+        if task.backend not in BACKENDS:
+            err("%s.backend must be one of %s, not %r"
+                % (label, ", ".join(BACKENDS), task.backend))
         if task.id in seen:
             err("%s.id %r is listed twice" % (label, task.id))
         seen.add(task.id)

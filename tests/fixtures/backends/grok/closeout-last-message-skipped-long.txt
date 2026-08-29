@@ -1,0 +1,5 @@
+Duty one is recorded. `tasks.md` on `relay/T-14` had no T-14 line at all, the same gap T-6 had when its closeout ran. I did not invent extra commentary. I appended one checked line that names the helper and the landing reference `8ba7db7` in parentheses, then committed that file only as `0328d52`. The tree is clean. I did not push. The runner owns the push under the gate.
+
+Duty two is a skip. The run landed, the gate passed, and the task process reported no learnings, no blockers, and no denied tool calls. Adding `is_palindrome` was planned helper work. The Unicode NFC step and the second letter or digit filter after `lower` were already written into the plan as a chosen design, not found as a surprise cause. This repo already keeps an NFC first learning for the same module. The follow up commit completed that plan rather than reversing a decision after a hidden trap. Nothing here is a seam a future session would get wrong for lack of a new document, so no compound run and no extra files.
+
+Documentation skipped

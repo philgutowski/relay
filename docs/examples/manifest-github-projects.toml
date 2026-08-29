@@ -59,6 +59,12 @@ open_followup = true
 # pauses that task and the later independent tasks keep running (issue #15).
 continue_past_task_halt = false
 
+# A mixed manifest. The default below puts every task on claude; 413 names codex instead, so this
+# one file carries both shapes. A task's backend decides which CLI runs its task process and its
+# closeout, and nothing else about the run changes.
+[defaults]
+backend = "claude"
+
 [[tasks]]
 id = "412"
 model = "opus"
@@ -68,3 +74,4 @@ effort = "high"
 id = "413"
 model = "sonnet"
 effort = "medium"
+backend = "codex"

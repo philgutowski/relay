@@ -227,5 +227,107 @@ class AllowedPaths(ManifestCase):
         self.assertEqual(result.allowed_paths, ["docs/", "CONCEPTS.md"])
 
 
+class Backends(ManifestCase):
+    """U2: R1, R2, KTD11. A Task names the CLI it runs on, a manifest may default it, and an
+    invalid value is refused rather than quietly replaced."""
+
+    def test_a_manifest_with_no_backend_key_anywhere_puts_every_task_on_claude(self):
+        # The backward-compatibility case: the fixture predates backends entirely.
+        m = self.load()
+        self.assertTrue(m.tasks)
+        for task in m.tasks:
+            self.assertEqual(task.backend, "claude")
+        self.assertTrue(mf.validate(m).ok)
+
+    def test_the_defaulted_backend_is_reported_rather_than_silent(self):
+        result = mf.validate(self.load())
+        self.assertIn("defaults.backend = 'claude'", result.defaults_applied)
+
+    def test_a_defaults_table_value_is_inherited_by_a_task_that_names_none(self):
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
+        m = self.load(text)
+        for task in m.tasks:
+            self.assertEqual(task.backend, "codex")
+        result = mf.validate(m)
+        self.assertTrue(result.ok, result.errors)
+        # The operator wrote this one, so it is not a default Relay applied.
+        self.assertNotIn("defaults.backend = 'codex'", result.defaults_applied)
+
+    def test_a_per_task_backend_overrides_the_default(self):
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
+        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "grok"', 1)
+        m = self.load(text)
+        self.assertEqual(m.tasks[0].backend, "grok")
+        self.assertEqual(m.tasks[1].backend, "codex")
+        self.assertTrue(mf.validate(m).ok)
+
+    def test_a_mixed_manifest_validates(self):
+        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        m = self.load(text)
+        self.assertEqual([t.backend for t in m.tasks], ["codex", "claude"])
+        self.assertTrue(mf.validate(m).ok)
+
+    def test_an_unrecognized_backend_is_refused_and_names_the_valid_set(self):
+        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "gpt5"', 1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        message = " ".join(result.errors)
+        self.assertIn("backend", message)
+        for name in mf.BACKENDS:
+            self.assertIn(name, message)
+
+    def test_an_empty_string_backend_is_refused_rather_than_silently_defaulted(self):
+        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = ""', 1)
+        m = self.load(text)
+        self.assertEqual(m.tasks[0].backend, "")
+        self.assertFalse(mf.validate(m).ok)
+
+    def test_an_empty_defaults_backend_is_refused_for_every_inheriting_task(self):
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = ""\n\n[[tasks]]', 1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertEqual(sum("backend" in e for e in result.errors), len(self.load(text).tasks))
+
+
+class TaskAllowedPaths(ManifestCase):
+    """U2: R21, KTD13. The Task path bound is opt in, and it is not the Closeout's list."""
+
+    def test_unset_resolves_to_the_whole_repository(self):
+        m = self.load()
+        self.assertEqual(m.permissions.task_allowed_paths, ())
+        # None, not an empty tuple: gitwrite.path_allowed reads empty as "allow nothing", so a
+        # caller that could not tell the two apart would refuse every merge on this manifest.
+        self.assertIsNone(mf.task_allowed_paths(m))
+        self.assertTrue(mf.validate(m).ok)
+
+    def test_set_resolves_to_the_named_prefixes(self):
+        text = self.edit(r"^\[permissions\]$",
+                         '[permissions]\ntask_allowed_paths = ["toolkit/", "README.md"]')
+        m = self.load(text)
+        self.assertEqual(mf.task_allowed_paths(m), ("toolkit/", "README.md"))
+        self.assertTrue(mf.validate(m).ok, mf.validate(m).errors)
+
+    def test_it_is_never_confused_with_the_closeouts_own_list(self):
+        text = self.edit(r"^\[permissions\]$",
+                         '[permissions]\ntask_allowed_paths = ["toolkit/"]')
+        m = self.load(text)
+        result = mf.validate(m)
+        # The Closeout's set is the docs root and the tracker file, which would refuse every
+        # code Task's own commit. The two must not collapse into one another.
+        self.assertEqual(result.allowed_paths, ["docs/", "CONCEPTS.md", "tracker.md"])
+        self.assertEqual(mf.task_allowed_paths(m), ("toolkit/",))
+        self.assertNotIn("toolkit/", result.allowed_paths)
+
+    def test_an_absolute_or_escaping_entry_is_refused(self):
+        for bad in ('["/toolkit/"]', '["../outside/"]'):
+            text = self.edit(r"^\[permissions\]$", "[permissions]\ntask_allowed_paths = %s" % bad)
+            result = mf.validate(self.load(text))
+            self.assertFalse(result.ok, bad)
+
+    def test_an_empty_entry_is_refused(self):
+        text = self.edit(r"^\[permissions\]$", '[permissions]\ntask_allowed_paths = ["", "toolkit/"]')
+        self.assertFalse(mf.validate(self.load(text)).ok)
+
+
 if __name__ == "__main__":
     unittest.main()
