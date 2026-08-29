@@ -1,4 +1,4 @@
-"""Launcher (U6): run one `claude -p`, bound it, and leave nothing behind.
+"""Launcher (U6): run one Task process, bound it, and leave nothing behind.
 
 Four things here are not obvious and each one came from an observed failure.
 
@@ -10,10 +10,10 @@ The child gets `stdin=DEVNULL` and its own process group. A detached `claude -p`
 open pipe reads it until EOF and idles to the timeout; and without a new session, a timeout kill
 reaches the process but not the subagents and gates it started, which then outlive the task.
 
-The child's environment is scrubbed (KTD9): the manifest's tracker credential variables and every
-`CLAUDECODE*` and `CLAUDE_CODE_*` marker are removed, so no task process, gate, or push ever sees
-the operator's token or believes it is nested inside a session. The same environment is what the
-gate, the closeout, and every push run under.
+The child's environment is scrubbed two different ways (KTD16). The run level copy, used by
+git, the tracker adapters, and the version probes, keeps every backend's credentials and
+removes the union of every backend's nesting markers. launch() then narrows the Task process's
+copy to that backend's own credentials. Tracker tokens are removed in both copies.
 
 Stdout is drained by a reader thread rather than read in the main loop, and the lease heartbeat
 runs on its own rescheduling timer (KTD10). A process can be silent for ten minutes inside one
@@ -22,7 +22,6 @@ long subagent call; neither the deadline check nor the lease may depend on it sa
 import glob
 import os
 import queue as queuemod
-import re
 import signal
 import subprocess
 import threading
@@ -30,13 +29,11 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from . import contracts, manifest as manifest_module
+from . import backends, contracts, manifest as manifest_module
 
 SIGKILL_GRACE_SECONDS = 15
 TICK_SECONDS = 1.0
-SCRUB_PREFIXES = ("CLAUDECODE", "CLAUDE_CODE_")
 CLI_VERSION_TIMEOUT_SECONDS = 10
-_VERSION_TOKEN_RE = re.compile(r"^(\d[\w.\-]*)")
 
 
 @dataclass
@@ -57,77 +54,118 @@ class LaunchResult:
 ALWAYS_SCRUBBED = ("JIRA_API_TOKEN", "JIRA_EMAIL")
 
 
-def child_env(manifest, base_env=None, home=None):
-    """The environment every child of the runner gets: the operator's, minus the tracker
-    credentials and minus the markers that tell a CLI it is nested in a session."""
+def child_env(manifest, base_env=None, home=None, backend=None):
+    """The environment every child of the runner gets.
+
+    Called two ways (KTD16). run() passes no backend, so the result keeps every backend's
+    credentials and scrubs the union of every backend's nesting markers. launch() passes the
+    Task's backend, and that copy then drops every other backend's credential prefixes.
+    Markers are removed first because CLAUDE_ is a prefix of CLAUDE_CODE_, and the same
+    overlap holds for CODEX_ and GROK_.
+    """
     env = dict(os.environ if base_env is None else base_env)
     # The manifest's own credential names, and the Jira defaults regardless of adapter: a
     # GitHub or markdown manifest names no token, and the operator's shell may still carry one.
     for name in (manifest.tracker.token_env, manifest.tracker.email_env) + ALWAYS_SCRUBBED:
         if name:
             env.pop(name, None)
+    markers = []
+    for name in contracts.BACKEND_PINS:
+        markers.extend(backends.build(name).CAPABILITY.nesting_markers)
     for name in list(env):
-        if name.startswith(SCRUB_PREFIXES):
+        if markers and name.startswith(tuple(markers)):
             env.pop(name, None)
+    if backend:
+        keep = backends.build(backend).CAPABILITY.credential_prefixes
+        drop = []
+        for name in contracts.BACKEND_PINS:
+            if name == backend:
+                continue
+            drop.extend(backends.build(name).CAPABILITY.credential_prefixes)
+        for name in list(env):
+            if drop and name.startswith(tuple(drop)):
+                if keep and name.startswith(keep):
+                    continue
+                env.pop(name, None)
     if home:
         env["HOME"] = home
     return env
 
 
-def cli_version(env, run=subprocess.run, timeout=CLI_VERSION_TIMEOUT_SECONDS):
-    """The installed `claude` binary's own version, read once per run so drift from
-    CLI_VERSION_TESTED shows up in state.json instead of staying silently invisible. Returns
-    None on any failure, a missing binary, a nonzero exit, a timeout, or output whose leading
-    token doesn't start with a digit, rather than raising: a version probe failing is not a
-    reason to fail the run, and a plausible-looking non-version word (a banner or update notice
-    ahead of the real version line) is worse than a visible None."""
+def cli_version(env, run=subprocess.run, timeout=CLI_VERSION_TIMEOUT_SECONDS, backend="claude"):
+    """The installed binary's own version for one backend. Returns None on any failure,
+    a missing binary, a nonzero exit, a timeout, or output the backend cannot parse,
+    rather than raising: this call runs after run() has already acquired the lease and
+    before its try/finally, so any exception here would skip store.release() and strand
+    the lease. cli_version()'s contract is to fail closed to None, never raise."""
     try:
-        proc = run(["claude", "--version"], capture_output=True, text=True, env=env,
-                    timeout=timeout, stdin=subprocess.DEVNULL)
+        module = backends.build(backend)
+        proc = run([module.CAPABILITY.binary, "--version"], capture_output=True, text=True,
+                   env=env, timeout=timeout, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired, ValueError):
         # ValueError covers UnicodeDecodeError from text=True decoding a non-UTF-8 byte in the
-        # binary's output: this call runs after run() has already acquired the lease and before
-        # its try/finally, so any exception here would skip store.release() and strand the
-        # lease. cli_version()'s contract is to fail closed to None, never raise.
+        # binary's output, and backends.ConfigurationError, which subclasses ValueError.
         return None
     if proc.returncode != 0:
         return None
-    match = _VERSION_TOKEN_RE.match(proc.stdout.strip())
-    return match.group(1) if match else None
+    try:
+        return module.parse_version(proc.stdout)
+    except Exception:
+        return None
 
 
-def build_args(manifest, task, brief_text, session_id, allowed=None, disallowed=None):
-    """The argument list, never a shell string (R9). The allowlist defaults to the manifest's
-    and is overridden for the closeout, which gets a narrower one (U9). The disallow list is the
-    manifest's plus every R10 variant validate filled in, for both."""
+def _reject_forbidden(backend_name, capability, pieces, brief_text):
+    """Refuse every forbidden spelling in the backend's tuple (KTD6). The brief is excluded
+    because a Task's instructions may mention a mode the argv itself must never carry."""
+    scanned = [item for item in pieces if item != brief_text]
+    joined = " ".join(str(item) for item in scanned)
+    for spelling in capability.forbidden_permission_modes:
+        if spelling in joined:
+            raise ValueError("backend %s forbids %s" % (backend_name, spelling))
+
+
+def build_args(manifest, task, brief_text, session_id, allowed=None, disallowed=None,
+               log_path=None, repo=None):
+    """The argument list, never a shell string (R9). Delegates the flag grammar to the
+    Task's backend. The allowlist defaults to the manifest's and is overridden for the
+    closeout, which gets a narrower one (U9). The disallow list is the manifest's plus
+    every R10 variant validate filled in, for both. A backend with no deny flag still
+    resolves that list; it simply does not put it on the argv."""
     resolved = manifest_module.resolved_disallowed(manifest)
     for extra in disallowed or ():
         if extra not in resolved:
             resolved.append(extra)
     disallowed = resolved
     allowed = manifest.permissions.allowed if allowed is None else allowed
-    return [
-        "claude", "-p", brief_text,
-        "--session-id", session_id,
-        "--model", task.model,
-        "--effort", task.effort,
-        "--permission-mode", contracts.PERMISSION_MODE,
-        "--allowedTools", ",".join(allowed),
-        "--disallowedTools", ",".join(disallowed),
-        "--output-format", contracts.OUTPUT_FORMAT,
-        "--verbose",
-    ]
+    module = backends.build(task.backend)
+    repo = repo or os.path.realpath(manifest.project.repo)
+    args = module.build_args(
+        manifest, task, brief_text, session_id,
+        allowed=allowed, disallowed=disallowed,
+        log_path=log_path, repo=repo,
+    )
+    _reject_forbidden(task.backend, module.CAPABILITY, args, brief_text)
+    _reject_forbidden(task.backend, module.CAPABILITY, list(allowed) + list(disallowed), None)
+    return args
 
 
-def find_transcript(home, cwd_realpath, session_id):
-    """The predicted path, or the one the CLI actually used. The uuid is unique, so a glob over
-    every slug directory is unambiguous when the prediction misses (KTD7)."""
-    predicted = contracts.transcript_path(home, cwd_realpath, session_id)
+def find_transcript(home, cwd_realpath, session_id, backend=None, log_path=None):
+    """The backend's predicted evidence path, or the one the CLI actually used.
+    Claude's uuid is unique, so a glob over every slug directory is unambiguous when
+    the prediction misses (outer loop KTD7). Codex and Grok name their files up front."""
+    name = backend or "claude"
+    module = backends.build(name)
+    sources = module.evidence_sources(
+        home=home, cwd=cwd_realpath, session_id=session_id, log_path=log_path,
+    )
+    predicted = sources[0] if sources else contracts.transcript_path(home, cwd_realpath, session_id)
     if os.path.exists(predicted):
         return predicted, True
-    matches = sorted(glob.glob(os.path.join(home, ".claude", "projects", "*", session_id + ".jsonl")))
-    if matches:
-        return matches[0], True
+    if name == "claude":
+        matches = sorted(glob.glob(
+            os.path.join(home, ".claude", "projects", "*", session_id + ".jsonl")))
+        if matches:
+            return matches[0], True
     return predicted, False
 
 
@@ -235,12 +273,13 @@ def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=Non
     """
     repo = os.path.realpath(manifest.project.repo)
     session_id = session_id or str(uuid.uuid4())
-    env = child_env(manifest, base_env, home)
+    env = child_env(manifest, base_env, home, backend=task.backend)
     home = home or env.get("HOME") or os.path.expanduser("~")
     result = LaunchResult(session_id=session_id, log_path=log_path)
 
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
-    args = build_args(manifest, task, brief_text, session_id, allowed, disallowed)
+    args = build_args(manifest, task, brief_text, session_id, allowed, disallowed,
+                      log_path=log_path, repo=repo)
 
     started_wall = time.time()
     started = time.monotonic()
@@ -251,7 +290,8 @@ def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=Non
         result.launch_error = "could not start %s: %s" % (args[0], exc)
         result.wall_seconds = time.time() - started_wall
         result.active_seconds = time.monotonic() - started
-        result.transcript_path, result.transcript_present = find_transcript(home, repo, session_id)
+        result.transcript_path, result.transcript_present = find_transcript(
+            home, repo, session_id, backend=task.backend, log_path=log_path)
         return result
 
     try:
@@ -352,5 +392,6 @@ def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=Non
     result.exit_code = proc.poll()
     result.active_seconds = time.monotonic() - started
     result.wall_seconds = time.time() - started_wall
-    result.transcript_path, result.transcript_present = find_transcript(home, repo, session_id)
+    result.transcript_path, result.transcript_present = find_transcript(
+        home, repo, session_id, backend=task.backend, log_path=log_path)
     return result

@@ -9,21 +9,22 @@ heartbeating the lease, merging, pushing, and verifying stay in the shared run l
 
 The interface, with the shapes each callable returns:
 
-    build_args(...)              -> argument list, origin U5 fills the body
+    build_args(...)              -> argument list for that backend
     parse_version(text)          -> version string or None, never raises
-    evidence_sources(...)        -> evidence locator tuple, origin U5 fills the body
+    evidence_sources(...)        -> evidence locator tuple
     readable(...)                -> readability state, origin U6 fills the body
     normalize_transcript(...)    -> normalized lines, origin U6 fills the body
     normalize_stream(...)        -> normalized lines, origin U6 fills the body
     qualify_skill(name)          -> the skill invocation string for this backend
 """
+import os
 import re
 from dataclasses import dataclass
 
 from .. import contracts
 
-# Same leading digit token launch.cli_version uses today. Claude's parse is this match
-# on the stripped stdout. Codex and Grok skip the first name token and apply it to the rest.
+# Same leading digit token Claude's parse_version uses. Codex and Grok skip the first
+# name token and apply it to the rest. launch.cli_version calls parse_version per backend.
 _VERSION_TOKEN_RE = re.compile(r"^(\d[\w.\-]*)")
 
 INTERFACE = (
@@ -97,16 +98,23 @@ def _parse_after_name_token(text):
     return _parse_leading_digit(parts[1])
 
 
-def _empty_args(*_args, **_kwargs):
-    return []
-
-
-def _empty_sources(*_args, **_kwargs):
-    return ()
-
-
 def _none(*_args, **_kwargs):
     return None
+
+
+def _last_message_path(log_path, session_id):
+    """The file Codex writes the final agent message to. Named by the runner
+    before launch (origin KTD4), next to the stdout log when one exists."""
+    if log_path:
+        directory = os.path.dirname(log_path)
+        base = os.path.basename(log_path)
+        if base.endswith(".stdout.log"):
+            stem = base[:-len(".stdout.log")]
+        else:
+            stem = os.path.splitext(base)[0]
+        name = stem + ".last-message.txt"
+        return os.path.join(directory, name) if directory else name
+    return "%s.last-message.txt" % session_id
 
 
 def build(name):

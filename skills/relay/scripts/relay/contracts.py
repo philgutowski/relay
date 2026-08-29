@@ -95,7 +95,8 @@ TRANSCRIPT_TYPE_ASSISTANT = "assistant"
 TRANSCRIPT_TYPE_USER = "user"
 TRANSCRIPT_TYPE_LAST_PROMPT = "last-prompt"
 
-# The flag set the runner passes to `claude -p` (R10, KTD7). The stub accepts the same set.
+# Claude's argv flag set (R10, outer loop KTD7). Other backends' flags live on BACKEND_PINS
+# and in the backend modules. The stub accepts this set.
 CLI_FLAGS = (
     "--session-id",
     "--model",

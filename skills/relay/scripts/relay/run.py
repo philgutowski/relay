@@ -148,7 +148,19 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
     # Read only once the run is actually going to reach a write_terminal call: EXIT_CONFIG and
     # EXIT_LEASE both return above this point, and a blocking subprocess call whose result those
     # paths would discard is wasted work on every run that never gets past them.
-    observed_cli_version = launch.cli_version(env)
+    used = []
+    for task in manifest.tasks:
+        if task.excluded:
+            continue
+        if task.backend not in used:
+            used.append(task.backend)
+    observed_by_backend = {name: launch.cli_version(env, backend=name) for name in used}
+    if "claude" in observed_by_backend:
+        observed_cli_version = observed_by_backend["claude"]
+    elif used:
+        observed_cli_version = observed_by_backend[used[0]]
+    else:
+        observed_cli_version = None
 
     # Resolved once, here, from the repo as it stands before any task has touched it. Reading
     # it per closeout would let a task's own merge move the bound its closeout is checked

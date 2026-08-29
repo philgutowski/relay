@@ -151,8 +151,6 @@ class SharedSurface(unittest.TestCase):
 
     def test_deferred_callables_exist_and_do_not_read_fixtures(self):
         deferred = (
-            "build_args",
-            "evidence_sources",
             "readable",
             "normalize_transcript",
             "normalize_stream",

@@ -3,6 +3,7 @@
 Every test runs against tests/stub-claude with a temp HOME and a PATH that finds the stub first.
 Nothing here launches a real claude.
 """
+import io
 import json
 import os
 import subprocess
@@ -12,7 +13,7 @@ import unittest
 
 import _paths
 import _repo
-from relay import contracts, launch, manifest as mf
+from relay import backends, contracts, launch, manifest as mf
 
 FIXTURE = os.path.join(_paths.FIXTURES_DIR, "manifests", "complete.toml")
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
@@ -339,3 +340,275 @@ class CliVersion(unittest.TestCase):
         fake = lambda *a, **k: _FakeCompletedProcess(
             "Update available: run claude update\n2.1.247 (Claude Code)\n", 0)
         self.assertIsNone(launch.cli_version({}, run=fake))
+
+    def test_each_backend_parses_its_observed_version_shape(self):
+        for name in ("claude", "codex", "grok"):
+            cap = backends.build(name).CAPABILITY
+            seen = []
+
+            def fake(*a, **k):
+                seen.append(a[0])
+                return _FakeCompletedProcess(cap.version_output_sample + "\n", 0)
+
+            parsed = launch.cli_version({}, run=fake, backend=name)
+            self.assertEqual(parsed, cap.version_tested, name)
+            self.assertEqual(seen[0][0], cap.binary, name)
+            self.assertEqual(seen[0][1], "--version", name)
+
+    def test_a_name_leading_codex_version_is_parsed(self):
+        fake = lambda *a, **k: _FakeCompletedProcess("codex-cli 0.149.0\n", 0)
+        self.assertEqual(launch.cli_version({}, run=fake, backend="codex"), "0.149.0")
+
+    def test_a_name_leading_grok_version_is_parsed(self):
+        fake = lambda *a, **k: _FakeCompletedProcess(
+            "grok 1.0.5 (5115b46bc909) [stable]\n", 0)
+        self.assertEqual(launch.cli_version({}, run=fake, backend="grok"), "1.0.5")
+
+    def test_a_missing_binary_on_an_alternate_backend_returns_none(self):
+        def fake(*a, **k):
+            raise FileNotFoundError("no such file: grok")
+        self.assertIsNone(launch.cli_version({}, run=fake, backend="grok"))
+
+
+class PerBackendArguments(LaunchCase):
+    """U5: the launcher builds each backend's own argv from the capability record."""
+
+    def manifest_for(self, backend):
+        text = self.toml.replace('id = "T-1"', 'id = "T-1"\nbackend = "%s"' % backend, 1)
+        return self.load(text, name="%s.toml" % backend)
+
+    def args_for(self, backend, **kwargs):
+        manifest = self.manifest_for(backend)
+        repo = os.path.realpath(manifest.project.repo)
+        log_path = os.path.join(self.tmp.name, "T-1.stdout.log")
+        kwargs.setdefault("log_path", log_path)
+        kwargs.setdefault("repo", repo)
+        return launch.build_args(manifest, manifest.tasks[0], BRIEF, "sid", **kwargs), manifest
+
+    def test_each_argument_list_starts_with_that_backend_binary_and_its_flag_set(self):
+        claude, _ = self.args_for("claude")
+        self.assertEqual(claude[0], "claude")
+        self.assertEqual(claude[1], "-p")
+        self.assertIn("--session-id", claude)
+        self.assertIn("--permission-mode", claude)
+        self.assertEqual(claude[claude.index("--permission-mode") + 1], "dontAsk")
+        self.assertIn("--allowedTools", claude)
+        self.assertIn("--disallowedTools", claude)
+        self.assertIn("--output-format", claude)
+        self.assertEqual(claude[claude.index("--output-format") + 1], "stream-json")
+        self.assertIn("--verbose", claude)
+
+        grok, _ = self.args_for("grok")
+        self.assertEqual(grok[0], "grok")
+        self.assertEqual(grok[1], "-p")
+        self.assertIn("-s", grok)
+        self.assertEqual(grok[grok.index("-s") + 1], "sid")
+        self.assertEqual(grok[grok.index("--permission-mode") + 1], "auto")
+        self.assertIn("--allow", grok)
+        self.assertIn("--deny", grok)
+        self.assertGreater(grok.count("--deny"), 1)
+        self.assertNotIn(",", grok[grok.index("--deny") + 1])
+        self.assertEqual(grok[grok.index("--output-format") + 1], "streaming-json")
+        self.assertNotIn("--verbose", grok)
+        self.assertNotIn("dontAsk", grok)
+
+        codex, manifest = self.args_for("codex")
+        repo = os.path.realpath(manifest.project.repo)
+        joined = " ".join(codex)
+        self.assertEqual(codex[0], "codex")
+        self.assertEqual(codex[1], "exec")
+        self.assertIn("--sandbox", codex)
+        self.assertEqual(codex[codex.index("--sandbox") + 1], "workspace-write")
+        self.assertIn("--json", codex)
+        self.assertIn("--output-last-message", codex)
+        self.assertIn("-C", codex)
+        self.assertEqual(codex[codex.index("-C") + 1], repo)
+        self.assertIn("--add-dir", codex)
+        self.assertEqual(codex[codex.index("--add-dir") + 1], os.path.join(repo, ".git"))
+        self.assertEqual(codex[-1], BRIEF)
+        self.assertNotIn("danger-full-access", joined)
+        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", joined)
+
+    def test_a_backend_without_a_deny_flag_omits_it_and_still_resolves_the_disallow_list(self):
+        args, _ = self.args_for("codex")
+        joined = " ".join(args)
+        self.assertNotIn("--disallowedTools", joined)
+        self.assertNotIn("--deny", joined)
+        self.assertNotIn("--allowedTools", joined)
+        self.assertNotIn("--allow", joined)
+
+    def test_every_forbidden_spelling_is_refused(self):
+        for name in ("claude", "codex", "grok"):
+            manifest = self.manifest_for(name)
+            cap = backends.build(name).CAPABILITY
+            for spelling in cap.forbidden_permission_modes:
+                with self.subTest(backend=name, spelling=spelling):
+                    with self.assertRaises(ValueError) as raised:
+                        launch.build_args(
+                            manifest, manifest.tasks[0], BRIEF, "sid",
+                            allowed=[spelling],
+                            log_path=os.path.join(self.tmp.name, "T-1.stdout.log"),
+                            repo=os.path.realpath(manifest.project.repo),
+                        )
+                    message = str(raised.exception)
+                    self.assertIn(spelling, message)
+                    self.assertIn(name, message)
+
+    def test_a_brief_that_mentions_a_forbidden_spelling_is_not_itself_a_refusal(self):
+        cases = (
+            ("grok", "Relay always ran dontAsk on Claude. Do not use bypassPermissions."),
+            ("codex", "Do not pass --dangerously-bypass-approvals-and-sandbox or danger-full-access."),
+        )
+        for name, brief in cases:
+            with self.subTest(backend=name):
+                manifest = self.manifest_for(name)
+                args = launch.build_args(
+                    manifest, manifest.tasks[0], brief, "sid",
+                    log_path=os.path.join(self.tmp.name, "T-1.stdout.log"),
+                    repo=os.path.realpath(manifest.project.repo),
+                )
+                self.assertIn(brief, args)
+
+
+class PerBackendEnvironment(LaunchCase):
+    """U5, KTD16: run level env keeps every credential and drops every nesting marker.
+    A Task's child then keeps only its own backend's credentials."""
+
+    def parent_env(self):
+        return dict(
+            self.base_env,
+            ANTHROPIC_API_KEY="a",
+            CLAUDE_API_KEY="c",
+            CLAUDE_CODE_ENTRYPOINT="cli",
+            CLAUDECODE="1",
+            CODEX_API_KEY="x",
+            OPENAI_API_KEY="o",
+            CODEX_SANDBOX="1",
+            CODEX_HOME="/tmp/codex",
+            GROK_API_KEY="g",
+            XAI_API_KEY="z",
+            GROK_SANDBOX="1",
+            JIRA_API_TOKEN="secret",
+        )
+
+    def test_the_run_level_environment_keeps_every_credential_and_no_nesting_marker(self):
+        env = launch.child_env(self.manifest, self.parent_env())
+        for name in ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "CODEX_API_KEY",
+                     "OPENAI_API_KEY", "GROK_API_KEY", "XAI_API_KEY"):
+            self.assertEqual(env[name], self.parent_env()[name], name)
+        for name in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX",
+                     "CODEX_HOME", "GROK_SANDBOX", "JIRA_API_TOKEN"):
+            self.assertNotIn(name, env, "%s survived the run level scrub" % name)
+
+    def test_a_codex_child_keeps_codex_credentials_and_drops_the_others(self):
+        env = launch.child_env(self.manifest, self.parent_env(), backend="codex")
+        self.assertEqual(env["CODEX_API_KEY"], "x")
+        self.assertEqual(env["OPENAI_API_KEY"], "o")
+        for name in ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "GROK_API_KEY", "XAI_API_KEY",
+                     "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_HOME",
+                     "GROK_SANDBOX"):
+            self.assertNotIn(name, env, name)
+
+    def test_a_claude_child_keeps_claude_credentials_and_drops_the_others(self):
+        env = launch.child_env(self.manifest, self.parent_env(), backend="claude")
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "a")
+        self.assertEqual(env["CLAUDE_API_KEY"], "c")
+        for name in ("CODEX_API_KEY", "OPENAI_API_KEY", "GROK_API_KEY", "XAI_API_KEY"):
+            self.assertNotIn(name, env, name)
+        self.assertNotIn("CLAUDE_CODE_ENTRYPOINT", env)
+
+    def test_a_grok_child_keeps_grok_credentials_and_drops_the_others(self):
+        env = launch.child_env(self.manifest, self.parent_env(), backend="grok")
+        self.assertEqual(env["GROK_API_KEY"], "g")
+        self.assertEqual(env["XAI_API_KEY"], "z")
+        for name in ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "CODEX_API_KEY", "OPENAI_API_KEY"):
+            self.assertNotIn(name, env, name)
+        self.assertNotIn("GROK_SANDBOX", env)
+
+    def test_launch_narrows_to_the_task_backend(self):
+        cases = (
+            ("claude", "ANTHROPIC_API_KEY", "CODEX_API_KEY"),
+            ("codex", "CODEX_API_KEY", "ANTHROPIC_API_KEY"),
+            ("grok", "GROK_API_KEY", "ANTHROPIC_API_KEY"),
+        )
+        for name, keep, drop in cases:
+            with self.subTest(backend=name):
+                seen = {}
+
+                class Recording:
+                    def __init__(inner, args, **kwargs):
+                        seen["env"] = kwargs["env"]
+                        inner.pid = -1
+                        inner.stdout = io.StringIO("")
+                        inner.returncode = 0
+
+                    def poll(inner):
+                        return 0
+
+                    def wait(inner, timeout=None):
+                        return 0
+
+                text = self.toml.replace(
+                    'id = "T-1"', 'id = "T-1"\nbackend = "%s"' % name, 1)
+                self.manifest = self.load(text, name="%s-task.toml" % name)
+                self.go(popen=Recording, base_env=self.parent_env(), timeout_seconds=1)
+                self.assertIn(keep, seen["env"], name)
+                self.assertNotIn(drop, seen["env"], name)
+                self.assertNotIn("CLAUDE_CODE_ENTRYPOINT", seen["env"], name)
+
+
+class PerBackendEvidence(LaunchCase):
+    def test_claude_evidence_is_the_session_jsonl(self):
+        path, present = launch.find_transcript(
+            self.home, os.path.realpath(self.repo), "sid", backend="claude")
+        self.assertEqual(
+            path,
+            contracts.transcript_path(self.home, os.path.realpath(self.repo), "sid"))
+        self.assertFalse(present)
+
+    def test_grok_evidence_is_the_percent_encoded_updates_jsonl(self):
+        cwd = os.path.realpath(self.repo)
+        path, present = launch.find_transcript(self.home, cwd, "sid", backend="grok")
+        from urllib.parse import quote
+        expected = os.path.join(
+            self.home, ".grok", "sessions", quote(cwd, safe=""), "sid", "updates.jsonl")
+        self.assertEqual(path, expected)
+        self.assertFalse(present)
+
+    def test_codex_evidence_is_the_named_last_message_file(self):
+        log_path = os.path.join(self.tmp.name, "T-1.stdout.log")
+        path, present = launch.find_transcript(
+            self.home, os.path.realpath(self.repo), "sid",
+            backend="codex", log_path=log_path)
+        self.assertEqual(path, os.path.join(self.tmp.name, "T-1.last-message.txt"))
+        self.assertFalse(present)
+
+
+class PerBackendPopenContract(LaunchCase):
+    def test_every_backend_still_starts_detached_with_no_inherited_stdin(self):
+        for name in ("claude", "codex", "grok"):
+            with self.subTest(backend=name):
+                seen = {}
+
+                class Recording:
+                    def __init__(inner, args, **kwargs):
+                        seen["args"] = args
+                        seen["kwargs"] = kwargs
+                        inner.pid = -1
+                        inner.stdout = io.StringIO("")
+                        inner.returncode = 0
+
+                    def poll(inner):
+                        return 0
+
+                    def wait(inner, timeout=None):
+                        return 0
+
+                text = self.toml.replace(
+                    'id = "T-1"', 'id = "T-1"\nbackend = "%s"' % name, 1)
+                self.manifest = self.load(text, name="%s.toml" % name)
+                self.go(popen=Recording, timeout_seconds=1)
+                self.assertEqual(seen["args"][0], name)
+                self.assertEqual(seen["kwargs"]["stdin"], subprocess.DEVNULL)
+                self.assertTrue(seen["kwargs"]["start_new_session"])
+                self.assertEqual(seen["kwargs"]["cwd"], os.path.realpath(self.repo))
