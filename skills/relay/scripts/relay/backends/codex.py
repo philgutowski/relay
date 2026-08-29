@@ -8,10 +8,7 @@ evidence_sources = _empty_sources
 readable = _none
 normalize_transcript = _none
 normalize_stream = _none
-
-
-def parse_version(text):
-    return _parse_after_name_token(text)
+parse_version = _parse_after_name_token
 
 
 def qualify_skill(name):

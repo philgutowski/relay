@@ -26,8 +26,6 @@ from .. import contracts
 # on the stripped stdout. Codex and Grok skip the first name token and apply it to the rest.
 _VERSION_TOKEN_RE = re.compile(r"^(\d[\w.\-]*)")
 
-BACKENDS = ("claude", "codex", "grok")
-
 INTERFACE = (
     "build_args",
     "parse_version",
@@ -40,8 +38,8 @@ INTERFACE = (
 
 
 class ConfigurationError(ValueError):
-    """A backend name the operator must fix before any run. Raised at construction,
-    before a single request, so `relay validate` can name the missing CLI."""
+    """A backend name not in the closed set. Raised by `build()` before any
+    process starts."""
 
 
 @dataclass(frozen=True)
@@ -92,11 +90,10 @@ def _parse_after_name_token(text):
     stripped = str(text).strip()
     if not stripped:
         return None
-    parts = stripped.split()
+    parts = stripped.split(None, 1)
     if len(parts) < 2:
         return None
-    match = _VERSION_TOKEN_RE.match(parts[1])
-    return match.group(1) if match else None
+    return _parse_leading_digit(parts[1])
 
 
 def _empty_args(*_args, **_kwargs):
@@ -112,8 +109,8 @@ def _none(*_args, **_kwargs):
 
 
 def build(name):
-    """The backend module the Task names. Imports are local so a machine without
-    two of the CLIs can still construct the third."""
+    """The backend module the Task names. Imports are local so importing
+    `backends` does not load every backend module."""
     if name == "claude":
         from . import claude
 
