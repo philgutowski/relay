@@ -112,7 +112,8 @@ OUTPUT_FORMAT = "stream-json"
 
 # Per-backend launch facts, every one observed in U1 by running the installed CLI against
 # ~/Documents/PhilAI/relay-proof/target on 2026-08-28. Nothing here is read from documentation.
-# U4 reads this into the capability record; until it exists this is the record.
+# Pins are the producer. backends.Capability is the frozen view U4 copies.
+# Do not restate these values elsewhere.
 #
 # The fixtures these were taken from are in tests/fixtures/backends/, one directory per backend,
 # and tests/fixtures/backends/README.md names which task produced which file.
