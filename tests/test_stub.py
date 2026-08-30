@@ -22,11 +22,14 @@ RUNNER_FLAGS = [
 ]
 
 
-def write_entry(queue, n, fixture, exit_code=0, sleep=0, git_sh=None):
+def write_entry(queue, n, fixture, exit_code=0, sleep=0, git_sh=None, stream=None):
     entry_dir = os.path.join(queue, str(n))
     os.makedirs(entry_dir)
+    entry = {"fixture": fixture, "exit": exit_code, "sleep": sleep}
+    if stream:
+        entry["stream"] = stream
     with open(os.path.join(entry_dir, "entry.json"), "w") as handle:
-        json.dump({"fixture": fixture, "exit": exit_code, "sleep": sleep}, handle)
+        json.dump(entry, handle)
     if git_sh:
         with open(os.path.join(entry_dir, "git.sh"), "w") as handle:
             handle.write(git_sh)
@@ -147,6 +150,23 @@ class StubCodex(_StubTestCase):
         with open(last_message) as got, open(fixture) as want:
             self.assertEqual(got.read(), want.read())
 
+    def test_stream_entry_echoes_tool_events_around_the_non_json_line(self):
+        """R8: a real Codex run interleaves one non-JSON line
+        ("Reading additional input from stdin...") into its own JSON stdout. The stub's
+        stream echo must carry both kinds through unchanged, the same way a real run does."""
+        stream = os.path.join(self.tmp.name, "stream.jsonl")
+        with open(stream, "w") as handle:
+            handle.write('{"type": "item.completed", "item": {"type": "agent_message"}}\n')
+            handle.write("Reading additional input from stdin...\n")
+        write_entry(self.queue, 1, os.path.join(self.fixtures, "last-message-complete.txt"),
+                    stream=stream)
+        log_path = os.path.join(self.tmp.name, "T-4.stdout.log")
+        proc = subprocess.run(self.build_args(log_path), cwd=self.repo, env=self.env,
+                               capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('"type": "item.completed"', proc.stdout)
+        self.assertIn("Reading additional input from stdin...", proc.stdout)
+
     def test_version_output_parses_to_the_pinned_version(self):
         proc = subprocess.run(["codex", "--version"], env=self.env, capture_output=True,
                                text=True, timeout=10)
@@ -207,6 +227,44 @@ class StubGrok(_StubTestCase):
         self.assertTrue(os.path.exists(predicted), predicted)
         with open(predicted) as got, open(fixture) as want:
             self.assertEqual(got.read(), want.read())
+
+    def test_fixture_lands_where_evidence_sources_predicts_with_a_cwd_needing_url_encoding(self):
+        # A real directory (not a symlink, which os.path.realpath would resolve away) whose
+        # name needs percent-encoding, so the stub and evidence_sources must agree on the
+        # quoted form rather than on a plain path both happen to accept unencoded.
+        cwd = os.path.join(self.tmp.name, "repo with spaces")
+        os.makedirs(cwd)
+        fixture = os.path.join(self.fixtures, "session-transcript-complete.jsonl")
+        write_entry(self.queue, 1, fixture)
+        args = self.build_args("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+        proc = subprocess.run(args, cwd=cwd, env=self.env, capture_output=True, text=True,
+                               timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        realpath = os.path.realpath(cwd)
+        (predicted,) = self.mod.evidence_sources(self.home, realpath,
+                                                   "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+        self.assertIn("%20", predicted)
+        self.assertTrue(os.path.exists(predicted), predicted)
+        with open(predicted) as got, open(fixture) as want:
+            self.assertEqual(got.read(), want.read())
+
+    def test_stream_entry_echoes_token_events(self):
+        """R9: a real Grok run emits one JSON object per token on stdout. The stub's stream
+        echo must carry that shape through unchanged so tail's reassembly has something to
+        decode; this only proves the echo, not tail's own reassembly (covered elsewhere)."""
+        stream = os.path.join(self.tmp.name, "stream.jsonl")
+        with open(stream, "w") as handle:
+            handle.write('{"type": "text", "data": "hel"}\n')
+            handle.write('{"type": "text", "data": "lo"}\n')
+            handle.write('{"type": "tool_call", "toolName": "read_file"}\n')
+        write_entry(self.queue, 1, os.path.join(self.fixtures, "session-transcript-complete.jsonl"),
+                    stream=stream)
+        args = self.build_args("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+        proc = subprocess.run(args, cwd=self.repo, env=self.env, capture_output=True, text=True,
+                               timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('{"type": "text", "data": "hel"}', proc.stdout)
+        self.assertIn('{"type": "tool_call", "toolName": "read_file"}', proc.stdout)
 
     def test_version_output_parses_to_the_pinned_version(self):
         proc = subprocess.run(["grok", "--version"], env=self.env, capture_output=True,
@@ -279,7 +337,9 @@ class CrossBackendQueue(_StubTestCase):
             self.assertEqual(got.read(), want.read(), "codex must consume entry 2, not entry 1")
 
         grok_mod = backends.build("grok")
-        grok_args = grok_mod.build_args(manifest, task, "brief", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        grok_task = types.SimpleNamespace(model="grok-4", effort="low")
+        grok_args = grok_mod.build_args(manifest, grok_task, "brief",
+                                         "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                                          allowed=(), disallowed=())
         third = subprocess.run(grok_args, cwd=self.repo, env=self.env, capture_output=True,
                                 text=True, timeout=30)

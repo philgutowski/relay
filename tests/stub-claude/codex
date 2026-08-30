@@ -29,15 +29,21 @@ _VALUE_FLAGS = {"--sandbox", "--model", "-C", "--output-last-message", "--add-di
 _BOOL_FLAGS = {"--json"}
 
 
+# Every flag build_args always emits, --add-dir excluded since it is zero-or-more.
+_REQUIRED_FLAGS = (_VALUE_FLAGS | _BOOL_FLAGS) - {"--add-dir"}
+
+
 def parse_args(argv):
     if not argv or argv[0] != "exec":
         raise ValueError("expected leading 'exec', got %r" % (argv[:1],))
     flags = {"add-dir": []}
+    seen = set()
     i = 1
     while i < len(argv):
         arg = argv[i]
         if arg in _BOOL_FLAGS:
             flags[arg[2:]] = True
+            seen.add(arg)
             i += 1
         elif arg in _VALUE_FLAGS:
             if i + 1 >= len(argv):
@@ -47,12 +53,18 @@ def parse_args(argv):
                 flags["add-dir"].append(value)
             else:
                 flags[arg.lstrip("-")] = value
+            seen.add(arg)
             i += 2
-        elif i == len(argv) - 1:
+        elif i == len(argv) - 1 and not arg.startswith("-"):
             flags["brief"] = arg
             i += 1
         else:
             raise ValueError("unrecognized flag %r" % arg)
+    missing = _REQUIRED_FLAGS - seen
+    if missing:
+        raise ValueError("missing required flag(s) %r" % sorted(missing))
+    if "brief" not in flags:
+        raise ValueError("missing brief text")
     return flags
 
 

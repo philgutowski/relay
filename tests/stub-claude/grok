@@ -34,6 +34,7 @@ def parse_args(argv):
     if len(argv) < 2:
         raise ValueError("-p needs a value")
     flags = {"prompt": argv[1], "allow": [], "deny": []}
+    seen = set()
     i = 2
     while i < len(argv):
         arg = argv[i]
@@ -44,9 +45,13 @@ def parse_args(argv):
             flags[arg[2:]].append(value)
         elif arg in _SINGLE_VALUE_FLAGS:
             flags[arg.lstrip("-")] = value
+            seen.add(arg)
         else:
             raise ValueError("unrecognized flag %r" % arg)
         i += 2
+    missing = _SINGLE_VALUE_FLAGS - seen
+    if missing:
+        raise ValueError("missing required flag(s) %r" % sorted(missing))
     return flags
 
 
