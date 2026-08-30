@@ -127,8 +127,17 @@ BACKEND_PINS = {
         "version_output_sample": "2.1.250 (Claude Code)",
         "plugin_version": "3.23.4",
         "plugin_query": ("claude", "plugin", "list"),
+        # `claude plugin list` prints `Version:` and `Status:` as separate lines in the same
+        # entry; a disabled plugin still reports its installed version on the `Version:` line.
+        # The interior scan is bounded to this entry (never crossing the next `❯` bullet) so a
+        # disabled compound-engineering entry cannot borrow a later, unrelated plugin's enabled
+        # status. skills-relay-contracts-129-disabled-plugin-ready. Not covered: two entries for
+        # this same plugin at different scopes (e.g. a disabled project-scope install followed by
+        # an enabled user-scope one) would let re.search retry past the first and match the
+        # second; unconfirmed whether the real CLI can list the same plugin twice.
         "plugin_version_pattern": (r"(?ims)^\s*❯\s*compound-engineering@compound-engineering-plugin\s+"
-                                   r"Version:\s*(?P<version>\d+(?:\.\d+)+)"),
+                                   r"Version:\s*(?P<version>\d+(?:\.\d+)+)"
+                                   r"(?:(?!❯).)*?Status:\s*(?:\S+\s+)?enabled\b"),
         "headless_flag": "-p",
         "session_id_choosable": True,
         "permission_mode": "dontAsk",
@@ -190,6 +199,9 @@ BACKEND_PINS = {
         "version_output_sample": "grok 1.0.5 (5115b46bc909) [stable]",
         "plugin_version": "3.23.4",
         "plugin_query": ("grok", "plugin", "list", "--json"),
+        # `grok plugin list --json` carries only a `"status": "installed"` field, unchanged by
+        # `grok plugin disable`/`enable` as of the version tested; there is no field this pattern
+        # can require to exclude a disabled plugin the way the claude and codex patterns do.
         "plugin_version_pattern": (r'(?s)\{(?=[^{}]*"name"\s*:\s*"compound-engineering")'
                                    r'(?=[^{}]*"version"\s*:\s*"(?P<version>\d+(?:\.\d+)+)")[^{}]*\}'),
         "headless_flag": "-p",
