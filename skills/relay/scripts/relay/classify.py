@@ -8,7 +8,10 @@ blocks, each naming the `tool_use_id` it answers, with `is_error` set on a denia
 
 Two joins do the work (KTD6). A denial is a `tool_result` whose content matches the denial
 regex; joined by id to its `tool_use` it yields the tool name and the path or argument it was
-denied on. A substitution is a `Skill` tool_use whose `input.skill` lacks the required prefix.
+denied on. A substitution is a `Skill` tool_use whose `input.skill` is not this backend's own
+qualified form of one of the plugin skills the brief pins; `required_skill_for` decides that,
+and the test is per backend rather than one prefix, because two of the three CLIs spell a skill
+with a bare sigil every skill on them shares.
 Classes assigned here are the ones the transcript alone can decide: timeout (from the launch
 result), blocked_envelope, no_envelope, path_gate, and unexpected_error when the transcript
 itself would not open, which is the runner's fault and never the task's silence (KTD5).

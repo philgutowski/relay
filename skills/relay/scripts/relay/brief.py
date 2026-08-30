@@ -154,6 +154,9 @@ def values(manifest, task, card, branch=None):
     branch = branch or ("relay/" + task.id)
     tracker_steps = adapters.task_tracker_steps(manifest, branch)
     module = backends.build(task.backend)
+    # Bound once: the rule sentence and the step that runs the skill have to name the same thing,
+    # and two independent calls are how they would come to name different ones.
+    ce_plan = module.qualify_skill("ce-plan")
     return {
         "task_id": task.id,
         "title": defang(str(card.get("title") or "")).strip(),
@@ -173,9 +176,9 @@ def values(manifest, task, card, branch=None):
         "review_mode": contracts.CODE_REVIEW_AGENT_MODE,
         "envelope_tag": contracts.ENVELOPE_FENCE_TAG,
         "lfg_token": contracts.LFG_TERMINAL_TOKEN,
-        "skill_form_rule": SKILL_FORM_RULE % module.qualify_skill("ce-plan"),
+        "skill_form_rule": SKILL_FORM_RULE % ce_plan,
         "unenforced_restrictions": _unenforced_block(manifest, module.CAPABILITY),
-        "ce_plan": module.qualify_skill("ce-plan"),
+        "ce_plan": ce_plan,
         "ce_work": module.qualify_skill("ce-work"),
         "ce_simplify": module.qualify_skill("ce-simplify-code"),
         "ce_review": module.qualify_skill("ce-code-review"),
