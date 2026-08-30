@@ -8,6 +8,7 @@ from relay import classify, contracts, summary
 from test_summary import FINDING_ROWS
 
 FIXTURES = os.path.join(_paths.FIXTURES_DIR, "transcripts")
+BACKEND_FIXTURES = os.path.join(_paths.FIXTURES_DIR, "backends")
 # The shape the Jira adapter's write_tool_patterns() returns in U4 (KTD16).
 JIRA_PATTERNS = {"tools": ["mcp__atlassian__"], "bash": [], "paths": []}
 MARKDOWN_PATTERNS = {"tools": [], "bash": [], "paths": ["tracker.md"]}
@@ -370,6 +371,64 @@ class FindingLines(unittest.TestCase):
         line = classify.finding_line({"class": contracts.HALT_DENIED_TOOL})
         self.assertNotIn("{", line)
         self.assertIn("?", line)
+
+
+CODEX_FIXTURES = os.path.join(BACKEND_FIXTURES, "codex")
+
+
+def run_codex(last_message_name, stdout_name=None, launch=None):
+    log_path = os.path.join(CODEX_FIXTURES, stdout_name) if stdout_name else None
+    launch = launch or SimpleNamespace(timed_out=False, exit_code=0, log_path=log_path)
+    return classify.classify(os.path.join(CODEX_FIXTURES, last_message_name), launch,
+                             backend="codex")
+
+
+class CodexEvidence(unittest.TestCase):
+    """Backends U6, U2: the last-message file is the final text; the stdout log is tool calls
+    and the decoded-event count only."""
+
+    def test_last_message_complete_plus_stdout_normalizes_to_a_complete_envelope(self):
+        r = run_codex("last-message-complete.txt", "stdout-complete.jsonl")
+        self.assertEqual(r["envelope"]["status"], "complete")
+        self.assertTrue(r["routable"])
+        self.assertGreater(r["tool_calls"], 0)
+
+    def test_last_message_blocked_plus_stdout_normalizes_to_a_blocked_envelope(self):
+        r = run_codex("last-message-blocked.txt", "stdout-blocked.jsonl")
+        self.assertEqual(r["envelope"]["status"], "blocked")
+        self.assertTrue(r["envelope"]["blockers"][0].startswith(
+            "The project’s Slack webhook"))
+
+    def test_closeout_terminal_line_past_the_200_character_head_is_still_readable(self):
+        r = run_codex("closeout-last-message-skipped-long.txt", "closeout-stdout.jsonl")
+        self.assertTrue(r["transcript_present"])
+        self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
+
+    def test_the_stray_non_json_line_is_skipped_without_losing_the_events_around_it(self):
+        r = run_codex("last-message-complete.txt", "stdout-complete.jsonl")
+        self.assertEqual(r["malformed_lines"], 1, "the launcher's stderr merge line")
+        self.assertGreater(r["tool_calls"], 0)
+
+    def test_a_timed_out_run_with_no_last_message_file_stays_the_timeout_class(self):
+        r = run_codex("does-not-exist.txt", launch=SimpleNamespace(
+            timed_out=True, exit_code=-15, log_path=None))
+        self.assertEqual(r["halt_class"], contracts.HALT_TIMEOUT)
+
+    def test_a_stdout_log_that_decodes_zero_events_is_not_readable(self):
+        empty_log = os.path.join(_paths.FIXTURES_DIR, "does-not-exist.jsonl")
+        module = classify.backends.build("codex")
+        last_message = os.path.join(CODEX_FIXTURES, "last-message-complete.txt")
+        evidence = module.normalize_transcript(last_message, log_path=empty_log)
+        self.assertEqual(evidence.decoded_events, 0)
+        self.assertFalse(module.readable(last_message, evidence))
+
+    def test_denied_path_gate_and_tracker_write_and_skill_substitution_are_all_unavailable(self):
+        r = run_codex("last-message-complete.txt", "stdout-complete.jsonl")
+        self.assertEqual(r["undetectable"], sorted([
+            contracts.HALT_DENIED_TOOL, contracts.HALT_PATH_GATE,
+            contracts.HALT_SKILL_SUBSTITUTION, contracts.HALT_TRACKER_WRITE_DENIED,
+        ]))
+        self.assertEqual(classes(r), [])
 
 
 if __name__ == "__main__":
