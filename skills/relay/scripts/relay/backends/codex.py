@@ -1,18 +1,14 @@
 """Codex backend. Capability record from origin U1 pins."""
-import json
 import os
 
 from .. import contracts
-from . import (Evidence as _Evidence, _last_message_path, _parse_after_name_token,
-               _read_jsonl, _record)
+from . import (Evidence as _Evidence, TEXT_CHARS as _TEXT_CHARS, _decode_stream_line,
+               _last_message_path, _parse_after_name_token, _read_jsonl, _record,
+               _tool_call_event)
 
 CAPABILITY = _record("codex")
 
 parse_version = _parse_after_name_token
-
-# Bounds on one printed stream event, matching backends.claude's private copies (Backends U6).
-_TEXT_CHARS = 600
-_ARGUMENT_CHARS = 110
 
 # Codex has no per-tool deny flag (no `enforces_at_launch`) and no structured skill-invocation
 # call, so none of these four classes can be observed from its evidence (Backends U6, R3, R4).
@@ -35,17 +31,16 @@ def normalize_transcript(transcript_path, log_path=None):
     try:
         with open(transcript_path, encoding="utf-8", errors="replace") as handle:
             last_text = handle.read()
+        opened = True
     except (OSError, TypeError):
         last_text = None
+        opened = False
 
     lines = []
     malformed = 0
     decoded_events = 0
     if log_path:
-        try:
-            raw_lines, malformed = _read_jsonl(log_path)
-        except (OSError, TypeError):
-            raw_lines = []
+        raw_lines, malformed, _log_opened = _read_jsonl(log_path)
         decoded_events = len(raw_lines)
         for number, obj in raw_lines:
             block = _tool_use_of(obj)
@@ -69,7 +64,7 @@ def normalize_transcript(transcript_path, log_path=None):
             "message": {"content": [{"type": "text", "text": last_text}]},
         }))
     return _Evidence(lines=lines, malformed_lines=malformed, decoded_events=decoded_events,
-                      undetectable=_UNDETECTABLE)
+                      undetectable=_UNDETECTABLE, opened=opened)
 
 
 def _tool_use_of(obj):
@@ -92,26 +87,19 @@ def _tool_use_of(obj):
 
 
 def readable(transcript_path, evidence):
-    """KTD4: readable only when the last-message file exists and the normalizer decoded at
-    least one event. The stdout log always opens once the launcher creates it, so a file-open
-    test alone cannot tell a genuine run from an empty one."""
-    return os.path.exists(transcript_path) and evidence.decoded_events >= 1
+    """KTD4: readable only when the last-message file opened and the normalizer decoded at
+    least one event from the stdout log. The log always opens once the launcher creates it, so
+    a file-open test alone cannot tell a genuine run from an empty one. `evidence.opened` is the
+    answer `normalize_transcript`'s own read of `transcript_path` already found."""
+    return evidence.opened and evidence.decoded_events >= 1
 
 
 def normalize_stream(raw, state=None):
     """One raw stdout line in, zero or more printable events out. `state` is unused: Codex's
     stream needs no cross-call buffering. Tolerates the one non-JSON line the launcher's stderr
     merge produces (R8) by yielding nothing for it, the same as any other undecodable line."""
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8", errors="replace")
-    raw = (raw or "").strip()
-    if not raw:
-        return [], None
-    try:
-        obj = json.loads(raw)
-    except ValueError:
-        return [], None
-    if not isinstance(obj, dict):
+    obj = _decode_stream_line(raw)
+    if obj is None:
         return [], None
 
     kind = obj.get("type")
@@ -122,12 +110,11 @@ def normalize_stream(raw, state=None):
         if body:
             events.append(body[:_TEXT_CHARS])
     elif kind == "item.started" and item.get("type") == "command_execution":
-        argument = str(item.get("command", ""))
-        events.append("  > %-10s %s" % ("Bash", argument[:_ARGUMENT_CHARS]))
+        events.append(_tool_call_event("Bash", str(item.get("command", ""))))
     elif kind == "item.started" and item.get("type") == "file_change":
         changes = item.get("changes") or []
         argument = str(changes[0].get("path", "")) if changes else ""
-        events.append("  > %-10s %s" % ("Edit", argument[:_ARGUMENT_CHARS]))
+        events.append(_tool_call_event("Edit", argument))
     return events, None
 
 

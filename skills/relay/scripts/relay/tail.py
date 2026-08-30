@@ -136,6 +136,9 @@ class _Reader:
         self.phase = phase
         self.path = path
         self.backend = backend
+        # Resolved once per reader rather than once per poll: `backend` is fixed for a reader's
+        # whole life, and dispatch is a poll-cadence hot path for the duration of a running Task.
+        self.module = backends.build(backend)
         # Threaded into every `normalize_stream` call for this reader and nowhere else (KTD6),
         # so Grok's in-progress token buffer never crosses between two readers of the same
         # backend, or between one Task's own log and its Closeout log.
@@ -240,9 +243,8 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
             announce("== %s %s ==" % (reader.task_id, reader.phase))
         if phases_only:
             return
-        module = backends.build(reader.backend)
         for raw in reader.drain():
-            events, reader.stream_state = module.normalize_stream(raw, reader.stream_state)
+            events, reader.stream_state = reader.module.normalize_stream(raw, reader.stream_state)
             reader.decoded_events += len(events)
             for event in events:
                 stream(event)

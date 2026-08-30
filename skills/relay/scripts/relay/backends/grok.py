@@ -1,18 +1,16 @@
 """Grok backend. Capability record from origin U1 pins."""
-import json
 import os
 from urllib.parse import quote as _quote
 
 from .. import contracts
-from . import (Evidence as _Evidence, _parse_after_name_token, _read_jsonl, _record)
+from . import (Evidence as _Evidence, TEXT_CHARS as _TEXT_CHARS, _argument_of,
+               _decode_stream_line, _parse_after_name_token, _read_jsonl, _record,
+               _tool_call_event)
 
 CAPABILITY = _record("grok")
 
 parse_version = _parse_after_name_token
 
-# Bounds on one printed stream event, matching backends.claude's private copies (Backends U6).
-_TEXT_CHARS = 600
-_ARGUMENT_CHARS = 110
 # Grok's own tool input carries `target_file` where Claude's carries `file_path`; both are
 # listed so the tool-call line names the argument either way.
 _ARGUMENT_KEYS = ("command", "file_path", "target_file", "pattern", "skill", "description")
@@ -56,10 +54,7 @@ def normalize_transcript(transcript_path, log_path=None):
     """`transcript_path` is `updates.jsonl`. `agent_message_chunk` events are already complete
     per-turn text, so `last_text` needs no token reassembly (KTD4) -- that reassembly is tail's
     job, on a different file (the raw stdout stream), not this one."""
-    try:
-        raw_lines, malformed = _read_jsonl(transcript_path)
-    except (OSError, TypeError):
-        raw_lines, malformed = [], 0
+    raw_lines, malformed, opened = _read_jsonl(transcript_path)
 
     lines = []
     tool_calls = {}
@@ -108,28 +103,15 @@ def normalize_transcript(transcript_path, log_path=None):
             }))
 
     return _Evidence(lines=lines, malformed_lines=malformed, decoded_events=len(raw_lines),
-                      undetectable=_UNDETECTABLE)
+                      undetectable=_UNDETECTABLE, opened=opened)
 
 
 def readable(transcript_path, evidence):
     """Readable when the file opened at all, matching Claude's own test: `updates.jsonl` is
     written incrementally by the CLI, not named by the Runner, so there is no separate
-    decoded-event floor the way Codex's stdout log needs one (KTD4 governs Codex only)."""
-    try:
-        with open(transcript_path, encoding="utf-8"):
-            return True
-    except (OSError, TypeError):
-        return False
-
-
-def _stream_argument_of(tool_input):
-    if not isinstance(tool_input, dict):
-        return ""
-    for key in _ARGUMENT_KEYS:
-        value = tool_input.get(key)
-        if value:
-            return str(value)
-    return ""
+    decoded-event floor the way Codex's stdout log needs one (KTD4 governs Codex only).
+    `evidence.opened` is the answer `normalize_transcript`'s own read already found."""
+    return evidence.opened
 
 
 def normalize_stream(raw, state=None):
@@ -138,16 +120,8 @@ def normalize_stream(raw, state=None):
     per token, so a printed message is the last contiguous run of `text` events, assembled here
     across calls (R9, KTD6) rather than in module state, which a concurrent second reader of the
     same backend would corrupt."""
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8", errors="replace")
-    raw = (raw or "").strip()
-    if not raw:
-        return [], state
-    try:
-        obj = json.loads(raw)
-    except ValueError:
-        return [], state
-    if not isinstance(obj, dict):
+    obj = _decode_stream_line(raw)
+    if obj is None:
         return [], state
 
     kind = obj.get("type")
@@ -166,8 +140,8 @@ def normalize_stream(raw, state=None):
             events.append(body[:_TEXT_CHARS])
     if kind == "tool_call":
         name = str(obj.get("toolName") or obj.get("title") or "tool")
-        argument = _stream_argument_of(obj.get("rawInput"))
-        events.append("  > %-10s %s" % (name, argument[:_ARGUMENT_CHARS]))
+        argument = _argument_of(obj.get("rawInput"), _ARGUMENT_KEYS)
+        events.append(_tool_call_event(name, argument))
     return events, None
 
 

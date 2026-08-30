@@ -28,6 +28,12 @@ from .. import contracts
 # name token and apply it to the rest. launch.cli_version calls parse_version per backend.
 _VERSION_TOKEN_RE = re.compile(r"^(\d[\w.\-]*)")
 
+# Bounds on one printed stream event (Backends U6). A task process writes messages far longer
+# than a terminal line, and a Follower that reflows them is unreadable next to the tool calls
+# between them. Shared so every backend's `normalize_stream` truncates the same way.
+TEXT_CHARS = 600
+ARGUMENT_CHARS = 110
+
 INTERFACE = (
     "build_args",
     "parse_version",
@@ -58,30 +64,71 @@ class Evidence:
     malformed_lines: int
     decoded_events: int
     undetectable: frozenset
+    # Whether the primary evidence file (`transcript_path`) opened at all. Set once, by
+    # whichever read `normalize_transcript` already performs, so `readable()` never re-touches
+    # the filesystem to ask a question the parse already answered.
+    opened: bool = True
 
 
 def _read_jsonl(path):
     """One JSON object per line, tolerating malformed lines. Shared by any normalizer whose
     native evidence is itself JSON-lines (Claude, Grok); Codex's stdout log also qualifies.
-    Returns `(lines, malformed_count)`, `lines` a list of `(line_number, dict)` pairs. A line
-    that fails to parse, or parses to something other than a dict, is counted and skipped."""
+    Returns `(lines, malformed_count, opened)`, `lines` a list of `(line_number, dict)` pairs. A
+    line that fails to parse, or parses to something other than a dict, is counted and skipped.
+    A file that will not open at all degrades to `([], 0, False)` rather than raising."""
     lines = []
     malformed = 0
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        for number, raw in enumerate(handle, start=1):
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                obj = json.loads(raw)
-            except ValueError:
-                malformed += 1
-                continue
-            if isinstance(obj, dict):
-                lines.append((number, obj))
-            else:
-                malformed += 1
-    return lines, malformed
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for number, raw in enumerate(handle, start=1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except ValueError:
+                    malformed += 1
+                    continue
+                if isinstance(obj, dict):
+                    lines.append((number, obj))
+                else:
+                    malformed += 1
+    except (OSError, TypeError):
+        return [], 0, False
+    return lines, malformed, True
+
+
+def _argument_of(tool_input, keys):
+    """The first present argument value among `keys`, in order. Shared by every backend's
+    `normalize_stream`, parameterized by that backend's own argument-key tuple."""
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in keys:
+        value = tool_input.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _tool_call_event(name, argument):
+    """One printed tool-call line, in the shape every backend's `normalize_stream` renders."""
+    return "  > %-10s %s" % (name, argument[:ARGUMENT_CHARS])
+
+
+def _decode_stream_line(raw):
+    """One raw stdout line (bytes or str) to a parsed JSON object, or `None` when the line is
+    blank, not JSON, or not an object. Shared by every backend's `normalize_stream`, which each
+    map that object's own event shape from here."""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 @dataclass(frozen=True)

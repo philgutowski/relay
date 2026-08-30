@@ -223,6 +223,13 @@ class ClaudeEvidence(unittest.TestCase):
         self.assertEqual(evidence.malformed_lines, 0)
         self.assertEqual(evidence.decoded_events, 0)
         self.assertEqual(evidence.undetectable, frozenset())
+        self.assertFalse(evidence.opened)
+
+    def test_a_real_transcript_sets_opened_true(self):
+        module = backends.build("claude")
+        real = os.path.join(_paths.FIXTURES_DIR, "transcripts", "success.jsonl")
+        evidence = module.normalize_transcript(real)
+        self.assertTrue(evidence.opened)
 
 
 if __name__ == "__main__":
