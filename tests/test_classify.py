@@ -44,6 +44,7 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(r["findings"], [])
         self.assertEqual(r["malformed_lines"], 0)
         self.assertEqual(r["tool_calls"], 2)
+        self.assertEqual(r["undetectable"], [], "Backends U6: Claude's evidence has no blind spot")
 
     def test_quoted_status_done_does_not_beat_the_fenced_envelope(self):
         """The mid-run text quotes `status: Done` from a card; the final fenced block wins."""

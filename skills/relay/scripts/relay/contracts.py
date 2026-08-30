@@ -398,6 +398,9 @@ DIGEST_KEYS = frozenset((
     "last_message_tail",
     "halt_class",
     "routable",
+    # Backends U6, R5: halt-class constants this backend's evidence cannot show, so a reader can
+    # tell "not checked" from "checked, none found" per finding class.
+    "undetectable",
 ))
 
 # Terminal record run statuses (R30, U3 step 6).

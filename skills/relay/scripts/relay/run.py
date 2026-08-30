@@ -368,7 +368,7 @@ def _one_task(cfg, task):
         heartbeat=store.heartbeat, on_release=store.release, **cfg.launch_kwargs)
 
     digest = classify.classify(launched.transcript_path, launched,
-                               adapter.write_tool_patterns())
+                               adapter.write_tool_patterns(), backend=task.backend)
     digest["task_id"] = task.id
     classify.write_digest(digest, store.path("digests", task.id + ".json"))
     findings = list(digest.get("findings") or [])

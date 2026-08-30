@@ -9,14 +9,15 @@ heartbeating the lease, merging, pushing, and verifying stay in the shared run l
 
 The interface, with the shapes each callable returns:
 
-    build_args(...)              -> argument list for that backend
-    parse_version(text)          -> version string or None, never raises
-    evidence_sources(...)        -> evidence locator tuple
-    readable(...)                -> readability state, origin U6 fills the body
-    normalize_transcript(...)    -> normalized lines, origin U6 fills the body
-    normalize_stream(...)        -> normalized lines, origin U6 fills the body
-    qualify_skill(name)          -> the skill invocation string for this backend
+    build_args(...)                      -> argument list for that backend
+    parse_version(text)                  -> version string or None, never raises
+    evidence_sources(...)                -> evidence locator tuple
+    readable(transcript_path, evidence)  -> bool (Backends U6)
+    normalize_transcript(path, log_path=None) -> Evidence (Backends U6)
+    normalize_stream(raw_line, state=None)    -> (events, state) (Backends U6)
+    qualify_skill(name)                  -> the skill invocation string for this backend
 """
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -41,6 +42,46 @@ INTERFACE = (
 class ConfigurationError(ValueError):
     """A backend name not in the closed set. Raised by `build()` before any
     process starts."""
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """The written line shape (Backends U6, origin KTD2). `lines` replays Claude's own
+    transcript primitive -- a list of `(line_number, dict)` pairs, each dict shaped like a
+    parsed Claude transcript object: `type` of `assistant` or `user`, `message.content` a list
+    of `text`, `tool_use`, or `tool_result` blocks. A normalizer that cannot observe a given
+    finding class (no per-tool deny signal, no structured skill call) never synthesizes a block
+    for it and instead names the halt-class constant in `undetectable`, so a reader can tell
+    "not checked" from "checked, none found" (R13)."""
+
+    lines: list
+    malformed_lines: int
+    decoded_events: int
+    undetectable: frozenset
+
+
+def _read_jsonl(path):
+    """One JSON object per line, tolerating malformed lines. Shared by any normalizer whose
+    native evidence is itself JSON-lines (Claude, Grok); Codex's stdout log also qualifies.
+    Returns `(lines, malformed_count)`, `lines` a list of `(line_number, dict)` pairs. A line
+    that fails to parse, or parses to something other than a dict, is counted and skipped."""
+    lines = []
+    malformed = 0
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for number, raw in enumerate(handle, start=1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except ValueError:
+                malformed += 1
+                continue
+            if isinstance(obj, dict):
+                lines.append((number, obj))
+            else:
+                malformed += 1
+    return lines, malformed
 
 
 @dataclass(frozen=True)
