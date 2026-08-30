@@ -373,6 +373,46 @@ class FindingLines(unittest.TestCase):
         self.assertIn("?", line)
 
 
+CLAUDE_BACKEND_FIXTURES = os.path.join(BACKEND_FIXTURES, "claude")
+
+
+def run_claude_fixture(name):
+    return classify.classify(os.path.join(CLAUDE_BACKEND_FIXTURES, name),
+                             SimpleNamespace(timed_out=False, exit_code=0, log_path=None))
+
+
+class ClaudeBackendFixtures(unittest.TestCase):
+    """Backends U5: the U1 capture fixtures under tests/fixtures/backends/claude/ were never
+    read through classify() before this unit; the pre-existing Fixtures class above exercises
+    only the older, hand-written tests/fixtures/transcripts/ set."""
+
+    def test_session_transcript_complete_normalizes_to_a_complete_envelope(self):
+        r = run_claude_fixture("session-transcript-complete.jsonl")
+        self.assertEqual(r["envelope"]["status"], "complete")
+        self.assertTrue(r["routable"])
+        self.assertEqual(r["undetectable"], [])
+
+    def test_session_transcript_blocked_normalizes_to_a_blocked_envelope(self):
+        r = run_claude_fixture("session-transcript-blocked.jsonl")
+        self.assertEqual(r["envelope"]["status"], "blocked")
+        self.assertTrue(r["envelope"]["blockers"][0].startswith(
+            "Cannot move/comment the tracker card for T-1"))
+
+    def test_closeout_terminal_line_past_the_200_character_head_is_still_readable(self):
+        r = run_claude_fixture("closeout-stdout.jsonl")
+        self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
+
+    def test_the_real_bash_denial_names_bash_and_the_command(self):
+        """The fixture that found DENIAL_REGEX did not match a real Bash denial at all: the
+        message names the command between the tool and the verdict ("Permission to use Bash
+        with command ... has been denied."), a shape no hand-written fixture exercised."""
+        r = run_claude_fixture("denial-refusal.jsonl")
+        denied = [f for f in r["findings"] if f["class"] == contracts.HALT_DENIED_TOOL]
+        self.assertEqual(len(denied), 1)
+        self.assertEqual(denied[0]["tool"], "Bash")
+        self.assertIn("rm -rf", denied[0]["target"])
+
+
 CODEX_FIXTURES = os.path.join(BACKEND_FIXTURES, "codex")
 
 

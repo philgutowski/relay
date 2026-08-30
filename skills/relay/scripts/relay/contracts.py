@@ -83,7 +83,12 @@ REQUIRED_SKILLS = ("ce-plan", "ce-work", "ce-simplify-code", "ce-code-review", "
 
 # CLI contracts, observed on CLI_VERSION_TESTED and documented nowhere.
 # A denied tool call is a `user` transcript line whose tool_result content begins with this.
-DENIAL_REGEX = re.compile(r"^Permission to use (\w+) has been denied")
+# Backends U6 found a real Bash denial reads "Permission to use Bash with command <cmd> has
+# been denied.", naming the command between the tool and the verdict; a Jira or other named-tool
+# denial has no such clause. `.*` (not anchored immediately after the tool name) covers both,
+# proven against tests/fixtures/backends/claude/denial-refusal.jsonl, a real capture this
+# anchored-immediately form never matched.
+DENIAL_REGEX = re.compile(r"^Permission to use (\w+)\b.*has been denied")
 # Under dontAsk an Edit or Write on a path under .claude/ is denied regardless of the allowlist.
 CLAUDE_DIR_PATH_REGEX = re.compile(r"(^|/)\.claude/")
 # The pre-flight scan form from the solutions doc: catches the path inside prose, quotes,

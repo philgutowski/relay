@@ -186,8 +186,12 @@ def classify(transcript_path, launch_result, write_tool_patterns=None, backend="
     last_text = None
     for number, obj in lines:
         kind = obj.get("type")
-        message = obj.get("message") or {}
-        content = message.get("content")
+        message = obj.get("message")
+        # A `system` line's own `message` field is sometimes a plain string (its own notice
+        # text, not a role/content envelope), never a `tool_use`/`tool_result` carrier this
+        # loop reads; treat anything that is not a dict as carrying no content, the same as an
+        # absent one, rather than crashing on `.get()`.
+        content = message.get("content") if isinstance(message, dict) else None
         if kind == contracts.TRANSCRIPT_TYPE_ASSISTANT and isinstance(content, list):
             texts = []
             for block in content:

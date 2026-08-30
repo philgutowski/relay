@@ -169,6 +169,17 @@ class RealStream(unittest.TestCase):
 BACKEND_FIXTURES = os.path.join(_paths.FIXTURES_DIR, "backends")
 
 
+class ClaudeBackendStdout(unittest.TestCase):
+    """Backends U5: `tests/fixtures/backends/claude/stdout-complete.jsonl`, the same U1 capture
+    Codex's and Grok's stream normalizers are proven against, decodes through the unchanged
+    Claude path too."""
+
+    def test_stdout_complete_decodes_without_crashing_and_renders_tool_calls(self):
+        with open(os.path.join(BACKEND_FIXTURES, "claude", "stdout-complete.jsonl"), "rb") as handle:
+            events = [event for raw in handle for event in tail.decode(raw)]
+        self.assertTrue(any("Bash" in event or "Edit" in event for event in events))
+
+
 class CodexStreamNormalizer(unittest.TestCase):
     """Backends U6, U4: against the real captured stdout, not a stub."""
 
