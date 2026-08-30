@@ -184,6 +184,25 @@ After a repair, confirm before resuming:
 python3 <runner> verify <manifest> <task-id>
 ```
 
+## Backend readiness
+
+A backend readiness failure surfaces before any of this: `validate` and `run` exit 1 with the
+manifest's environment unready, before any Task launches. It is not a halt class, since the runner
+never started.
+
+| Error text | What it means | What the operator does |
+|---|---|---|
+| `backend <name> binary <binary> is missing from PATH` | that backend's CLI is not installed, or not on `PATH` | install the backend's CLI and put it on `PATH` |
+| `backend <name> plugin probe failed: <exc>` | the backend's plugin-list subcommand could not run at all | run it by hand and fix why it errors or hangs: `claude plugin list`, `codex plugin list`, or `grok plugin list --json` |
+| `backend <name> has no readable compound-engineering plugin at or above <version>` | `compound-engineering` is missing, disabled, or unreadable for that backend | install it: `codex plugin add compound-engineering@compound-engineering-plugin`, `grok plugin install EveryInc/compound-engineering-plugin`, or for `claude` add it from its own marketplace and enable it |
+| `backend <name> has compound-engineering plugin <version>, below required <version>` | the installed plugin is older than the pinned floor | upgrade it through that backend's own plugin update command to at least the pinned floor |
+
+After fixing the environment, confirm before resuming:
+
+```bash
+python3 <runner> validate <manifest>
+```
+
 ## Resume
 
 Run the same command again. The runner re-verifies every halted record first and promotes any
