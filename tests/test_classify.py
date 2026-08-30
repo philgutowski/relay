@@ -8,6 +8,7 @@ from relay import classify, contracts, summary
 from test_summary import FINDING_ROWS
 
 FIXTURES = os.path.join(_paths.FIXTURES_DIR, "transcripts")
+BACKEND_FIXTURES = os.path.join(_paths.FIXTURES_DIR, "backends")
 # The shape the Jira adapter's write_tool_patterns() returns in U4 (KTD16).
 JIRA_PATTERNS = {"tools": ["mcp__atlassian__"], "bash": [], "paths": []}
 MARKDOWN_PATTERNS = {"tools": [], "bash": [], "paths": ["tracker.md"]}
@@ -44,6 +45,7 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(r["findings"], [])
         self.assertEqual(r["malformed_lines"], 0)
         self.assertEqual(r["tool_calls"], 2)
+        self.assertEqual(r["undetectable"], [], "Backends U6: Claude's evidence has no blind spot")
 
     def test_quoted_status_done_does_not_beat_the_fenced_envelope(self):
         """The mid-run text quotes `status: Done` from a card; the final fenced block wins."""
@@ -369,6 +371,197 @@ class FindingLines(unittest.TestCase):
         line = classify.finding_line({"class": contracts.HALT_DENIED_TOOL})
         self.assertNotIn("{", line)
         self.assertIn("?", line)
+
+
+CLAUDE_BACKEND_FIXTURES = os.path.join(BACKEND_FIXTURES, "claude")
+
+
+def run_claude_fixture(name):
+    return classify.classify(os.path.join(CLAUDE_BACKEND_FIXTURES, name),
+                             SimpleNamespace(timed_out=False, exit_code=0, log_path=None))
+
+
+class ClaudeBackendFixtures(unittest.TestCase):
+    """Backends U5: the U1 capture fixtures under tests/fixtures/backends/claude/ were never
+    read through classify() before this unit; the pre-existing Fixtures class above exercises
+    only the older, hand-written tests/fixtures/transcripts/ set."""
+
+    def test_session_transcript_complete_normalizes_to_a_complete_envelope(self):
+        r = run_claude_fixture("session-transcript-complete.jsonl")
+        self.assertEqual(r["envelope"]["status"], "complete")
+        self.assertTrue(r["routable"])
+        self.assertEqual(r["undetectable"], [])
+
+    def test_session_transcript_blocked_normalizes_to_a_blocked_envelope(self):
+        r = run_claude_fixture("session-transcript-blocked.jsonl")
+        self.assertEqual(r["envelope"]["status"], "blocked")
+        self.assertTrue(r["envelope"]["blockers"][0].startswith(
+            "Cannot move/comment the tracker card for T-1"))
+
+    def test_closeout_terminal_line_past_the_200_character_head_is_still_readable(self):
+        r = run_claude_fixture("closeout-stdout.jsonl")
+        self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
+
+    def test_the_real_bash_denial_names_bash_and_the_command(self):
+        """The fixture that found DENIAL_REGEX did not match a real Bash denial at all: the
+        message names the command between the tool and the verdict ("Permission to use Bash
+        with command ... has been denied."), a shape no hand-written fixture exercised."""
+        r = run_claude_fixture("denial-refusal.jsonl")
+        denied = [f for f in r["findings"] if f["class"] == contracts.HALT_DENIED_TOOL]
+        self.assertEqual(len(denied), 1)
+        self.assertEqual(denied[0]["tool"], "Bash")
+        self.assertIn("rm -rf", denied[0]["target"])
+
+
+CODEX_FIXTURES = os.path.join(BACKEND_FIXTURES, "codex")
+
+
+def run_codex(last_message_name, stdout_name=None, launch=None):
+    log_path = os.path.join(CODEX_FIXTURES, stdout_name) if stdout_name else None
+    launch = launch or SimpleNamespace(timed_out=False, exit_code=0, log_path=log_path)
+    return classify.classify(os.path.join(CODEX_FIXTURES, last_message_name), launch,
+                             backend="codex")
+
+
+class CodexEvidence(unittest.TestCase):
+    """Backends U6, U2: the last-message file is the final text; the stdout log is tool calls
+    and the decoded-event count only."""
+
+    def test_last_message_complete_plus_stdout_normalizes_to_a_complete_envelope(self):
+        r = run_codex("last-message-complete.txt", "stdout-complete.jsonl")
+        self.assertEqual(r["envelope"]["status"], "complete")
+        self.assertTrue(r["routable"])
+        self.assertGreater(r["tool_calls"], 0)
+
+    def test_last_message_blocked_plus_stdout_normalizes_to_a_blocked_envelope(self):
+        r = run_codex("last-message-blocked.txt", "stdout-blocked.jsonl")
+        self.assertEqual(r["envelope"]["status"], "blocked")
+        self.assertTrue(r["envelope"]["blockers"][0].startswith(
+            "The project’s Slack webhook"))
+
+    def test_closeout_terminal_line_past_the_200_character_head_is_still_readable(self):
+        r = run_codex("closeout-last-message-skipped-long.txt", "closeout-stdout.jsonl")
+        self.assertTrue(r["transcript_present"])
+        self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
+
+    def test_the_stray_non_json_line_is_skipped_without_losing_the_events_around_it(self):
+        r = run_codex("last-message-complete.txt", "stdout-complete.jsonl")
+        self.assertEqual(r["malformed_lines"], 1, "the launcher's stderr merge line")
+        self.assertGreater(r["tool_calls"], 0)
+
+    def test_a_multi_path_file_change_synthesizes_one_edit_block_per_path(self):
+        """No captured fixture exercises a multi-path file_change; this pins the plan's own
+        stated design (one block per entry in item['changes']) against a hand-built event."""
+        import json
+        import tempfile
+        module = classify.backends.build("codex")
+        event = {"type": "item.completed", "item": {"id": "item_1", "type": "file_change",
+                 "changes": [{"path": "a.py", "kind": "add"}, {"path": "b.py", "kind": "add"}]}}
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+            handle.write(json.dumps(event) + "\n")
+        evidence = module.normalize_transcript(
+            os.path.join(CODEX_FIXTURES, "last-message-complete.txt"), log_path=handle.name)
+        os.unlink(handle.name)
+        edit_paths = [block["input"]["file_path"] for _number, line in evidence.lines
+                     for block in line["message"]["content"] if block.get("name") == "Edit"]
+        self.assertEqual(edit_paths, ["a.py", "b.py"])
+
+    def test_a_timed_out_run_with_no_last_message_file_stays_the_timeout_class(self):
+        r = run_codex("does-not-exist.txt", launch=SimpleNamespace(
+            timed_out=True, exit_code=-15, log_path=None))
+        self.assertEqual(r["halt_class"], contracts.HALT_TIMEOUT)
+
+    def test_a_stdout_log_that_decodes_zero_events_is_not_readable(self):
+        empty_log = os.path.join(_paths.FIXTURES_DIR, "does-not-exist.jsonl")
+        module = classify.backends.build("codex")
+        last_message = os.path.join(CODEX_FIXTURES, "last-message-complete.txt")
+        evidence = module.normalize_transcript(last_message, log_path=empty_log)
+        self.assertEqual(evidence.decoded_events, 0)
+        self.assertFalse(module.readable(last_message, evidence))
+
+    def test_denied_path_gate_and_tracker_write_and_skill_substitution_are_all_unavailable(self):
+        r = run_codex("last-message-complete.txt", "stdout-complete.jsonl")
+        self.assertEqual(r["undetectable"], sorted([
+            contracts.HALT_DENIED_TOOL, contracts.HALT_PATH_GATE,
+            contracts.HALT_SKILL_SUBSTITUTION, contracts.HALT_TRACKER_WRITE_DENIED,
+        ]))
+        self.assertEqual(classes(r), [])
+
+
+GROK_FIXTURES = os.path.join(BACKEND_FIXTURES, "grok")
+
+
+def run_grok(name):
+    return classify.classify(os.path.join(GROK_FIXTURES, name),
+                             SimpleNamespace(timed_out=False, exit_code=0, log_path=None),
+                             backend="grok")
+
+
+class GrokEvidence(unittest.TestCase):
+    """Backends U6, U3: `updates.jsonl`'s `agent_message_chunk` events are already complete
+    per-turn text, and its embedded `tool_call_update` denial is a real, detectable finding."""
+
+    def test_a_null_x_ai_tool_meta_does_not_crash_the_tool_name_lookup(self):
+        """Adversarial review: `dict.get(key, default)` only supplies `default` when `key` is
+        absent, so `_meta: {"x.ai/tool": null}` (the key present, the value not a dict) must not
+        reach a bare `.get("name")` on `None`. Falls back to `title` instead of raising."""
+        module = classify.backends.build("grok")
+        update = {"toolCallId": "call-1", "title": "read_file", "_meta": {"x.ai/tool": None}}
+        name = module._tool_name_of(update)
+        self.assertEqual(name, "read_file")
+
+    def test_session_transcript_complete_normalizes_to_a_complete_envelope(self):
+        r = run_grok("session-transcript-complete.jsonl")
+        self.assertEqual(r["envelope"]["status"], "complete")
+        self.assertTrue(r["routable"])
+
+    def test_session_transcript_complete_also_carries_an_embedded_denial(self):
+        """The same run's own tool_call_update, not the stdout-shaped denial-refusal.jsonl
+        fixture, which is tail's evidence, not classify's (KTD4)."""
+        r = run_grok("session-transcript-complete.jsonl")
+        denied = [f for f in r["findings"] if f["class"] == contracts.HALT_DENIED_TOOL]
+        self.assertEqual(len(denied), 1)
+        self.assertEqual(denied[0]["tool"], "Bash", "run_terminal_command maps to Bash")
+        self.assertIn("rm -rf", denied[0]["target"])
+
+    def test_session_transcript_blocked_normalizes_to_a_blocked_envelope(self):
+        r = run_grok("session-transcript-blocked.jsonl")
+        self.assertEqual(r["envelope"]["status"], "blocked")
+        self.assertTrue(r["envelope"]["blockers"][0].startswith(
+            "The project's ops-kept Slack webhook URL"))
+
+    def test_auto_mode_blocked_this_action_is_not_a_denial(self):
+        """session-transcript-blocked.jsonl also carries a tool_call_update failed for Grok's
+        own auto-mode judgment, phrased differently from a --deny rule denial; it must not be
+        read as one."""
+        r = run_grok("session-transcript-blocked.jsonl")
+        denied = [f for f in r["findings"] if f["class"] == contracts.HALT_DENIED_TOOL]
+        self.assertEqual(denied, [])
+
+    def test_skill_substitution_is_unavailable_but_denial_still_reports_normally(self):
+        r = run_grok("session-transcript-complete.jsonl")
+        self.assertEqual(r["undetectable"], [contracts.HALT_SKILL_SUBSTITUTION])
+        self.assertTrue(any(f["class"] == contracts.HALT_DENIED_TOOL for f in r["findings"]))
+
+    def test_closeout_terminal_line_past_the_200_character_head_is_still_readable(self):
+        """closeout-last-message-skipped-long.txt is real captured prose with no session-file
+        companion; wrapped as one agent_message_chunk line, it proves the 200-character head/tail
+        split through this normalizer without inventing new content."""
+        import json
+        import tempfile
+        with open(os.path.join(GROK_FIXTURES, "closeout-last-message-skipped-long.txt"),
+                  encoding="utf-8") as handle:
+            text = handle.read()
+        line = {"timestamp": 0, "method": "session/update", "params": {"sessionId": "s",
+                "update": {"sessionUpdate": "agent_message_chunk",
+                           "content": {"type": "text", "text": text}}}}
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+            handle.write(json.dumps(line) + "\n")
+        r = classify.classify(handle.name,
+                              SimpleNamespace(timed_out=False, exit_code=0, log_path=None),
+                              backend="grok")
+        os.unlink(handle.name)
+        self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
 
 
 if __name__ == "__main__":

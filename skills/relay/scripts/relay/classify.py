@@ -19,7 +19,7 @@ git or tracker evidence and are assigned by verify (U8); the findings here attac
 import json
 import re
 
-from . import contracts, summary
+from . import backends, contracts, summary
 
 LAST_MESSAGE_CHARS = 200
 ARGUMENT_CHARS = 120
@@ -149,30 +149,11 @@ def parse_envelope(text):
     }
 
 
-def read_transcript(path):
-    """Parse the file line by line. Malformed lines are counted and skipped, never fatal."""
-    lines = []
-    malformed = 0
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        for number, raw in enumerate(handle, start=1):
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                obj = json.loads(raw)
-            except ValueError:
-                malformed += 1
-                continue
-            if isinstance(obj, dict):
-                lines.append((number, obj))
-            else:
-                malformed += 1
-    return lines, malformed
-
-
-def classify(transcript_path, launch_result, write_tool_patterns=None):
-    """Signature from plan U7. `launch_result` needs `timed_out` and `exit_code` attributes.
-    Returns a plain dict the run loop writes to the record and to digests/<id>.json."""
+def classify(transcript_path, launch_result, write_tool_patterns=None, backend="claude"):
+    """Signature from plan U7, extended by Backends U6 with `backend`. `launch_result` needs
+    `timed_out` and `exit_code` attributes; U6 also reads its `log_path` when present, since a
+    backend's evidence can span more than one file (Codex's last-message file plus its stdout
+    log). Returns a plain dict the run loop writes to the record and to digests/<id>.json."""
     timed_out = bool(getattr(launch_result, "timed_out", False))
     exit_code = getattr(launch_result, "exit_code", None)
     result = {
@@ -185,25 +166,32 @@ def classify(transcript_path, launch_result, write_tool_patterns=None):
         "tool_calls": 0,
         "findings": [],
         "findings_unavailable": False,
+        "undetectable": [],
         "envelope": None,
         "last_message": None,
         "halt_class": None,
         "routable": False,
     }
-    try:
-        lines, malformed = read_transcript(transcript_path)
+    module = backends.build(backend)
+    log_path = getattr(launch_result, "log_path", None)
+    evidence = module.normalize_transcript(transcript_path, log_path=log_path)
+    result["line_count"] = len(evidence.lines)
+    result["malformed_lines"] = evidence.malformed_lines
+    result["undetectable"] = sorted(evidence.undetectable)
+    if module.readable(transcript_path, evidence):
         result["transcript_present"] = True
-    except (OSError, TypeError):
-        lines, malformed = [], 0
-    result["line_count"] = len(lines)
-    result["malformed_lines"] = malformed
+    lines = evidence.lines
 
     tool_uses = {}
     last_text = None
     for number, obj in lines:
         kind = obj.get("type")
-        message = obj.get("message") or {}
-        content = message.get("content")
+        message = obj.get("message")
+        # A `system` line's own `message` field is sometimes a plain string (its own notice
+        # text, not a role/content envelope), never a `tool_use`/`tool_result` carrier this
+        # loop reads; treat anything that is not a dict as carrying no content, the same as an
+        # absent one, rather than crashing on `.get()`.
+        content = message.get("content") if isinstance(message, dict) else None
         if kind == contracts.TRANSCRIPT_TYPE_ASSISTANT and isinstance(content, list):
             texts = []
             for block in content:

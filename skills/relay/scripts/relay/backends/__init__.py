@@ -9,14 +9,15 @@ heartbeating the lease, merging, pushing, and verifying stay in the shared run l
 
 The interface, with the shapes each callable returns:
 
-    build_args(...)              -> argument list for that backend
-    parse_version(text)          -> version string or None, never raises
-    evidence_sources(...)        -> evidence locator tuple
-    readable(...)                -> readability state, origin U6 fills the body
-    normalize_transcript(...)    -> normalized lines, origin U6 fills the body
-    normalize_stream(...)        -> normalized lines, origin U6 fills the body
-    qualify_skill(name)          -> the skill invocation string for this backend
+    build_args(...)                      -> argument list for that backend
+    parse_version(text)                  -> version string or None, never raises
+    evidence_sources(...)                -> evidence locator tuple
+    readable(transcript_path, evidence)  -> bool (Backends U6)
+    normalize_transcript(path, log_path=None) -> Evidence (Backends U6)
+    normalize_stream(raw_line, state=None)    -> (events, state) (Backends U6)
+    qualify_skill(name)                  -> the skill invocation string for this backend
 """
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -26,6 +27,12 @@ from .. import contracts
 # Same leading digit token Claude's parse_version uses. Codex and Grok skip the first
 # name token and apply it to the rest. launch.cli_version calls parse_version per backend.
 _VERSION_TOKEN_RE = re.compile(r"^(\d[\w.\-]*)")
+
+# Bounds on one printed stream event (Backends U6). A task process writes messages far longer
+# than a terminal line, and a Follower that reflows them is unreadable next to the tool calls
+# between them. Shared so every backend's `normalize_stream` truncates the same way.
+TEXT_CHARS = 600
+ARGUMENT_CHARS = 110
 
 INTERFACE = (
     "build_args",
@@ -41,6 +48,87 @@ INTERFACE = (
 class ConfigurationError(ValueError):
     """A backend name not in the closed set. Raised by `build()` before any
     process starts."""
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """The written line shape (Backends U6, origin KTD2). `lines` replays Claude's own
+    transcript primitive, a list of `(line_number, dict)` pairs, each dict shaped like a
+    parsed Claude transcript object: `type` of `assistant` or `user`, `message.content` a list
+    of `text`, `tool_use`, or `tool_result` blocks. A normalizer that cannot observe a given
+    finding class (no per-tool deny signal, no structured skill call) never synthesizes a block
+    for it and instead names the halt-class constant in `undetectable`, so a reader can tell
+    "not checked" from "checked, none found" (R13)."""
+
+    lines: list
+    malformed_lines: int
+    decoded_events: int
+    undetectable: frozenset
+    # Whether the primary evidence file (`transcript_path`) opened at all. Set once, by
+    # whichever read `normalize_transcript` already performs, so `readable()` never re-touches
+    # the filesystem to ask a question the parse already answered.
+    opened: bool = True
+
+
+def _read_jsonl(path):
+    """One JSON object per line, tolerating malformed lines. Shared by any normalizer whose
+    native evidence is itself JSON-lines (Claude, Grok); Codex's stdout log also qualifies.
+    Returns `(lines, malformed_count, opened)`, `lines` a list of `(line_number, dict)` pairs. A
+    line that fails to parse, or parses to something other than a dict, is counted and skipped.
+    A file that will not open at all degrades to `([], 0, False)` rather than raising."""
+    lines = []
+    malformed = 0
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for number, raw in enumerate(handle, start=1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except ValueError:
+                    malformed += 1
+                    continue
+                if isinstance(obj, dict):
+                    lines.append((number, obj))
+                else:
+                    malformed += 1
+    except (OSError, TypeError):
+        return [], 0, False
+    return lines, malformed, True
+
+
+def _argument_of(tool_input, keys):
+    """The first present argument value among `keys`, in order. Shared by every backend's
+    `normalize_stream`, parameterized by that backend's own argument-key tuple."""
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in keys:
+        value = tool_input.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _tool_call_event(name, argument):
+    """One printed tool-call line, in the shape every backend's `normalize_stream` renders."""
+    return "  > %-10s %s" % (name, argument[:ARGUMENT_CHARS])
+
+
+def _decode_stream_line(raw):
+    """One raw stdout line (bytes or str) to a parsed JSON object, or `None` when the line is
+    blank, not JSON, or not an object. Shared by every backend's `normalize_stream`, which each
+    map that object's own event shape from here."""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 @dataclass(frozen=True)
@@ -101,10 +189,6 @@ def _parse_after_name_token(text):
     if len(parts) < 2:
         return None
     return _parse_leading_digit(parts[1])
-
-
-def _none(*_args, **_kwargs):
-    return None
 
 
 def _last_message_path(log_path, session_id):

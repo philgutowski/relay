@@ -1,14 +1,119 @@
 """Codex backend. Capability record from origin U1 pins."""
 import os
 
-from . import (_last_message_path, _none, _parse_after_name_token, _record)
+from .. import contracts
+from . import (Evidence as _Evidence, TEXT_CHARS as _TEXT_CHARS, _decode_stream_line,
+               _last_message_path, _parse_after_name_token, _read_jsonl, _record,
+               _tool_call_event)
 
 CAPABILITY = _record("codex")
 
-readable = _none
-normalize_transcript = _none
-normalize_stream = _none
 parse_version = _parse_after_name_token
+
+# Codex has no per-tool deny flag (no `enforces_at_launch`) and no structured skill-invocation
+# call, so none of these four classes can be observed from its evidence (Backends U6, R3, R4).
+# The first three depend on a denial existing at all; the fourth is a separate capability.
+_UNDETECTABLE = frozenset((
+    contracts.HALT_DENIED_TOOL,
+    contracts.HALT_PATH_GATE,
+    contracts.HALT_TRACKER_WRITE_DENIED,
+    contracts.HALT_SKILL_SUBSTITUTION,
+))
+
+
+def normalize_transcript(transcript_path, log_path=None):
+    """`transcript_path` is the `--output-last-message` file: prose, not JSON, read directly as
+    the final message (KTD5). `log_path` is the stdout log, parsed for tool-use synthesis and
+    for the decoded-event count `readable()` needs (KTD4); Codex never demonstrates a denial, so
+    no `tool_result` block is ever synthesized. `decoded_events` counts the log's own valid JSON
+    lines, not the last-message file: a log that opened but decoded nothing is not readable even
+    when the last-message file is present, per KTD4."""
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as handle:
+            last_text = handle.read()
+        opened = True
+    except (OSError, TypeError):
+        last_text = None
+        opened = False
+
+    lines = []
+    malformed = 0
+    decoded_events = 0
+    if log_path:
+        raw_lines, malformed, _log_opened = _read_jsonl(log_path)
+        decoded_events = len(raw_lines)
+        for number, obj in raw_lines:
+            for block in _tool_uses_of(obj):
+                lines.append((number, {
+                    "type": contracts.TRANSCRIPT_TYPE_ASSISTANT,
+                    "message": {"content": [block]},
+                }))
+    elif last_text is not None:
+        # No stdout log given (a direct unit-test call, or a Task with no log yet). The final
+        # message alone still counts as one decoded event.
+        decoded_events = 1
+
+    if last_text is not None:
+        # Appended last, at a line number past every log line, so the classifier's "last
+        # assistant text block" scan picks this up as `last_text` regardless of how many
+        # tool-use lines the log contributed.
+        final_line = (lines[-1][0] + 1) if lines else 1
+        lines.append((final_line, {
+            "type": contracts.TRANSCRIPT_TYPE_ASSISTANT,
+            "message": {"content": [{"type": "text", "text": last_text}]},
+        }))
+    return _Evidence(lines=lines, malformed_lines=malformed, decoded_events=decoded_events,
+                      undetectable=_UNDETECTABLE, opened=opened)
+
+
+def _tool_uses_of(obj):
+    """One decoded stdout event to its synthesized `tool_use` blocks: zero when the event kind
+    carries no tool call, one per changed path for a `file_change` that touches more than one
+    file. `item.completed` is used, not `item.started`, so a command still running when the log
+    ends is not double counted or counted as a completed call."""
+    if obj.get("type") != "item.completed":
+        return []
+    item = obj.get("item") or {}
+    kind = item.get("type")
+    if kind == "command_execution":
+        return [{"type": "tool_use", "id": item.get("id"), "name": "Bash",
+                 "input": {"command": item.get("command", "")}}]
+    if kind == "file_change":
+        return [{"type": "tool_use", "id": item.get("id"), "name": "Edit",
+                 "input": {"file_path": change.get("path", "")}}
+                for change in (item.get("changes") or [])]
+    return []
+
+
+def readable(transcript_path, evidence):
+    """KTD4: readable only when the last-message file opened and the normalizer decoded at
+    least one event from the stdout log. The log always opens once the launcher creates it, so
+    a file-open test alone cannot tell a genuine run from an empty one. `evidence.opened` is the
+    answer `normalize_transcript`'s own read of `transcript_path` already found."""
+    return evidence.opened and evidence.decoded_events >= 1
+
+
+def normalize_stream(raw, state=None):
+    """One raw stdout line in, zero or more printable events out. `state` is unused: Codex's
+    stream needs no cross-call buffering. Tolerates the one non-JSON line the launcher's stderr
+    merge produces (R8) by yielding nothing for it, the same as any other undecodable line."""
+    obj = _decode_stream_line(raw)
+    if obj is None:
+        return [], None
+
+    kind = obj.get("type")
+    item = obj.get("item") or {}
+    events = []
+    if kind == "item.completed" and item.get("type") == "agent_message":
+        body = str(item.get("text", "")).strip()
+        if body:
+            events.append(body[:_TEXT_CHARS])
+    elif kind == "item.started" and item.get("type") == "command_execution":
+        events.append(_tool_call_event("Bash", str(item.get("command", ""))))
+    elif kind == "item.started" and item.get("type") == "file_change":
+        for change in (item.get("changes") or []):
+            events.append(_tool_call_event("Edit", str(change.get("path", ""))))
+    return events, None
 
 
 def build_args(manifest, task, brief_text, session_id, allowed=None, disallowed=None,

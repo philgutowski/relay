@@ -204,21 +204,32 @@ class SharedSurface(unittest.TestCase):
         self.assertEqual(backends.build("codex").qualify_skill("ce-plan"), "$ce-plan")
         self.assertEqual(backends.build("grok").qualify_skill("ce-plan"), "/ce-plan")
 
-    def test_deferred_callables_exist_and_do_not_read_fixtures(self):
-        deferred = (
-            "readable",
-            "normalize_transcript",
-            "normalize_stream",
-        )
 
-        def boom(*_args, **_kwargs):
-            raise AssertionError("deferred callables must not read fixtures")
+class ClaudeEvidence(unittest.TestCase):
+    """Backends U6: the claude normalizer is the identity wrap over `_read_jsonl`."""
 
-        with mock.patch("builtins.open", boom):
-            for name in mf.BACKENDS:
-                module = backends.build(name)
-                for method in deferred:
-                    getattr(module, method)()
+    def test_readable_is_false_for_a_missing_transcript_and_true_for_a_real_one(self):
+        module = backends.build("claude")
+        missing = module.normalize_transcript("/no/such/file.jsonl")
+        self.assertFalse(module.readable("/no/such/file.jsonl", missing))
+        real = os.path.join(_paths.FIXTURES_DIR, "transcripts", "success.jsonl")
+        evidence = module.normalize_transcript(real)
+        self.assertTrue(module.readable(real, evidence))
+
+    def test_a_missing_transcript_normalizes_to_empty_rather_than_raising(self):
+        module = backends.build("claude")
+        evidence = module.normalize_transcript("/no/such/file.jsonl")
+        self.assertEqual(evidence.lines, [])
+        self.assertEqual(evidence.malformed_lines, 0)
+        self.assertEqual(evidence.decoded_events, 0)
+        self.assertEqual(evidence.undetectable, frozenset())
+        self.assertFalse(evidence.opened)
+
+    def test_a_real_transcript_sets_opened_true(self):
+        module = backends.build("claude")
+        real = os.path.join(_paths.FIXTURES_DIR, "transcripts", "success.jsonl")
+        evidence = module.normalize_transcript(real)
+        self.assertTrue(evidence.opened)
 
 
 if __name__ == "__main__":
