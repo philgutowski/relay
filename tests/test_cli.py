@@ -8,6 +8,7 @@ import json
 import os
 import re
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import _paths
@@ -92,6 +93,23 @@ class Validate(CliCase):
     def test_an_unknown_verb_exits_config_not_halted(self):
         code, _ = self.call("diagnose", self.manifest_path)
         self.assertEqual(code, cli.EXIT_CONFIG)
+
+    def test_a_missing_backend_binary_exits_config_and_names_the_backend(self):
+        with mock.patch.object(manifest_module.shutil, "which", return_value=None):
+            code, out = self.call("validate", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_CONFIG)
+        self.assertIn("claude", out)
+        self.assertIn("binary", out)
+
+    def test_a_missing_backend_plugin_exits_config_and_names_the_backend(self):
+        plugin_result = SimpleNamespace(returncode=0, stdout="other-plugin 9.0.0", stderr="")
+        with mock.patch.object(manifest_module.shutil, "which", return_value="/test-bin/claude"), \
+                mock.patch.object(manifest_module, "_run_plugin_query", return_value=plugin_result):
+            code, out = self.call("validate", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_CONFIG)
+        self.assertIn("claude", out)
+        self.assertIn("plugin", out)
+        self.assertNotIn("binary", out)
 
 
 class RunVerb(CliCase):
