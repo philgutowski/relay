@@ -2,14 +2,118 @@
 import os
 from urllib.parse import quote as _quote
 
-from . import (_none, _parse_after_name_token, _record)
+from .. import contracts
+from . import (Evidence as _Evidence, _none, _parse_after_name_token, _read_jsonl, _record)
 
 CAPABILITY = _record("grok")
 
-readable = _none
-normalize_transcript = _none
-normalize_stream = _none
 parse_version = _parse_after_name_token
+# U4 fills this body: the stdout stream normalizer for the Follower.
+normalize_stream = _none
+
+# Grok's structured deny mechanism (demonstrated in denial-refusal.jsonl) is detectable; its
+# skill invocation is a plain slash-command string with no distinguishing tool call, so
+# substitution cannot be (Backends U6, R4).
+_UNDETECTABLE = frozenset((contracts.HALT_SKILL_SUBSTITUTION,))
+
+# The marker Grok's own `--deny` rule denial carries. A `tool_call_update` failing for another
+# reason (a missing file, or Grok's own `auto`-mode judgment call, "Auto mode blocked this
+# action ...") is not a denial and is not synthesized.
+_DENIAL_MARKER = "Denied by permission policy"
+
+
+def _update_of(obj):
+    """The `sessionUpdate` payload one `updates.jsonl` line carries, or None for a line this
+    normalizer does not read (`hook_execution`, `plan`, `turn_completed`, ...)."""
+    params = obj.get("params")
+    return (params or {}).get("update") if isinstance(params, dict) else None
+
+
+def _tool_name_of(update):
+    return str((update.get("_meta") or {}).get("x.ai/tool", {}).get("name")
+               or update.get("title") or "")
+
+
+def _update_text(update):
+    """Flatten a `tool_call_update`'s content field: a list of `{"content": {"text": ...}}`
+    wrappers, joined the way Claude's own `_text_of` flattens a `tool_result`."""
+    parts = []
+    for item in update.get("content") or []:
+        if isinstance(item, dict):
+            inner = item.get("content")
+            if isinstance(inner, dict) and inner.get("type") == "text":
+                parts.append(str(inner.get("text", "")))
+    return "\n".join(parts)
+
+
+def normalize_transcript(transcript_path, log_path=None):
+    """`transcript_path` is `updates.jsonl`. `agent_message_chunk` events are already complete
+    per-turn text, so `last_text` needs no token reassembly (KTD4) -- that reassembly is tail's
+    job, on a different file (the raw stdout stream), not this one."""
+    try:
+        raw_lines, malformed = _read_jsonl(transcript_path)
+    except (OSError, TypeError):
+        raw_lines, malformed = [], 0
+
+    lines = []
+    tool_calls = {}
+    for number, obj in raw_lines:
+        update = _update_of(obj)
+        if not isinstance(update, dict):
+            continue
+        kind = update.get("sessionUpdate")
+        if kind == "agent_message_chunk":
+            content = update.get("content") or {}
+            text = str(content.get("text", "")) if isinstance(content, dict) else ""
+            if text:
+                lines.append((number, {
+                    "type": contracts.TRANSCRIPT_TYPE_ASSISTANT,
+                    "message": {"content": [{"type": "text", "text": text}]},
+                }))
+        elif kind == "tool_call":
+            call_id = update.get("toolCallId")
+            name = _tool_name_of(update)
+            raw_input = update.get("rawInput") or {}
+            if name == "run_terminal_command":
+                block = {"type": "tool_use", "id": call_id, "name": "Bash",
+                         "input": {"command": raw_input.get("command", "")}}
+            else:
+                block = {"type": "tool_use", "id": call_id, "name": name, "input": raw_input}
+            tool_calls[call_id] = block
+            lines.append((number, {
+                "type": contracts.TRANSCRIPT_TYPE_ASSISTANT,
+                "message": {"content": [block]},
+            }))
+        elif kind == "tool_call_update":
+            if update.get("status") != "failed":
+                continue
+            body = _update_text(update)
+            if _DENIAL_MARKER not in body:
+                continue
+            call = tool_calls.get(update.get("toolCallId")) or {}
+            tool = call.get("name") or "tool"
+            lines.append((number, {
+                "type": contracts.TRANSCRIPT_TYPE_USER,
+                "message": {"content": [{
+                    "type": "tool_result", "tool_use_id": update.get("toolCallId"),
+                    "is_error": True,
+                    "content": "Permission to use %s has been denied" % tool,
+                }]},
+            }))
+
+    return _Evidence(lines=lines, malformed_lines=malformed, decoded_events=len(raw_lines),
+                      undetectable=_UNDETECTABLE)
+
+
+def readable(transcript_path, evidence):
+    """Readable when the file opened at all, matching Claude's own test: `updates.jsonl` is
+    written incrementally by the CLI, not named by the Runner, so there is no separate
+    decoded-event floor the way Codex's stdout log needs one (KTD4 governs Codex only)."""
+    try:
+        with open(transcript_path, encoding="utf-8"):
+            return True
+    except (OSError, TypeError):
+        return False
 
 
 def build_args(manifest, task, brief_text, session_id, allowed=None, disallowed=None,

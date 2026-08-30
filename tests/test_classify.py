@@ -431,5 +431,72 @@ class CodexEvidence(unittest.TestCase):
         self.assertEqual(classes(r), [])
 
 
+GROK_FIXTURES = os.path.join(BACKEND_FIXTURES, "grok")
+
+
+def run_grok(name):
+    return classify.classify(os.path.join(GROK_FIXTURES, name),
+                             SimpleNamespace(timed_out=False, exit_code=0, log_path=None),
+                             backend="grok")
+
+
+class GrokEvidence(unittest.TestCase):
+    """Backends U6, U3: `updates.jsonl`'s `agent_message_chunk` events are already complete
+    per-turn text, and its embedded `tool_call_update` denial is a real, detectable finding."""
+
+    def test_session_transcript_complete_normalizes_to_a_complete_envelope(self):
+        r = run_grok("session-transcript-complete.jsonl")
+        self.assertEqual(r["envelope"]["status"], "complete")
+        self.assertTrue(r["routable"])
+
+    def test_session_transcript_complete_also_carries_an_embedded_denial(self):
+        """The same run's own tool_call_update, not the stdout-shaped denial-refusal.jsonl
+        fixture, which is tail's evidence, not classify's (KTD4)."""
+        r = run_grok("session-transcript-complete.jsonl")
+        denied = [f for f in r["findings"] if f["class"] == contracts.HALT_DENIED_TOOL]
+        self.assertEqual(len(denied), 1)
+        self.assertEqual(denied[0]["tool"], "Bash", "run_terminal_command maps to Bash")
+        self.assertIn("rm -rf", denied[0]["target"])
+
+    def test_session_transcript_blocked_normalizes_to_a_blocked_envelope(self):
+        r = run_grok("session-transcript-blocked.jsonl")
+        self.assertEqual(r["envelope"]["status"], "blocked")
+        self.assertTrue(r["envelope"]["blockers"][0].startswith(
+            "The project's ops-kept Slack webhook URL"))
+
+    def test_auto_mode_blocked_this_action_is_not_a_denial(self):
+        """session-transcript-blocked.jsonl also carries a tool_call_update failed for Grok's
+        own auto-mode judgment, phrased differently from a --deny rule denial; it must not be
+        read as one."""
+        r = run_grok("session-transcript-blocked.jsonl")
+        denied = [f for f in r["findings"] if f["class"] == contracts.HALT_DENIED_TOOL]
+        self.assertEqual(denied, [])
+
+    def test_skill_substitution_is_unavailable_but_denial_still_reports_normally(self):
+        r = run_grok("session-transcript-complete.jsonl")
+        self.assertEqual(r["undetectable"], [contracts.HALT_SKILL_SUBSTITUTION])
+        self.assertTrue(any(f["class"] == contracts.HALT_DENIED_TOOL for f in r["findings"]))
+
+    def test_closeout_terminal_line_past_the_200_character_head_is_still_readable(self):
+        """closeout-last-message-skipped-long.txt is real captured prose with no session-file
+        companion; wrapped as one agent_message_chunk line, it proves the 200-character head/tail
+        split through this normalizer without inventing new content."""
+        import json
+        import tempfile
+        with open(os.path.join(GROK_FIXTURES, "closeout-last-message-skipped-long.txt"),
+                  encoding="utf-8") as handle:
+            text = handle.read()
+        line = {"timestamp": 0, "method": "session/update", "params": {"sessionId": "s",
+                "update": {"sessionUpdate": "agent_message_chunk",
+                           "content": {"type": "text", "text": text}}}}
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+            handle.write(json.dumps(line) + "\n")
+        r = classify.classify(handle.name,
+                              SimpleNamespace(timed_out=False, exit_code=0, log_path=None),
+                              backend="grok")
+        os.unlink(handle.name)
+        self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
+
+
 if __name__ == "__main__":
     unittest.main()
