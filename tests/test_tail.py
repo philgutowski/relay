@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 import _paths
-from relay import cli, contracts, state, tail
+from relay import backends, cli, contracts, state, tail
 from test_cli import CliCase
 from test_run import CLOSE_SH, TASK_BRANCH_SH
 
@@ -164,6 +164,97 @@ class RealStream(unittest.TestCase):
     def test_the_result_and_heartbeat_lines_contribute_nothing(self):
         self.assertNotIn("total_cost_usd", self.text)
         self.assertNotIn("heartbeat", self.text)
+
+
+BACKEND_FIXTURES = os.path.join(_paths.FIXTURES_DIR, "backends")
+
+
+class CodexStreamNormalizer(unittest.TestCase):
+    """Backends U6, U4: against the real captured stdout, not a stub."""
+
+    def setUp(self):
+        module = backends.build("codex")
+        with open(os.path.join(BACKEND_FIXTURES, "codex", "stdout-complete.jsonl"), "rb") as handle:
+            events = []
+            for raw in handle:
+                decoded, _state = module.normalize_stream(raw)
+                events.extend(decoded)
+        self.events = events
+        self.text = "\n".join(events)
+
+    def test_the_stray_non_json_line_yields_nothing_rather_than_raising(self):
+        module = backends.build("codex")
+        events, state = module.normalize_stream(b"Reading additional input from stdin...\n")
+        self.assertEqual(events, [])
+        self.assertIsNone(state)
+
+    def test_a_bash_tool_call_renders_with_its_command(self):
+        hits = [event for event in self.events if "Bash" in event]
+        self.assertTrue(hits)
+
+    def test_an_edit_tool_call_renders_with_its_path(self):
+        hits = [event for event in self.events if "Edit" in event]
+        self.assertTrue(hits)
+
+    def test_the_agent_message_text_renders(self):
+        self.assertIn("follow the required planning", self.text)
+
+
+class GrokStreamNormalizer(unittest.TestCase):
+    """Backends U6, U4: token-by-token reassembly against the real captured stdout."""
+
+    def setUp(self):
+        module = backends.build("grok")
+        state = None
+        events = []
+        with open(os.path.join(BACKEND_FIXTURES, "grok", "stdout-complete.jsonl"), "rb") as handle:
+            for raw in handle:
+                decoded, state = module.normalize_stream(raw, state)
+                events.extend(decoded)
+        self.events = events
+        self.text = "\n".join(events)
+
+    def test_a_contiguous_run_of_text_tokens_assembles_into_one_line(self):
+        self.assertIn("start by reading", self.text)
+
+    def test_a_tool_call_renders_with_its_argument(self):
+        hits = [event for event in self.events if "read_file" in event]
+        self.assertTrue(hits)
+
+    def test_no_thought_text_reaches_the_output(self):
+        module = backends.build("grok")
+        events, state = module.normalize_stream(
+            json.dumps({"type": "thought", "data": "weighing it up"}))
+        self.assertEqual(events, [])
+
+    def test_two_readers_interleaved_do_not_mix_their_buffers(self):
+        """KTD6: `state` is threaded per reader, so driving two independent buffers with
+        interleaved calls must never let one reader's tokens leak into the other's line."""
+        module = backends.build("grok")
+        state_a, state_b = None, None
+        for token in ("one", "two", "three"):
+            _events, state_a = module.normalize_stream(
+                json.dumps({"type": "text", "data": token}), state_a)
+        for token in ("uno", "dos"):
+            _events, state_b = module.normalize_stream(
+                json.dumps({"type": "text", "data": token}), state_b)
+        events_a, _ = module.normalize_stream(json.dumps({"type": "end"}), state_a)
+        events_b, _ = module.normalize_stream(json.dumps({"type": "end"}), state_b)
+        self.assertEqual(events_a, ["onetwothree"])
+        self.assertEqual(events_b, ["unodos"])
+
+    def test_the_stdout_shaped_denial_fixture_renders_a_tool_call_and_a_text_line(self):
+        """`denial-refusal.jsonl` is stdout-shaped, tail's evidence, not classify's (KTD4).
+        Deciding it was a denial is classify's job; the Follower just shows the attempt."""
+        module = backends.build("grok")
+        state = None
+        events = []
+        with open(os.path.join(BACKEND_FIXTURES, "grok", "denial-refusal.jsonl"), "rb") as handle:
+            for raw in handle:
+                decoded, state = module.normalize_stream(raw, state)
+                events.extend(decoded)
+        self.assertTrue(any("run_terminal_command" in event for event in events))
+        self.assertTrue(any("did not run" in event for event in events))
 
 
 class FollowCase(unittest.TestCase):
@@ -346,11 +437,17 @@ class FollowAcrossBoundaries(FollowCase):
 
     def test_the_candidate_list_is_two_logs_per_task_in_manifest_order(self):
         entries = tail.candidates(self.manifest, self.store)
-        self.assertEqual([(task_id, phase) for task_id, phase, _ in entries], [
+        self.assertEqual([(task_id, phase) for task_id, phase, _, _ in entries], [
             ("T-1", tail.PHASE_TASK), ("T-1", tail.PHASE_CLOSEOUT),
             ("T-2", tail.PHASE_TASK), ("T-2", tail.PHASE_CLOSEOUT),
             ("T-3", tail.PHASE_TASK), ("T-3", tail.PHASE_CLOSEOUT),
         ])
+
+    def test_the_candidate_list_defaults_a_backendless_task_to_claude(self):
+        """A minimal test double or a manifest predating Backends U2 still resolves a real
+        normalizer (KTD1's identity wrap), not a crash on a missing attribute."""
+        entries = tail.candidates(self.manifest, self.store)
+        self.assertTrue(all(backend == "claude" for *_, backend in entries))
 
 
 class FollowOnAManifestValidateWouldReject(FollowCase):
@@ -619,6 +716,40 @@ class Notifications(FollowCase):
         fired, notifier = self.sent()
         self.assertEqual(run_once(notifier), quiet)
         self.assertTrue(fired)
+
+
+class FollowerGuard(FollowCase):
+    """Backends U6, R10: a log that grows past `SILENT_LOG_BYTES` with zero decoded events
+    warns once, naming the Task and its backend, never once per poll."""
+
+    def test_a_silently_growing_log_warns_exactly_once(self):
+        one_line = line({"type": "system", "uuid": "x"}) + "\n"
+        garbage = one_line * ((tail.SILENT_LOG_BYTES // len(one_line)) + 100)
+        self.assertGreater(len(garbage), tail.SILENT_LOG_BYTES)
+        self.append("T-1", garbage)
+        self.go(script=[
+            lambda: None,
+            lambda: None,
+            lambda: self.terminal(),
+        ])
+        warnings = [row for row in self.lines if "no decoded events" in row]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("T-1", warnings[0])
+        self.assertIn("claude", warnings[0])
+
+    def test_a_log_under_the_threshold_never_warns(self):
+        self.append("T-1", line({"type": "system", "uuid": "x"}) + "\n")
+        self.terminal()
+        self.go()
+        self.assertFalse([row for row in self.lines if "no decoded events" in row])
+
+    def test_a_log_with_real_events_never_warns_however_large(self):
+        one_line = say("plenty of real text here")
+        count = (tail.SILENT_LOG_BYTES // len(one_line)) + 100
+        self.append("T-1", one_line * count)
+        self.terminal()
+        self.go()
+        self.assertFalse([row for row in self.lines if "no decoded events" in row])
 
 
 class FollowTakesNoLease(FollowCase):

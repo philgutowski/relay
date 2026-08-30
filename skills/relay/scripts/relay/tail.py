@@ -33,24 +33,22 @@ before the runner is launched, which is what makes "only what this launch produc
 
 Nothing here takes the Lease. `tail` is a reader, the same rule `status` follows.
 """
-import json
 import os
 import time
 
-from . import contracts
+from . import backends
 
 # Bounds on one printed event. A task process writes messages far longer than a terminal line,
 # and a follower that reflows them is unreadable next to the tool calls between them.
 TEXT_CHARS = 600
 ARGUMENT_CHARS = 110
 
-# The argument keys, in the order the first present one wins. Copied from the operator's own
-# prototype: these are what a reader wants to see for the tools a task actually calls. A tool
-# whose input carries none of them renders as a bare name, which is correct for TaskOutput and
-# ToolSearch and is why the list is not extended to cover them.
-ARGUMENT_KEYS = ("command", "file_path", "pattern", "skill", "description")
-
 POLL_SECONDS = 1.0
+
+# Backends U6, R10: bytes a log may drain with zero decoded events before the Follower warns
+# that its normalizer may not understand this backend's output. Sized like the other constants
+# above; no live run has needed a specific value tuned against it.
+SILENT_LOG_BYTES = 200_000
 
 # Phase names for the two logs a Task can produce, in the order the runner writes them.
 PHASE_TASK = "task"
@@ -69,73 +67,35 @@ class _Gone:
 GONE = _Gone()
 
 
-def _argument_of(tool_input):
-    if not isinstance(tool_input, dict):
-        return ""
-    for key in ARGUMENT_KEYS:
-        value = tool_input.get(key)
-        if value:
-            return str(value)
-    return ""
-
-
 def decode(raw):
-    """One raw stdout line in, zero or more printable events out.
+    """One raw stdout line in, zero or more printable events out, for Claude specifically.
 
-    Accepts bytes or str, because the follower reads bytes and the tests read either. A line that
-    is not JSON, is not an object, or carries no content blocks yields nothing rather than
-    raising: a follower that dies on one malformed line is worse than one that skips it, and the
-    stream carries several line types (`system`, `tool_progress`, `rate_limit_event`, `result`)
-    that hold no message at all.
+    Backends U6 moved the real body to `backends.claude.normalize_stream`, which every backend's
+    dispatch in `follow()` now goes through instead of this free function. Kept as a thin
+    call-through because existing tests name `tail.decode` directly with its original
+    single-return-list shape; a new caller should go through `backends.build(name)` instead.
     """
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8", errors="replace")
-    raw = (raw or "").strip()
-    if not raw:
-        return []
-    try:
-        payload = json.loads(raw)
-    except ValueError:
-        return []
-    if not isinstance(payload, dict):
-        return []
-    message = payload.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, list):
-        return []
-
-    is_assistant = payload.get("type") == contracts.TRANSCRIPT_TYPE_ASSISTANT
-    events = []
-    for block in content:
-        if not isinstance(block, dict):
-            continue
-        kind = block.get("type")
-        if kind == "text" and is_assistant:
-            # `thinking` blocks are deliberately not rendered. They outnumbered text blocks two
-            # to one in the log this was built against and would bury everything else.
-            body = str(block.get("text", "")).strip()
-            if body:
-                events.append(body[:TEXT_CHARS])
-        elif kind == "tool_use":
-            argument = _argument_of(block.get("input"))
-            name = str(block.get("name") or "tool")
-            events.append("  > %-10s %s" % (name, argument[:ARGUMENT_CHARS]))
+    events, _state = backends.build("claude").normalize_stream(raw)
     return events
 
 
 def candidates(manifest, store):
     """Every log the run can produce, in the order the runner writes them: one Task log and one
-    Closeout log per Task, in Manifest order. Returns (task id, phase, path) triples.
+    Closeout log per Task, in Manifest order. Returns (task id, phase, path, backend) tuples.
 
     Derived from the Manifest rather than from `state.json`'s cursor, because the cursor names
     only where the run is now. This list also names where it has been and where it is going, so a
     `tail` started at any point in the run has the same map.
+
+    `backend` defaults to `"claude"` when a Task carries none, so a minimal test double or a
+    manifest predating Backends U2 still resolves a real normalizer (KTD1's identity wrap).
     """
     entries = []
     for task in manifest.tasks:
-        entries.append((task.id, PHASE_TASK, store.path("logs", task.id + ".stdout.log")))
+        backend = getattr(task, "backend", None) or "claude"
+        entries.append((task.id, PHASE_TASK, store.path("logs", task.id + ".stdout.log"), backend))
         entries.append((task.id, PHASE_CLOSEOUT,
-                        store.path("logs", task.id + ".closeout.stdout.log")))
+                        store.path("logs", task.id + ".closeout.stdout.log"), backend))
     return entries
 
 
@@ -156,7 +116,8 @@ def read_floor(manifest, store):
     follower's first read from having that first transition swallowed as history.
     """
     state = store.read() or {}
-    return {"offsets": {path: _size(path) for _id, _phase, path in candidates(manifest, store)},
+    return {"offsets": {path: _size(path)
+                        for _id, _phase, path, _backend in candidates(manifest, store)},
             "terminal": state.get("terminal"),
             "statuses": {task_id: record.get("status")
                          for task_id, record in (state.get("tasks") or {}).items()}}
@@ -170,13 +131,23 @@ class _Reader:
     appending and a read lands mid line routinely. The fragment is completed by the next read.
     """
 
-    def __init__(self, task_id, phase, path, start_offset=0):
+    def __init__(self, task_id, phase, path, backend="claude", start_offset=0):
         self.task_id = task_id
         self.phase = phase
         self.path = path
+        self.backend = backend
+        # Threaded into every `normalize_stream` call for this reader and nowhere else (KTD6),
+        # so Grok's in-progress token buffer never crosses between two readers of the same
+        # backend, or between one Task's own log and its Closeout log.
+        self.stream_state = None
         self.start_offset = start_offset
         self.offset = start_offset
         self.buffer = b""
+        # The Follower guard's own counters (R10): events decoded since this reader started
+        # (bytes drained is `self.offset - self.start_offset`, already tracked above), and
+        # whether it has already printed its one silent-log warning.
+        self.decoded_events = 0
+        self.warned = False
 
     def active(self):
         """True once this file carries bytes past where this follower started.
@@ -231,10 +202,11 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
     # replay it once each, and an empty Task list leaves nothing to index.
     readers = []
     seen = set()
-    for task_id, phase_name, path in candidates(manifest, store):
+    for task_id, phase_name, path, backend in candidates(manifest, store):
         if path not in seen:
             seen.add(path)
-            readers.append(_Reader(task_id, phase_name, path, start_offset=offsets.get(path, 0)))
+            readers.append(_Reader(task_id, phase_name, path, backend=backend,
+                                   start_offset=offsets.get(path, 0)))
     announced = set()
     cursor = 0
     waiting_said = False
@@ -268,9 +240,20 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
             announce("== %s %s ==" % (reader.task_id, reader.phase))
         if phases_only:
             return
+        module = backends.build(reader.backend)
         for raw in reader.drain():
-            for event in decode(raw):
+            events, reader.stream_state = module.normalize_stream(raw, reader.stream_state)
+            reader.decoded_events += len(events)
+            for event in events:
                 stream(event)
+        # The reader's own offset, not a sum of split line lengths, so the stripped `\n`
+        # separators are not silently undercounted against the threshold.
+        drained = reader.offset - reader.start_offset
+        if (reader.decoded_events == 0 and not reader.warned and drained > SILENT_LOG_BYTES):
+            reader.warned = True
+            announce("%s %s has drained past %d bytes with no decoded events; "
+                      "the %s normalizer may not understand this backend's output"
+                      % (reader.task_id, reader.phase, SILENT_LOG_BYTES, reader.backend))
 
     def poll_state():
         """One read of `state.json` per poll. `store.records()` and `store.terminal()` would load

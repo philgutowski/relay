@@ -1,15 +1,21 @@
 """Grok backend. Capability record from origin U1 pins."""
+import json
 import os
 from urllib.parse import quote as _quote
 
 from .. import contracts
-from . import (Evidence as _Evidence, _none, _parse_after_name_token, _read_jsonl, _record)
+from . import (Evidence as _Evidence, _parse_after_name_token, _read_jsonl, _record)
 
 CAPABILITY = _record("grok")
 
 parse_version = _parse_after_name_token
-# U4 fills this body: the stdout stream normalizer for the Follower.
-normalize_stream = _none
+
+# Bounds on one printed stream event, matching backends.claude's private copies (Backends U6).
+_TEXT_CHARS = 600
+_ARGUMENT_CHARS = 110
+# Grok's own tool input carries `target_file` where Claude's carries `file_path`; both are
+# listed so the tool-call line names the argument either way.
+_ARGUMENT_KEYS = ("command", "file_path", "target_file", "pattern", "skill", "description")
 
 # Grok's structured deny mechanism (demonstrated in denial-refusal.jsonl) is detectable; its
 # skill invocation is a plain slash-command string with no distinguishing tool call, so
@@ -114,6 +120,55 @@ def readable(transcript_path, evidence):
             return True
     except (OSError, TypeError):
         return False
+
+
+def _stream_argument_of(tool_input):
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in _ARGUMENT_KEYS:
+        value = tool_input.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def normalize_stream(raw, state=None):
+    """One raw stdout line in, zero or more printable events out. `state` is the in-progress
+    text-token buffer: Grok's `--output-format streaming-json` stdout carries one JSON object
+    per token, so a printed message is the last contiguous run of `text` events, assembled here
+    across calls (R9, KTD6) rather than in module state, which a concurrent second reader of the
+    same backend would corrupt."""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    raw = (raw or "").strip()
+    if not raw:
+        return [], state
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return [], state
+    if not isinstance(obj, dict):
+        return [], state
+
+    kind = obj.get("type")
+    if kind == "text":
+        buffer = list(state or ())
+        buffer.append(str(obj.get("data", "")))
+        return [], buffer
+
+    # Any non-`text` event ends the current message, if one was building. `thought` is
+    # suppressed the same way Claude's `thinking` blocks are: it produces no event of its own,
+    # but it still flushes a pending buffer, matching every other non-text event.
+    events = []
+    if state:
+        body = "".join(state).strip()
+        if body:
+            events.append(body[:_TEXT_CHARS])
+    if kind == "tool_call":
+        name = str(obj.get("toolName") or obj.get("title") or "tool")
+        argument = _stream_argument_of(obj.get("rawInput"))
+        events.append("  > %-10s %s" % (name, argument[:_ARGUMENT_CHARS]))
+    return events, None
 
 
 def build_args(manifest, task, brief_text, session_id, allowed=None, disallowed=None,

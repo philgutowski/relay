@@ -144,10 +144,6 @@ def _parse_after_name_token(text):
     return _parse_leading_digit(parts[1])
 
 
-def _none(*_args, **_kwargs):
-    return None
-
-
 def _last_message_path(log_path, session_id):
     """The file Codex writes the final agent message to. Named by the runner
     before launch (origin KTD4), next to the stdout log when one exists."""

@@ -1,15 +1,18 @@
 """Codex backend. Capability record from origin U1 pins."""
+import json
 import os
 
 from .. import contracts
-from . import (Evidence as _Evidence, _last_message_path, _none, _parse_after_name_token,
+from . import (Evidence as _Evidence, _last_message_path, _parse_after_name_token,
                _read_jsonl, _record)
 
 CAPABILITY = _record("codex")
 
 parse_version = _parse_after_name_token
-# U4 fills this body: the stdout stream normalizer for the Follower.
-normalize_stream = _none
+
+# Bounds on one printed stream event, matching backends.claude's private copies (Backends U6).
+_TEXT_CHARS = 600
+_ARGUMENT_CHARS = 110
 
 # Codex has no per-tool deny flag (no `enforces_at_launch`) and no structured skill-invocation
 # call, so none of these four classes can be observed from its evidence (Backends U6, R3, R4).
@@ -93,6 +96,39 @@ def readable(transcript_path, evidence):
     least one event. The stdout log always opens once the launcher creates it, so a file-open
     test alone cannot tell a genuine run from an empty one."""
     return os.path.exists(transcript_path) and evidence.decoded_events >= 1
+
+
+def normalize_stream(raw, state=None):
+    """One raw stdout line in, zero or more printable events out. `state` is unused: Codex's
+    stream needs no cross-call buffering. Tolerates the one non-JSON line the launcher's stderr
+    merge produces (R8) by yielding nothing for it, the same as any other undecodable line."""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    raw = (raw or "").strip()
+    if not raw:
+        return [], None
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return [], None
+    if not isinstance(obj, dict):
+        return [], None
+
+    kind = obj.get("type")
+    item = obj.get("item") or {}
+    events = []
+    if kind == "item.completed" and item.get("type") == "agent_message":
+        body = str(item.get("text", "")).strip()
+        if body:
+            events.append(body[:_TEXT_CHARS])
+    elif kind == "item.started" and item.get("type") == "command_execution":
+        argument = str(item.get("command", ""))
+        events.append("  > %-10s %s" % ("Bash", argument[:_ARGUMENT_CHARS]))
+    elif kind == "item.started" and item.get("type") == "file_change":
+        changes = item.get("changes") or []
+        argument = str(changes[0].get("path", "")) if changes else ""
+        events.append("  > %-10s %s" % ("Edit", argument[:_ARGUMENT_CHARS]))
+    return events, None
 
 
 def build_args(manifest, task, brief_text, session_id, allowed=None, disallowed=None,
