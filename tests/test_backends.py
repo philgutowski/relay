@@ -144,6 +144,13 @@ class SharedSurface(unittest.TestCase):
             self.assertIsNone(module.parse_version(""))
             self.assertIsNone(module.parse_version("update available"))
 
+    def test_parse_version_rejects_a_dotless_digit_in_an_update_banner(self):
+        # A banner ahead of the real version line must not be mistaken for one just
+        # because it starts with a digit after the name token is skipped.
+        self.assertIsNone(backends.build("grok").parse_version("grok 3 updates available"))
+        self.assertIsNone(backends.build("codex").parse_version("codex-cli 5 new updates"))
+        self.assertIsNone(backends.build("claude").parse_version("3 updates available"))
+
     def test_qualify_skill_interpolates_the_pin_form(self):
         self.assertEqual(backends.build("claude").qualify_skill("ce-plan"), "compound-engineering:ce-plan")
         self.assertEqual(backends.build("codex").qualify_skill("ce-plan"), "$ce-plan")

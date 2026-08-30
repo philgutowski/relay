@@ -75,14 +75,19 @@ def _record(name):
 
 
 def _parse_leading_digit(text):
-    """A version only when stripped stdout leads with a digit. Never raises."""
+    """A version only when stripped stdout leads with a digit and the matched token
+    contains a dot, so a bare update-banner digit (e.g. "3 updates available") is not
+    mistaken for a version. Never raises."""
     if text is None:
         return None
     stripped = str(text).strip()
     if not stripped:
         return None
     match = _VERSION_TOKEN_RE.match(stripped)
-    return match.group(1) if match else None
+    if not match:
+        return None
+    token = match.group(1)
+    return token if "." in token else None
 
 
 def _parse_after_name_token(text):

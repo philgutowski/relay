@@ -364,6 +364,14 @@ class CliVersion(unittest.TestCase):
             "grok 1.0.5 (5115b46bc909) [stable]\n", 0)
         self.assertEqual(launch.cli_version({}, run=fake, backend="grok"), "1.0.5")
 
+    def test_a_grok_update_banner_ahead_of_the_version_line_returns_none(self):
+        # Multiline analogue of test_a_leading_non_version_token_returns_none_rather_than_the_wrong_word,
+        # for a name-prefixed backend: the banner's bare digit must not be mistaken for the
+        # real, dotted version line that follows it.
+        fake = lambda *a, **k: _FakeCompletedProcess(
+            "grok 3 updates available\n1.0.5 (5115b46bc909) [stable]\n", 0)
+        self.assertIsNone(launch.cli_version({}, run=fake, backend="grok"))
+
     def test_a_missing_binary_on_an_alternate_backend_returns_none(self):
         def fake(*a, **k):
             raise FileNotFoundError("no such file: grok")
