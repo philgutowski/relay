@@ -285,6 +285,13 @@ class GitHub(AdapterCase):
         self.assertIn("--owner", run.calls[0])
         self.assertIn("philgutowski", run.calls[0])
 
+    def test_the_item_list_asks_for_more_than_the_thirty_gh_returns_by_default(self):
+        run = self.run_for()
+        self.github(run).candidates()
+        call = run.calls[0]
+        self.assertIn("--limit", call, "gh project item-list returns only 30 items unless told otherwise")
+        self.assertGreater(int(call[call.index("--limit") + 1]), 30)
+
     def test_an_open_issue_whose_project_status_matches_the_manifest_field_is_terminal(self):
         run = self.run_for()
         adapter = gh_adapter.GitHubAdapter(self.github_manifest(status_field="Done"), run=run)
