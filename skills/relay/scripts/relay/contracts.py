@@ -189,8 +189,8 @@ BACKEND_PINS = {
         "version_output_sample": "grok 1.0.5 (5115b46bc909) [stable]",
         "plugin_version": "3.23.4",
         "plugin_query": ("grok", "plugin", "list", "--json"),
-        "plugin_version_pattern": (r'(?s)"name"\s*:\s*"compound-engineering".*?'
-                                   r'"version"\s*:\s*"(?P<version>\d+(?:\.\d+)+)"'),
+        "plugin_version_pattern": (r'(?s)\{(?=[^{}]*"name"\s*:\s*"compound-engineering")'
+                                   r'(?=[^{}]*"version"\s*:\s*"(?P<version>\d+(?:\.\d+)+)")[^{}]*\}'),
         "headless_flag": "-p",
         "session_id_choosable": True,
         # U1 finding, and a correction to the plan's Assumptions and KTD6. Grok accepts

@@ -111,6 +111,11 @@ class CapabilityRecord(unittest.TestCase):
         for name, output in samples.items():
             self.assertEqual(mf._plugin_version(backends.build(name).CAPABILITY, output), "3.23.4", name)
 
+    def test_grok_pattern_does_not_borrow_another_plugins_version(self):
+        output = ('[{"name":"compound-engineering", "version":"3.0.0"}, '
+                  '{"name":"other-plugin", "version":"9.0.0"}]')
+        self.assertEqual(mf._plugin_version(backends.build("grok").CAPABILITY, output), "3.0.0")
+
 
 class SharedSurface(unittest.TestCase):
     def test_every_backend_implements_exactly_the_interface(self):
