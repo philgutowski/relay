@@ -101,7 +101,9 @@ def required_skill_for(skill_name, backend="claude"):
         return None
     module = backends.build(backend)
     prefix, _, suffix = module.CAPABILITY.skill_form.partition("%s")
-    if prefix and skill_name.startswith(prefix) and skill_name.endswith(suffix):
+    # `prefix or suffix`, not `prefix` alone: a form with only a suffix would otherwise skip the
+    # test entirely and report every correctly qualified call as a substitution requiring itself.
+    if (prefix or suffix) and skill_name.startswith(prefix) and skill_name.endswith(suffix):
         stripped = skill_name[len(prefix):]
         if suffix:
             stripped = stripped[:-len(suffix)]

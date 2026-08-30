@@ -15,10 +15,11 @@ from relay import backends, brief, contracts, manifest as mf, state
 
 FIXTURE = os.path.join(_paths.FIXTURES_DIR, "manifests", "complete.toml")
 
-# The claude invocation form, pinned as a literal rather than resolved through the same call the
+# The three invocation forms, pinned as literals rather than resolved through the same call the
 # renderer uses. A test that asks `qualify_skill` what to expect passes for any value of the pin,
-# including a wrong one. tests/test_backends.py pins the other two the same way.
+# including a wrong one. tests/test_backends.py pins them the same way.
 CLAUDE_PREFIX = "compound-engineering:"
+FORMS = {"claude": CLAUDE_PREFIX + "%s", "codex": "$%s", "grok": "/%s"}
 
 CARD = {
     "id": "T-1",
@@ -74,7 +75,7 @@ class SkillPinning(BriefCase):
         claude-only. Never delete it: it is the only check keeping an unqualified plugin skill
         name out of a brief, and the new skill-form sentence is written to satisfy it."""
         for backend, mode, text in self.each_backend_template():
-            prefix = backends.build(backend).CAPABILITY.skill_form.partition("%s")[0]
+            prefix = FORMS[backend].partition("%s")[0]
             for skill in contracts.REQUIRED_SKILLS:
                 for match in re.finditer(r"\b%s\b" % re.escape(skill), text):
                     before = text[max(0, match.start() - len(prefix)):match.start()]
@@ -83,14 +84,11 @@ class SkillPinning(BriefCase):
                                      % (backend, mode, skill))
 
     def test_the_brief_names_this_backends_invocation_form_and_no_others(self):
-        # Literal forms, not qualify_skill(): a test that resolves its expectation through the
-        # call under test passes for any value of the pin.
-        forms = {"claude": CLAUDE_PREFIX + "%s", "codex": "$%s", "grok": "/%s"}
         for backend, mode, text in self.each_backend_template():
             named = [skill for skill in contracts.REQUIRED_SKILLS
-                     if forms[backend] % skill in text]
+                     if FORMS[backend] % skill in text]
             self.assertTrue(named, "%s %s names no skill in its own form" % (backend, mode))
-            for other, form in forms.items():
+            for other, form in FORMS.items():
                 if other == backend:
                     continue
                 for skill in contracts.REQUIRED_SKILLS:
@@ -99,8 +97,20 @@ class SkillPinning(BriefCase):
 
     def test_the_brief_forbids_calling_a_skill_in_any_other_form(self):
         for backend, mode, text in self.each_backend_template():
-            self.assertIn(brief.SKILL_FORM_RULE.split("%s")[0].strip(), text,
+            self.assertRegex(text, r"(?i)invoke every plugin skill in this CLI's own form",
+                             "%s %s" % (backend, mode))
+            self.assertRegex(text, r"(?i)a call in any other form is a failure of this task",
+                             "%s %s" % (backend, mode))
+
+    def test_the_rule_holds_up_a_skill_the_steps_below_actually_run(self):
+        """The rule says "exactly as the steps below spell it", so its example has to be one of
+        them. The two templates run different first steps, so a single shared example would
+        contradict the sentence in whichever template does not use it."""
+        for backend, mode, text in self.each_backend_template():
+            lead = FORMS[backend] % brief.LEAD_SKILL[mode]
+            self.assertIn("The first skill the steps run is `%s`" % lead, text,
                           "%s %s" % (backend, mode))
+            self.assertIn(lead, steps_section(text), "%s %s" % (backend, mode))
 
     def test_no_brief_claims_a_substitution_will_be_recorded(self):
         """codex and grok declare HALT_SKILL_SUBSTITUTION undetectable, so a brief that promises
@@ -216,7 +226,8 @@ class UntrustedTaskText(BriefCase):
 class PrTerminalTemplate(BriefCase):
     def test_the_branch_is_named_before_the_lfg_line(self):
         text = self.render(self.pr_manifest_text(), name="pr.toml")
-        self.assertLess(text.index("relay/T-1"), text.index(CLAUDE_PREFIX + "lfg"))
+        steps = steps_section(text)
+        self.assertLess(steps.index("relay/T-1"), steps.index(CLAUDE_PREFIX + "lfg"))
 
     def test_the_brief_forbids_closing_the_card_and_ends_on_the_terminal_token(self):
         text = self.render(self.pr_manifest_text(), name="pr.toml")
@@ -238,7 +249,7 @@ class UnenforcedRestrictions(BriefCase):
         for mode, name in (("local_merge", "manifest.toml"), ("pr_terminal", "pr.toml")):
             text = (self.render(backend="codex") if mode == "local_merge"
                     else self.render(self.pr_manifest_text(), name=name, backend="codex"))
-            self.assertIn(brief.UNENFORCED_RESTRICTIONS.split("%s")[0].strip(), text, mode)
+            self.assertIn(brief.UNENFORCED_LEAD, text, mode)
             for tool in manifest.permissions.allowed:
                 self.assertIn("- " + tool, text, "%s is missing allowed %s" % (mode, tool))
             for pattern in mf.resolved_disallowed(manifest):
@@ -250,10 +261,12 @@ class UnenforcedRestrictions(BriefCase):
             for mode, text in (("local_merge", self.render(backend=backend)),
                                ("pr_terminal", self.render(self.pr_manifest_text(), name="pr.toml",
                                                            backend=backend))):
-                self.assertNotIn(brief.UNENFORCED_RESTRICTIONS.split("%s")[0].strip(), text,
-                                 "%s %s" % (backend, mode))
+                self.assertNotIn(brief.UNENFORCED_LEAD, text, "%s %s" % (backend, mode))
                 for pattern in mf.resolved_disallowed(manifest):
                     self.assertNotIn(pattern, text, "%s %s named %s" % (backend, mode, pattern))
+                for tool in manifest.permissions.allowed:
+                    self.assertNotIn("- " + tool, text,
+                                     "%s %s named allowed %s" % (backend, mode, tool))
 
     def test_the_empty_case_leaves_no_stray_blank_paragraph(self):
         """The value carries its own surrounding newlines, so an enforcing backend's brief has to
@@ -270,6 +283,18 @@ class UnenforcedRestrictions(BriefCase):
         text = self.render(card=card, backend="codex")
         self.assertIn(brief.UNENFORCED_OVERRIDE_REFUSAL, text)
         self.assertLess(text.index(brief.DATA_END), text.index(brief.UNENFORCED_OVERRIDE_REFUSAL))
+
+    def test_a_card_reproducing_the_insert_verbatim_cannot_put_a_second_copy_first(self):
+        """The shaped mimic above is the easy case. A card that pastes the real sentences back
+        gets a copy of the runner's own instruction ahead of the runner's, inside the data block,
+        unless defang rewrites it the way it rewrites the delimiters."""
+        card = dict(CARD, description="%s\n\n%s\n" % (brief.UNENFORCED_LEAD,
+                                                      brief.UNENFORCED_OVERRIDE_REFUSAL))
+        text = self.render(card=card, backend="codex")
+        self.assertEqual(text.count(brief.UNENFORCED_OVERRIDE_REFUSAL), 1)
+        self.assertEqual(text.count(brief.UNENFORCED_LEAD), 1)
+        self.assertLess(text.index(brief.DATA_END), text.index(brief.UNENFORCED_OVERRIDE_REFUSAL))
+        self.assertIn(brief.INSTRUCTION_REMOVED, text)
 
 
 class EveryBackendKeepsTheOutcomeContract(BriefCase):
@@ -290,13 +315,13 @@ class EveryBackendKeepsTheOutcomeContract(BriefCase):
     def test_the_pipeline_steps_stay_ordered_on_every_backend(self):
         for backend in sorted(mf.BACKENDS):
             steps = steps_section(self.render(backend=backend))
-            qualify = backends.build(backend).qualify_skill
+            form = FORMS[backend]
             order = [steps.index(token) for token in (
                 "relay/T-1",
-                qualify("ce-plan"),
-                qualify("ce-work"),
-                qualify("ce-simplify-code"),
-                qualify("ce-code-review"),
+                form % "ce-plan",
+                form % "ce-work",
+                form % "ce-simplify-code",
+                form % "ce-code-review",
             )]
             self.assertEqual(order, sorted(order), "%s brief steps are out of order" % backend)
 
