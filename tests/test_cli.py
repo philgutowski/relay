@@ -111,6 +111,14 @@ class Validate(CliCase):
         self.assertIn("plugin", out)
         self.assertNotIn("binary", out)
 
+    def test_a_probe_exception_exits_config_and_names_the_backend(self):
+        with mock.patch.object(manifest_module.shutil, "which", return_value="/test-bin/claude"), \
+                mock.patch.object(manifest_module, "_run_plugin_query",
+                                  side_effect=OSError("no such file or directory")):
+            code, out = self.call("validate", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_CONFIG)
+        self.assertIn("claude", out)
+
 
 class RunVerb(CliCase):
     def test_a_complete_run_exits_ok_and_prints_the_summary(self):

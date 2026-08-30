@@ -1,6 +1,7 @@
 """U2: the manifest loads into typed values and every validation rule names its field."""
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -343,6 +344,19 @@ class BackendReadiness(ManifestCase):
         with mock.patch.object(mf.shutil, "which", boom), mock.patch.object(mf, "_run_plugin_query", boom):
             result = mf.validate(self.load())
         self.assertTrue(result.ok, result.errors)
+
+    def test_a_probe_exception_is_reported_as_a_validation_error(self):
+        exceptions = (
+            subprocess.TimeoutExpired(cmd=["claude"], timeout=15),
+            OSError("no such file or directory"),
+        )
+        for exc in exceptions:
+            with self.subTest(exc=type(exc).__name__), \
+                    mock.patch.object(mf.shutil, "which", return_value="/test-bin/claude"), \
+                    mock.patch.object(mf, "_run_plugin_query", side_effect=exc):
+                result = mf.validate(self.load(), check_repo=False, check_environment=True, env=self.environment())
+                self.assertFalse(result.ok)
+                self.assertTrue(any("claude" in error and "probe failed" in error for error in result.errors))
 
     def test_jira_codex_pair_is_refused_without_environment_probes(self):
         text = self.base.replace('adapter = "markdown"\nfile = "tracker.md"',
