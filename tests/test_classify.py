@@ -449,6 +449,23 @@ class CodexEvidence(unittest.TestCase):
         self.assertEqual(r["malformed_lines"], 1, "the launcher's stderr merge line")
         self.assertGreater(r["tool_calls"], 0)
 
+    def test_a_multi_path_file_change_synthesizes_one_edit_block_per_path(self):
+        """No captured fixture exercises a multi-path file_change; this pins the plan's own
+        stated design (one block per entry in item['changes']) against a hand-built event."""
+        import json
+        import tempfile
+        module = classify.backends.build("codex")
+        event = {"type": "item.completed", "item": {"id": "item_1", "type": "file_change",
+                 "changes": [{"path": "a.py", "kind": "add"}, {"path": "b.py", "kind": "add"}]}}
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+            handle.write(json.dumps(event) + "\n")
+        evidence = module.normalize_transcript(
+            os.path.join(CODEX_FIXTURES, "last-message-complete.txt"), log_path=handle.name)
+        os.unlink(handle.name)
+        edit_paths = [block["input"]["file_path"] for _number, line in evidence.lines
+                     for block in line["message"]["content"] if block.get("name") == "Edit"]
+        self.assertEqual(edit_paths, ["a.py", "b.py"])
+
     def test_a_timed_out_run_with_no_last_message_file_stays_the_timeout_class(self):
         r = run_codex("does-not-exist.txt", launch=SimpleNamespace(
             timed_out=True, exit_code=-15, log_path=None))
@@ -483,6 +500,15 @@ def run_grok(name):
 class GrokEvidence(unittest.TestCase):
     """Backends U6, U3: `updates.jsonl`'s `agent_message_chunk` events are already complete
     per-turn text, and its embedded `tool_call_update` denial is a real, detectable finding."""
+
+    def test_a_null_x_ai_tool_meta_does_not_crash_the_tool_name_lookup(self):
+        """Adversarial review: `dict.get(key, default)` only supplies `default` when `key` is
+        absent, so `_meta: {"x.ai/tool": null}` (the key present, the value not a dict) must not
+        reach a bare `.get("name")` on `None`. Falls back to `title` instead of raising."""
+        module = classify.backends.build("grok")
+        update = {"toolCallId": "call-1", "title": "read_file", "_meta": {"x.ai/tool": None}}
+        name = module._tool_name_of(update)
+        self.assertEqual(name, "read_file")
 
     def test_session_transcript_complete_normalizes_to_a_complete_envelope(self):
         r = run_grok("session-transcript-complete.jsonl")

@@ -35,16 +35,18 @@ def say(body):
 
 
 class _Task:
-    def __init__(self, task_id):
+    def __init__(self, task_id, backend=None):
         self.id = task_id
+        self.backend = backend
 
 
 class _Manifest:
     """The two fields `tail` reads off a manifest. A real one needs a repo and a tracker; the
     follow loop needs neither, which is itself worth pinning."""
 
-    def __init__(self, ids):
-        self.tasks = [_Task(task_id) for task_id in ids]
+    def __init__(self, ids, backends=None):
+        backends = backends or {}
+        self.tasks = [_Task(task_id, backend=backends.get(task_id)) for task_id in ids]
 
 
 class Decode(unittest.TestCase):
@@ -206,6 +208,15 @@ class CodexStreamNormalizer(unittest.TestCase):
     def test_an_edit_tool_call_renders_with_its_path(self):
         hits = [event for event in self.events if "Edit" in event]
         self.assertTrue(hits)
+
+    def test_a_multi_path_file_change_renders_one_line_per_path(self):
+        module = backends.build("codex")
+        raw = json.dumps({"type": "item.started", "item": {"type": "file_change", "changes": [
+            {"path": "a.py", "kind": "add"}, {"path": "b.py", "kind": "add"}]}})
+        events, _state = module.normalize_stream(raw)
+        self.assertEqual(len(events), 2)
+        self.assertIn("a.py", events[0])
+        self.assertIn("b.py", events[1])
 
     def test_the_agent_message_text_renders(self):
         self.assertIn("follow the required planning", self.text)
@@ -750,6 +761,18 @@ class FollowerGuard(FollowCase):
 
     def test_a_log_under_the_threshold_never_warns(self):
         self.append("T-1", line({"type": "system", "uuid": "x"}) + "\n")
+        self.terminal()
+        self.go()
+        self.assertFalse([row for row in self.lines if "no decoded events" in row])
+
+    def test_a_grok_run_buffering_a_long_response_never_warns(self):
+        """A Grok response is one JSON object per token (R9); a long stretch between flushes
+        advances the token buffer without printing anything. That must read as understood, not
+        silent -- the false positive correctness and adversarial review both found."""
+        self.manifest = _Manifest(["T-1", "T-2", "T-3"], backends={"T-1": "grok"})
+        token_line = json.dumps({"type": "text", "data": "word "})
+        count = (tail.SILENT_LOG_BYTES // (len(token_line) + 1)) + 100
+        self.append("T-1", (token_line + "\n") * count)
         self.terminal()
         self.go()
         self.assertFalse([row for row in self.lines if "no decoded events" in row])

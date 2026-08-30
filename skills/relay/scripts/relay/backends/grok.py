@@ -34,8 +34,12 @@ def _update_of(obj):
 
 
 def _tool_name_of(update):
-    return str((update.get("_meta") or {}).get("x.ai/tool", {}).get("name")
-               or update.get("title") or "")
+    """The tool name a `tool_call` update carries. `dict.get(key, default)` only supplies the
+    default when the key is absent, so a `_meta` that carries `"x.ai/tool": null` (or any
+    non-dict value) must be checked explicitly rather than trusted to fall through."""
+    meta = (update.get("_meta") or {}).get("x.ai/tool")
+    name = meta.get("name") if isinstance(meta, dict) else None
+    return str(name or update.get("title") or "")
 
 
 def _update_text(update):
@@ -52,8 +56,8 @@ def _update_text(update):
 
 def normalize_transcript(transcript_path, log_path=None):
     """`transcript_path` is `updates.jsonl`. `agent_message_chunk` events are already complete
-    per-turn text, so `last_text` needs no token reassembly (KTD4) -- that reassembly is tail's
-    job, on a different file (the raw stdout stream), not this one."""
+    per-turn text, so `last_text` needs no token reassembly (KTD4). That reassembly is tail's
+    job, on a different file, the raw stdout stream, not this one."""
     raw_lines, malformed, opened = _read_jsonl(transcript_path)
 
     lines = []

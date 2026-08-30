@@ -43,8 +43,7 @@ def normalize_transcript(transcript_path, log_path=None):
         raw_lines, malformed, _log_opened = _read_jsonl(log_path)
         decoded_events = len(raw_lines)
         for number, obj in raw_lines:
-            block = _tool_use_of(obj)
-            if block is not None:
+            for block in _tool_uses_of(obj):
                 lines.append((number, {
                     "type": contracts.TRANSCRIPT_TYPE_ASSISTANT,
                     "message": {"content": [block]},
@@ -67,23 +66,23 @@ def normalize_transcript(transcript_path, log_path=None):
                       undetectable=_UNDETECTABLE, opened=opened)
 
 
-def _tool_use_of(obj):
-    """One decoded stdout event to a synthesized `tool_use` block, or None when the event kind
-    carries no tool call. `item.completed` is used, not `item.started`, so a command still
-    running when the log ends is not double counted or counted as a completed call."""
+def _tool_uses_of(obj):
+    """One decoded stdout event to its synthesized `tool_use` blocks: zero when the event kind
+    carries no tool call, one per changed path for a `file_change` that touches more than one
+    file. `item.completed` is used, not `item.started`, so a command still running when the log
+    ends is not double counted or counted as a completed call."""
     if obj.get("type") != "item.completed":
-        return None
+        return []
     item = obj.get("item") or {}
     kind = item.get("type")
     if kind == "command_execution":
-        return {"type": "tool_use", "id": item.get("id"), "name": "Bash",
-                "input": {"command": item.get("command", "")}}
+        return [{"type": "tool_use", "id": item.get("id"), "name": "Bash",
+                 "input": {"command": item.get("command", "")}}]
     if kind == "file_change":
-        changes = item.get("changes") or []
-        path = changes[0].get("path", "") if changes else ""
-        return {"type": "tool_use", "id": item.get("id"), "name": "Edit",
-                "input": {"file_path": path}}
-    return None
+        return [{"type": "tool_use", "id": item.get("id"), "name": "Edit",
+                 "input": {"file_path": change.get("path", "")}}
+                for change in (item.get("changes") or [])]
+    return []
 
 
 def readable(transcript_path, evidence):
@@ -112,9 +111,8 @@ def normalize_stream(raw, state=None):
     elif kind == "item.started" and item.get("type") == "command_execution":
         events.append(_tool_call_event("Bash", str(item.get("command", ""))))
     elif kind == "item.started" and item.get("type") == "file_change":
-        changes = item.get("changes") or []
-        argument = str(changes[0].get("path", "")) if changes else ""
-        events.append(_tool_call_event("Edit", argument))
+        for change in (item.get("changes") or []):
+            events.append(_tool_call_event("Edit", str(change.get("path", ""))))
     return events, None
 
 

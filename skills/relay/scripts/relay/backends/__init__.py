@@ -53,7 +53,7 @@ class ConfigurationError(ValueError):
 @dataclass(frozen=True)
 class Evidence:
     """The written line shape (Backends U6, origin KTD2). `lines` replays Claude's own
-    transcript primitive -- a list of `(line_number, dict)` pairs, each dict shaped like a
+    transcript primitive, a list of `(line_number, dict)` pairs, each dict shaped like a
     parsed Claude transcript object: `type` of `assistant` or `user`, `message.content` a list
     of `text`, `tool_use`, or `tool_result` blocks. A normalizer that cannot observe a given
     finding class (no per-tool deny signal, no structured skill call) never synthesizes a block

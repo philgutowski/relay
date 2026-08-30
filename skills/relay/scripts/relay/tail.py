@@ -38,10 +38,10 @@ import time
 
 from . import backends
 
-# Bounds on one printed event. A task process writes messages far longer than a terminal line,
-# and a follower that reflows them is unreadable next to the tool calls between them.
-TEXT_CHARS = 600
-ARGUMENT_CHARS = 110
+# Re-exported from backends, the single source every normalize_stream truncates against, so
+# this module's own constant cannot drift from what actually bounds a printed event.
+TEXT_CHARS = backends.TEXT_CHARS
+ARGUMENT_CHARS = backends.ARGUMENT_CHARS
 
 POLL_SECONDS = 1.0
 
@@ -146,9 +146,10 @@ class _Reader:
         self.start_offset = start_offset
         self.offset = start_offset
         self.buffer = b""
-        # The Follower guard's own counters (R10): events decoded since this reader started
-        # (bytes drained is `self.offset - self.start_offset`, already tracked above), and
-        # whether it has already printed its one silent-log warning.
+        # The Follower guard's own counters (R10): lines that parsed as JSON since this reader
+        # started, whether or not they produced a printed line (bytes drained is
+        # `self.offset - self.start_offset`, already tracked above), and whether it has already
+        # printed its one silent-log warning.
         self.decoded_events = 0
         self.warned = False
 
@@ -244,8 +245,15 @@ def follow(manifest, store, stream, sleep=time.sleep, poll_seconds=POLL_SECONDS,
         if phases_only:
             return
         for raw in reader.drain():
-            events, reader.stream_state = reader.module.normalize_stream(raw, reader.stream_state)
-            reader.decoded_events += len(events)
+            events, new_state = reader.module.normalize_stream(raw, reader.stream_state)
+            if events or new_state is not None:
+                # A line that produced a printed event, or that advanced a normalizer's
+                # in-progress buffer (Grok's token-by-token reassembly), is understood, not
+                # silent, even on a poll where nothing was printed yet. Counting only printed
+                # events was the bug: a Grok run buffering a long response between flushes read
+                # as a normalizer that had gone silent, when it was working correctly.
+                reader.decoded_events += 1
+            reader.stream_state = new_state
             for event in events:
                 stream(event)
         # The reader's own offset, not a sum of split line lengths, so the stripped `\n`

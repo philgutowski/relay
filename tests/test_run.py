@@ -252,6 +252,22 @@ class EndToEnd(RunCase):
         self.assertTrue(gitread.is_clean(self.repo))
         self.assertEqual(gitread.current_branch(self.repo), "main")
 
+    def test_classify_is_called_with_the_tasks_own_backend(self):
+        """Backends U6: run.py's Task-classification call site is the one place that supplies
+        classify.classify() the backend it dispatches on. A dropped, mistyped, or reordered
+        `backend=` keyword here would fall through to classify's own "claude" default and
+        silently misclassify a non-Claude Task, with no other test able to catch it. (The
+        Closeout's own call site is separate and deliberately omits `backend=` until origin U9;
+        this test only checks the Task call site, not every call recorded during the run.)"""
+        from unittest import mock
+        with mock.patch.object(runner.classify, "classify",
+                               wraps=runner.classify.classify) as spy:
+            self.go()
+        task_calls = [call for call in spy.call_args_list if "backend" in call.kwargs]
+        self.assertTrue(task_calls, "no call passed backend= at all")
+        for call in task_calls:
+            self.assertEqual(call.kwargs["backend"], "claude")
+
     def test_the_terminal_record_reads_completed_and_the_lease_is_released(self):
         self.go()
         store = self.store()
