@@ -119,6 +119,18 @@ class CapabilityRecord(unittest.TestCase):
 
 class SharedSurface(unittest.TestCase):
     def test_every_backend_implements_exactly_the_interface(self):
+        self.assertEqual(
+            backends.INTERFACE,
+            (
+                "build_args",
+                "parse_version",
+                "evidence_sources",
+                "readable",
+                "normalize_transcript",
+                "normalize_stream",
+                "qualify_skill",
+            ),
+        )
         for name in mf.BACKENDS:
             module = backends.build(name)
             for method in backends.INTERFACE:
