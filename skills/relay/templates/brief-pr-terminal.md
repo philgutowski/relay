@@ -21,9 +21,7 @@ in the background and end your turn to wait for it: in this session, ending your
 and everything still running is killed with you. A mutation driver, a test suite, or a build that
 takes twenty minutes is twenty minutes of waiting, not a reason to background it.
 
-Never invoke a Skill whose name lacks the `compound-engineering:` prefix. The harness ships
-skills with similar bare names and they are not substitutes for the plugin's; a bare name is
-recorded against this task as a substitution.
+$skill_form_rule
 
 Work on the branch `$branch` and nothing else. Do not close the tracker card and do not move it
 to a terminal status. The runner launches a separate process for that once it has confirmed the
@@ -32,7 +30,7 @@ pull request and its checks.
 $blocked_partial
 
 $blocked_followup
-
+$unenforced_restrictions
 ## Steps
 
 1. Create `$branch` from `$default_branch` and stay on it for the rest of the session.

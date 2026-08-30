@@ -232,6 +232,37 @@ class WritePatterns(unittest.TestCase):
         self.assertIsNone(classify.required_skill_for("compound-engineering:ce-work"))
         self.assertIsNone(classify.required_skill_for("dj-sync"))
 
+    def test_the_required_skill_is_named_in_the_backends_own_form(self):
+        """Backends KTD15's fourth call site. A finding that names an invocation the task's CLI
+        cannot run tells the operator to fix it with a command that does not exist there."""
+        self.assertEqual(classify.required_skill_for("code-review", backend="codex"),
+                         "$ce-code-review")
+        self.assertEqual(classify.required_skill_for("code-review", backend="grok"),
+                         "/ce-code-review")
+        self.assertIsNone(classify.required_skill_for("$ce-work", backend="codex"))
+        self.assertIsNone(classify.required_skill_for("/ce-work", backend="grok"))
+
+    def test_a_bare_sigil_is_not_proof_of_plugin_ownership(self):
+        """`$` and `/` are how those CLIs invoke every skill, the harness's included, so the
+        prefix alone cannot decide whether a call was already qualified."""
+        self.assertEqual(classify.required_skill_for("$code-review", backend="codex"),
+                         "$ce-code-review")
+        self.assertEqual(classify.required_skill_for("/code-review", backend="grok"),
+                         "/ce-code-review")
+
+    def test_a_prefixed_name_the_plugin_does_not_ship_is_still_a_substitution(self):
+        """The one claude outcome this tightening changes. `compound-engineering:code-review` is
+        not a skill the plugin ships, so accepting it silently was wrong. A real plugin skill
+        outside the pipeline set still returns None, because the bare-name pass finds no match."""
+        self.assertEqual(classify.required_skill_for("compound-engineering:code-review"),
+                         "compound-engineering:ce-code-review")
+        self.assertIsNone(classify.required_skill_for("compound-engineering:ce-debug"))
+
+    def test_a_claude_qualified_call_on_another_backend_is_a_substitution(self):
+        self.assertEqual(classify.required_skill_for("compound-engineering:ce-work",
+                                                     backend="codex"),
+                         "$ce-work")
+
 
 class RealTranscriptSmoke(unittest.TestCase):
     def test_proof_run_transcript_classifies_as_the_plan_predicts(self):

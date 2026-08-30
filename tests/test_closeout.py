@@ -8,11 +8,12 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import _paths
 import _repo
 from _fakes import FakeAdapter
-from relay import classify, closeout, contracts, manifest as mf, state
+from relay import classify, closeout, contracts, launch, manifest as mf, state
 
 FIXTURE = os.path.join(_paths.FIXTURES_DIR, "manifests", "complete.toml")
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
@@ -24,6 +25,15 @@ CARD = {
     "status": "in review",
 }
 MERGE_SHA = "abc1234def5678901234567890123456789012ab"
+
+# Pinned as literals, not resolved through `qualify_skill`: a test that asks the call under test
+# what to expect passes for any value of the pin, including a wrong one.
+CLAUDE_PREFIX = "compound-engineering:"
+COMPOUND_FORMS = {
+    "claude": CLAUDE_PREFIX + "ce-compound",
+    "codex": "$ce-compound",
+    "grok": "/ce-compound",
+}
 
 
 def write_entry(queue, n, fixture, exit_code=0, sleep=0, git_sh=None):
@@ -80,12 +90,13 @@ class CloseoutCase(unittest.TestCase):
     def allowed_paths(self):
         return mf.completed_allowed_paths(self.manifest, "docs")
 
-    def render(self, outcome="landed", digest=None, comments=(), **kwargs):
+    def render(self, outcome="landed", digest=None, comments=(), backend="claude", **kwargs):
         kwargs.setdefault("landing_ref", MERGE_SHA if outcome == "landed" else None)
         kwargs.setdefault("branch", "relay/T-1")
         return closeout.render(self.manifest, CARD, outcome,
                                digest if digest is not None else digest_from("success.jsonl"),
-                               list(comments), self.adapter, self.allowed_paths(), **kwargs)
+                               list(comments), self.adapter, self.allowed_paths(), backend,
+                               **kwargs)
 
 
 class LandedBrief(CloseoutCase):
@@ -96,8 +107,37 @@ class LandedBrief(CloseoutCase):
 
     def test_the_brief_pins_the_qualified_compound_skill_and_its_non_interactive_mode(self):
         text = self.render()
-        self.assertIn(contracts.SKILL_PREFIX + "ce-compound", text)
+        self.assertIn(CLAUDE_PREFIX + "ce-compound", text)
         self.assertIn(contracts.COMPOUND_NON_INTERACTIVE, text)
+
+    def test_the_pinned_compound_invocation_matches_the_cli_that_will_read_the_brief(self):
+        """Backends KTD15. Four sites build a skill invocation and this brief carries two of
+        them, the pinned command and the bare skill name in the sentence under it."""
+        for backend, form in COMPOUND_FORMS.items():
+            text = self.render(backend=backend)
+            self.assertIn(form, text, backend)
+            for other, other_form in COMPOUND_FORMS.items():
+                if other != backend:
+                    self.assertNotIn(other_form, text,
+                                     "%s closeout brief leaked the %s form" % (backend, other))
+
+    def test_the_compound_command_keeps_its_plugin_contract_on_every_backend(self):
+        for backend, form in COMPOUND_FORMS.items():
+            command = closeout.compound_command(contracts.COMPOUND_DEPTH_FULL, "relay task T-1",
+                                                backend)
+            self.assertTrue(command.startswith(form), command)
+            self.assertIn(contracts.COMPOUND_NON_INTERACTIVE, command)
+            self.assertIn(contracts.COMPOUND_DEPTH_FULL, command)
+            self.assertIn("relay task T-1", command)
+
+    def test_every_backends_brief_keeps_the_terminal_lines_and_the_bound(self):
+        for backend in COMPOUND_FORMS:
+            text = self.render(backend=backend)
+            self.assertIn(contracts.COMPOUND_COMPLETE_LINE, text, backend)
+            self.assertIn(contracts.COMPOUND_SKIPPED_LINE, text, backend)
+            self.assertRegex(text, r"(?i)do not push", backend)
+            for path in self.allowed_paths():
+                self.assertIn(path, text, backend)
 
     def test_the_brief_names_both_terminal_lines_and_forbids_a_push(self):
         text = self.render()
@@ -286,6 +326,50 @@ class RunTheProcess(CloseoutCase):
         self.assertEqual(args[args.index("--effort") + 1], self.manifest.closeout.effort)
         allowed = args[args.index("--allowedTools") + 1]
         self.assertIn("Skill", allowed)
+
+
+class OneBackendValueReachesEveryConsumer(CloseoutCase):
+    """Backends KTD2. `run()` is the only defaulting site, and the value it resolves has to reach
+    all three consumers: the rendered brief, the launched CLI, and the normalizer that reads what
+    that CLI wrote. The third is the one that hides, because the digest's key set is identical
+    whether the backend took effect or not, so this asserts on the calls rather than the digest."""
+
+    def go_spied(self, backend=None):
+        seen = {}
+
+        def fake_launch(manifest, task, text, log_path, timeout_seconds, **kwargs):
+            seen["task_backend"] = task.backend
+            seen["brief"] = text
+            return launch.LaunchResult(session_id="s1", exit_code=0,
+                                       transcript_path="/nonexistent.jsonl", log_path=log_path)
+
+        def fake_classify(transcript_path, launch_result, write_tool_patterns=None, backend=None):
+            seen["classify_backend"] = backend
+            return {"findings": [], "last_message_tail": contracts.COMPOUND_SKIPPED_LINE,
+                    "last_message": contracts.COMPOUND_SKIPPED_LINE}
+
+        kwargs = {} if backend is None else {"backend": backend}
+        with mock.patch.object(closeout.launch, "launch", fake_launch), \
+             mock.patch.object(closeout.classify, "classify", fake_classify):
+            closeout.run(self.manifest, CARD, "landed", digest_from("success.jsonl"), [],
+                         self.adapter, self.store(), self.allowed_paths(),
+                         landing_ref=MERGE_SHA, branch="relay/T-1", timeout_seconds=30, **kwargs)
+        return seen
+
+    def store(self):
+        return state.StateStore(self.manifest.path, self.repo, home=self.home)
+
+    def test_the_backend_run_resolves_reaches_the_task_the_brief_and_the_classifier(self):
+        seen = self.go_spied("codex")
+        self.assertEqual(seen["task_backend"], "codex")
+        self.assertEqual(seen["classify_backend"], "codex")
+        self.assertIn(COMPOUND_FORMS["codex"], seen["brief"])
+
+    def test_the_default_is_still_claude_so_the_run_loop_is_unchanged(self):
+        seen = self.go_spied()
+        self.assertEqual(seen["task_backend"], mf.DEFAULT_BACKEND)
+        self.assertEqual(seen["classify_backend"], mf.DEFAULT_BACKEND)
+        self.assertIn(COMPOUND_FORMS["claude"], seen["brief"])
 
 
 class BlockedCommentConfirmation(CloseoutCase):

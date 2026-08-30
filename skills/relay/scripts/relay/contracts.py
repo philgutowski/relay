@@ -75,10 +75,12 @@ CODE_REVIEW_VERDICTS = (CODE_REVIEW_VERDICT_READY, CODE_REVIEW_VERDICT_FIXES, CO
 # with this tag, so a quoted `status:` elsewhere in the final message cannot be mistaken for it.
 ENVELOPE_FENCE_TAG = "relay-envelope"
 
-# Skill names. The brief pins every plugin skill with this prefix, and the classifier flags a
-# Skill call whose name lacks it as a substitution (R43). The 2026-08-25 proof run invoked the harness
-# `code-review` twice when the brief said `/ce-code-review`.
-SKILL_PREFIX = "compound-engineering:"
+# Skill names. The brief pins every plugin skill in its backend's own invocation form, and the
+# classifier flags a Skill call outside that form as a substitution (R43). The 2026-08-25 proof
+# run invoked the harness `code-review` twice when the brief said `/ce-code-review`. The forms
+# themselves live on BACKEND_PINS below as `skill_form`, one per backend, and are read only
+# through `backends.qualify_skill`; there is deliberately no module-level prefix constant here,
+# because a second copy of claude's form is a copy that can drift from the pin.
 REQUIRED_SKILLS = ("ce-plan", "ce-work", "ce-simplify-code", "ce-code-review", "ce-compound", "lfg")
 
 # CLI contracts, observed on CLI_VERSION_TESTED and documented nowhere.

@@ -25,7 +25,7 @@ import os
 import string
 from dataclasses import dataclass, field
 
-from . import brief, classify, contracts, launch, manifest as manifest_module, state
+from . import backends, brief, classify, contracts, launch, manifest as manifest_module, state
 
 OUTCOME_LANDED = "landed"
 OUTCOME_BLOCKED = "blocked"
@@ -137,17 +137,23 @@ def _timing_line(digest, wall_seconds=None, active_seconds=None):
     return "%.0f seconds active, %.0f seconds wall" % (active_seconds or 0, wall_seconds or 0)
 
 
-def compound_command(depth, hint):
-    """The exact invocation the brief pins, so the process cannot drift into interactive mode."""
-    return "%sce-compound %s %s %s" % (contracts.SKILL_PREFIX, contracts.COMPOUND_NON_INTERACTIVE,
-                                       depth, hint)
+def compound_command(depth, hint, backend):
+    """The exact invocation the brief pins, so the process cannot drift into interactive mode.
+
+    `backend` is required, not defaulted (backends KTD2). Only `run()` may default it: a second
+    independent default here is how the brief's invocation and the CLI that reads it drift apart,
+    which is the failure backends KTD15 exists to prevent."""
+    return "%s %s %s %s" % (backends.build(backend).qualify_skill("ce-compound"),
+                            contracts.COMPOUND_NON_INTERACTIVE, depth, hint)
 
 
-def render(manifest, card, outcome, digest, comments, adapter, allowed_paths, landing_ref=None,
-           branch=None, commit_range=None, plan_path=None, gate=None, wall_seconds=None,
-           active_seconds=None):
+def render(manifest, card, outcome, digest, comments, adapter, allowed_paths, backend,
+           landing_ref=None, branch=None, commit_range=None, plan_path=None, gate=None,
+           wall_seconds=None, active_seconds=None):
     """The closeout brief. Deterministic from its inputs, like the task brief, and it never
-    receives the task process transcript (R27), only the digest the runner composed from it."""
+    receives the task process transcript (R27), only the digest the runner composed from it.
+
+    `backend` is required for the same reason `compound_command`'s is."""
     task_id = card.get("id")
     depth = depth_for(digest)
     envelope = (digest or {}).get("envelope") or {}
@@ -181,8 +187,8 @@ def render(manifest, card, outcome, digest, comments, adapter, allowed_paths, la
         "description": brief.defang(str(card.get("description") or "")).strip(),
         "comments": brief.defang(_bullets(_comment_lines(comments))),
         "duty_one": adapter.closeout_instructions(outcome),
-        "compound_command": compound_command(depth, hint),
-        "compound_skill": contracts.SKILL_PREFIX + "ce-compound",
+        "compound_command": compound_command(depth, hint, backend),
+        "compound_skill": backends.build(backend).qualify_skill("ce-compound"),
         "allowed_paths": _bullets(allowed_paths),
         "complete_line": contracts.COMPOUND_COMPLETE_LINE,
         "skipped_line": contracts.COMPOUND_SKIPPED_LINE,
@@ -217,21 +223,29 @@ def parse(last_message):
     return RESULT_UNFINISHED
 
 
-def _closeout_task(manifest, task_id):
+def _closeout_task(manifest, task_id, backend):
     """A task record shaped for the launcher, carrying the closeout's own model and effort
-    (R29): two bounded jobs that need judgement, not depth."""
+    (R29): two bounded jobs that need judgement, not depth. `backend` is required for the same
+    reason `compound_command`'s is."""
     return manifest_module.Task(id=task_id, model=manifest.closeout.model,
-                                effort=manifest.closeout.effort, excluded=False, reason=None)
+                                effort=manifest.closeout.effort, excluded=False, reason=None,
+                                backend=backend)
 
 
 def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths,
+        backend=manifest_module.DEFAULT_BACKEND,
         landing_ref=None, branch=None, commit_range=None, plan_path=None, gate=None,
         wall_seconds=None, active_seconds=None, timeout_seconds=None,
         **launch_kwargs):
     """Render, launch, and read the ending. Returns what happened; it changes no git state and
-    writes nothing to the tracker itself. The caller runs the scope check and the push."""
+    writes nothing to the tracker itself. The caller runs the scope check and the push.
+
+    This is the only function on this seam that defaults `backend`, and the default is what
+    `_closeout_task` produced before backends existed, so `run.py` is unchanged until the unit
+    that flips the closeout onto the task's own backend. It feeds all three consumers: the
+    rendered brief, the launched CLI, and the normalizer that reads what that CLI wrote."""
     task_id = card.get("id")
-    text = render(manifest, card, outcome, digest, comments, adapter, allowed_paths,
+    text = render(manifest, card, outcome, digest, comments, adapter, allowed_paths, backend,
                   landing_ref=landing_ref, branch=branch, commit_range=commit_range,
                   plan_path=plan_path, gate=gate, wall_seconds=wall_seconds,
                   active_seconds=active_seconds)
@@ -243,15 +257,17 @@ def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths
     if timeout_seconds is None:
         timeout_seconds = manifest.timeouts.closeout_minutes * 60
     launch_result = launch.launch(
-        manifest, _closeout_task(manifest, task_id), text,
+        manifest, _closeout_task(manifest, task_id, backend), text,
         store.path("logs", task_id + ".closeout.stdout.log"), timeout_seconds,
         allowed=allowed_tools(manifest, adapter),
         disallowed=contracts.CLOSEOUT_DISALLOWED_EXTRA, **launch_kwargs)
 
     # U7 runs over the closeout transcript too (R44). AE1's denied tracker write most often
-    # happens here, after the code has already merged.
+    # happens here, after the code has already merged. The backend goes through: a closeout
+    # launched on one CLI whose evidence is normalized as another decodes nothing, so `parse()`
+    # sees no terminal line and every run appends a CLOSEOUT_UNFINISHED finding.
     closeout_digest = classify.classify(launch_result.transcript_path, launch_result,
-                                        adapter.write_tool_patterns())
+                                        adapter.write_tool_patterns(), backend=backend)
     findings = [finding for finding in closeout_digest.get("findings") or []
                 if finding.get("class") != contracts.HALT_NO_ENVELOPE]
     result = RESULT_UNFINISHED if launch_result.timed_out else parse(closeout_digest.get("last_message_tail"))

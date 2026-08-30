@@ -83,16 +83,32 @@ def matches_write_pattern(tool_use, patterns):
     return False
 
 
-def required_skill_for(skill_name):
-    """The qualified skill a bare Skill call should have been, or None when the bare name is
-    not one of the plugin skills the brief pins. `code-review` maps to `ce-code-review`."""
-    if not skill_name or skill_name.startswith(contracts.SKILL_PREFIX):
+def required_skill_for(skill_name, backend="claude"):
+    """The qualified skill a Skill call should have been in this backend's own form, or None when
+    it was already qualified or names nothing the brief pins. `code-review` maps to
+    `ce-code-review`.
+
+    Already qualified is a two-part test (backends KTD3), not a prefix check. The form is
+    `compound-engineering:%s` on claude but a bare `$%s` and `/%s` on codex and grok, sigils every
+    skill on those CLIs shares, so the prefix alone would accept `$code-review`, the harness skill
+    this exists to catch, as the plugin's. The remainder has to be a skill the brief actually
+    pins. This is the one site that reads `skill_form` rather than calling `qualify_skill`,
+    because no interface callable answers "is this string already in your form"."""
+    if not skill_name:
         return None
-    bare = skill_name.split(":")[-1]
+    module = backends.build(backend)
+    prefix, _, suffix = module.CAPABILITY.skill_form.partition("%s")
+    if prefix and skill_name.startswith(prefix) and skill_name.endswith(suffix):
+        stripped = skill_name[len(prefix):]
+        if suffix:
+            stripped = stripped[:-len(suffix)]
+        if stripped in contracts.REQUIRED_SKILLS:
+            return None
+    bare = skill_name.split(":")[-1].lstrip("$/")
     for required in contracts.REQUIRED_SKILLS:
         short = required[3:] if required.startswith("ce-") else required
         if bare in (required, short) or "ce-" + bare == required:
-            return contracts.SKILL_PREFIX + required
+            return module.qualify_skill(required)
     return None
 
 
@@ -202,7 +218,7 @@ def classify(transcript_path, launch_result, write_tool_patterns=None, backend="
                     tool_uses[block.get("id")] = dict(block, _line=number)
                     if block.get("name") == "Skill":
                         skill = str((block.get("input") or {}).get("skill", ""))
-                        required = required_skill_for(skill)
+                        required = required_skill_for(skill, backend)
                         if required:
                             result["findings"].append({
                                 "class": contracts.HALT_SKILL_SUBSTITUTION,
