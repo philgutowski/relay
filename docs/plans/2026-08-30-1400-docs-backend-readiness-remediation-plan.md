@@ -126,11 +126,14 @@ it rather than behind a new signpost from the CLI's own output.
      `validate` or `run`, before any Task launches, and is not a halt class.
   3. Add a table with columns Error text / What it means / What the operator
      does, one row per shape in KTD2: missing binary -> install that backend's
-     CLI and put it on `PATH`; plugin probe failed -> run that backend's
-     plugin-list subcommand by hand and fix why it errors or hangs;
-     missing/unreadable plugin -> install and enable `compound-engineering`
-     for that backend at or above the pinned floor; below-floor plugin ->
-     upgrade the plugin to the pinned floor.
+     CLI and put it on `PATH`; plugin probe failed -> name and run the
+     backend's own plugin-list command (`claude plugin list`, `codex plugin
+     list`, `grok plugin list --json`) and fix why it errors or hangs;
+     missing/unreadable plugin -> name the backend's own install command
+     (`codex plugin add compound-engineering@compound-engineering-plugin`,
+     `grok plugin install EveryInc/compound-engineering-plugin`, or `claude`'s
+     own marketplace add) at or above the pinned floor; below-floor plugin ->
+     upgrade through that backend's own plugin update command.
   4. Close the section the same way `skills/relay/SKILL.md:181-185` closes
      the halt-classes table: a sentence naming the next step ("After fixing
      the environment, confirm before resuming:"), followed by a code block

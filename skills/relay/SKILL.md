@@ -193,9 +193,9 @@ never started.
 | Error text | What it means | What the operator does |
 |---|---|---|
 | `backend <name> binary <binary> is missing from PATH` | that backend's CLI is not installed, or not on `PATH` | install the backend's CLI and put it on `PATH` |
-| `backend <name> plugin probe failed: <exc>` | the backend's plugin-list subcommand could not run at all | run that backend's plugin-list subcommand by hand and fix why it errors or hangs |
-| `backend <name> has no readable compound-engineering plugin at or above <version>` | `compound-engineering` is missing, disabled, or unreadable for that backend | install and enable `compound-engineering` for that backend, at or above the pinned floor |
-| `backend <name> has compound-engineering plugin <version>, below required <version>` | the installed plugin is older than the pinned floor | upgrade the plugin to at least the pinned floor |
+| `backend <name> plugin probe failed: <exc>` | the backend's plugin-list subcommand could not run at all | run it by hand and fix why it errors or hangs: `claude plugin list`, `codex plugin list`, or `grok plugin list --json` |
+| `backend <name> has no readable compound-engineering plugin at or above <version>` | `compound-engineering` is missing, disabled, or unreadable for that backend | install it: `codex plugin add compound-engineering@compound-engineering-plugin`, `grok plugin install EveryInc/compound-engineering-plugin`, or for `claude` add it from its own marketplace and enable it |
+| `backend <name> has compound-engineering plugin <version>, below required <version>` | the installed plugin is older than the pinned floor | upgrade it through that backend's own plugin update command to at least the pinned floor |
 
 After fixing the environment, confirm before resuming:
 
