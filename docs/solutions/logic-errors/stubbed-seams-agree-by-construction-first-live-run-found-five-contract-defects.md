@@ -214,7 +214,8 @@ The three fixes that generalise each remove one way the seam can stay untested.
 
 ## Prevention
 
-**Run one live task against a throwaway target after any change to a cross process contract.**
+**Run one live task against a throwaway target after any change to a cross process contract,
+and before trusting any launch-time claim about an external tool.**
 The contracts are: the envelope grammar and `parse_envelope`; `COMPOUND_TERMINAL_LINES` and
 `closeout.parse`; the brief templates and the adapters; `_Halt` and the record the summary
 reads; and the classify digest keys, which `run.py` and `closeout.py` read by string. A
@@ -231,6 +232,19 @@ instrument that found the defect, because `tests/_repo.py`'s fixture repositorie
 `pre-push` hook, so every push in the suite returns in milliseconds. Any runner bound sized
 against real work, a subprocess timeout, a retry budget, a rate limit, is unproven until a live
 run pays the cost the stub was never asked to pay.
+
+**A documented flag list is agreeable by construction, the third member of this family.** An
+assumption derived from a CLI's own `--help` output and then checked against that same help
+output cannot fail, because the claim and its verifier share one source. Nothing about this
+case involves a stub: no message contract changed, no bound sized against real work was
+tested, and the verifier was a vendor help page rather than a fixture.
+`docs/solutions/workflow-issues/grok-accepts-dontask-then-cancels-every-tool-call.md` is the
+counterexample: Grok's `--help` advertises `--permission-mode dontAsk`, the same spelling
+Claude Code uses as its own non-bypass headless posture, and reading that shared vocabulary as
+shared semantics stood unchallenged in a plan's KTD6 and Assumptions until U1's spike launched
+a real Task under it and watched every tool call get cancelled with no human present to have
+cancelled anything. A launch-time posture is unproven until a live run has observed both a
+refusal and a success; a refusal alone would have passed a mode that refuses everything.
 
 **One exception: when the contract change is to the Runner package itself, the run that lands
 it is not the run that can verify it.** The Runner is one long lived process that imports
@@ -286,6 +300,10 @@ should point.
   other learning that came from a live unattended run rather than the suite, and its closing
   line, that an unattended runner should assume there are more such gates it has not met,
   applies to Relay's own seams as much as to the harness's.
+- `docs/solutions/workflow-issues/grok-accepts-dontask-then-cancels-every-tool-call.md` is the
+  counterexample behind this doc's third Prevention amendment: no message contract changed and
+  no stub was involved, and a live run observing both a refusal and a success was still the
+  only way to catch a launch-time posture that a vendor's own `--help` output made look safe.
 - `docs/plans/2026-08-25-1346-feat-relay-outer-loop-plan.md`, unit U1, is where the fixture
   transcripts were described as trimmed copies of real shapes. That is the assumption this run
   disproved; the plan stays as the historical record.
