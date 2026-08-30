@@ -1,15 +1,19 @@
-"""U1: the stub claude writes its transcript where the runner will look and obeys its queue."""
+"""Backends U12: the stub claude, codex, and grok binaries write evidence where the runner
+will look and obey a shared queue, without launching a real CLI."""
 import json
 import os
+import re
 import subprocess
 import tempfile
+import types
 import unittest
 
 import _paths
-from relay import contracts
+from relay import backends, contracts
 
 STUB = os.path.join(_paths.STUB_DIR, "claude")
 FIXTURES = os.path.join(_paths.FIXTURES_DIR, "transcripts")
+BACKEND_FIXTURES = os.path.join(_paths.FIXTURES_DIR, "backends")
 
 RUNNER_FLAGS = [
     "--model", "sonnet", "--effort", "low", "--permission-mode", "dontAsk",
@@ -106,6 +110,234 @@ class StubClaude(unittest.TestCase):
         self.assertEqual(len(pids), 1)
         os.kill(pids[0], 0)
         os.kill(pids[0], 9)
+
+class StubCodex(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = os.path.join(self.tmp.name, "home")
+        self.repo = os.path.join(self.tmp.name, "repo")
+        self.queue = os.path.join(self.tmp.name, "queue")
+        for path in (self.home, self.repo, self.queue):
+            os.makedirs(path)
+        self.env = dict(os.environ, HOME=self.home, RELAY_STUB_QUEUE=self.queue,
+                        PATH=_paths.STUB_DIR + os.pathsep + os.environ.get("PATH", ""))
+        self.env.pop("RELAY_STUB_SLEEP", None)
+        self.env.pop("RELAY_STUB_CHILD", None)
+        self.mod = backends.build("codex")
+        self.pins = contracts.BACKEND_PINS["codex"]
+        self.fixtures = os.path.join(BACKEND_FIXTURES, "codex")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def build_args(self, log_path, allowed=(), disallowed=()):
+        task = types.SimpleNamespace(model="gpt-5-codex", effort="medium")
+        manifest = types.SimpleNamespace(project=types.SimpleNamespace(repo=self.repo))
+        return self.mod.build_args(manifest, task, "brief text", "unused-session",
+                                    allowed=allowed, disallowed=disallowed,
+                                    log_path=log_path, repo=self.repo)
+
+    def test_fixture_lands_where_evidence_sources_predicts(self):
+        fixture = os.path.join(self.fixtures, "last-message-complete.txt")
+        write_entry(self.queue, 1, fixture)
+        log_path = os.path.join(self.tmp.name, "T-1.stdout.log")
+        args = self.build_args(log_path)
+        proc = subprocess.run(args, cwd=self.repo, env=self.env, capture_output=True, text=True,
+                               timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        last_message, _log = self.mod.evidence_sources(self.home, self.repo, "unused-session",
+                                                         log_path=log_path)
+        self.assertTrue(os.path.exists(last_message))
+        with open(last_message) as got, open(fixture) as want:
+            self.assertEqual(got.read(), want.read())
+
+    def test_version_output_parses_to_the_pinned_version(self):
+        proc = subprocess.run(["codex", "--version"], env=self.env, capture_output=True,
+                               text=True, timeout=10)
+        self.assertEqual(self.mod.parse_version(proc.stdout), self.pins["version_tested"])
+
+    def test_plugin_list_output_matches_the_pinned_pattern(self):
+        proc = subprocess.run(["codex", "plugin", "list"], env=self.env, capture_output=True,
+                               text=True, timeout=10)
+        match = re.search(self.pins["plugin_version_pattern"], proc.stdout)
+        self.assertIsNotNone(match, proc.stdout)
+        self.assertEqual(match.group("version"), self.pins["plugin_version"])
+
+    def test_build_args_grammar_accepted_a_renamed_flag_rejected(self):
+        fixture = os.path.join(self.fixtures, "last-message-complete.txt")
+        write_entry(self.queue, 1, fixture)
+        log_path = os.path.join(self.tmp.name, "T-2.stdout.log")
+        args = self.build_args(log_path)
+        good = subprocess.run(args, cwd=self.repo, env=self.env, capture_output=True, text=True,
+                               timeout=30)
+        self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+
+        bad = list(args)
+        bad[bad.index("--sandbox")] = "--bogus-flag"
+        result = subprocess.run(bad, cwd=self.repo, env=self.env, capture_output=True, text=True,
+                                 timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_stub_child_env_spawns_a_child_that_holds_the_pipe(self):
+        fixture = os.path.join(self.fixtures, "last-message-complete.txt")
+        write_entry(self.queue, 1, fixture)
+        env = dict(self.env, RELAY_STUB_CHILD="1")
+        log_path = os.path.join(self.tmp.name, "T-3.stdout.log")
+        args = self.build_args(log_path)
+        stub_log = os.path.join(self.tmp.name, "stub.log")
+        with open(stub_log, "w") as log:
+            proc = subprocess.Popen(args, cwd=self.repo, env=env, stdout=log,
+                                     stderr=subprocess.STDOUT)
+            proc.wait(timeout=30)
+        with open(stub_log) as log:
+            pids = [json.loads(l)["pid"] for l in log if "stub_child" in l]
+        self.assertEqual(len(pids), 1)
+        os.kill(pids[0], 0)
+        os.kill(pids[0], 9)
+
+
+class StubGrok(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = os.path.join(self.tmp.name, "home")
+        self.repo = os.path.join(self.tmp.name, "repo")
+        self.queue = os.path.join(self.tmp.name, "queue")
+        for path in (self.home, self.repo, self.queue):
+            os.makedirs(path)
+        self.env = dict(os.environ, HOME=self.home, RELAY_STUB_QUEUE=self.queue,
+                        PATH=_paths.STUB_DIR + os.pathsep + os.environ.get("PATH", ""))
+        self.env.pop("RELAY_STUB_SLEEP", None)
+        self.env.pop("RELAY_STUB_CHILD", None)
+        self.mod = backends.build("grok")
+        self.pins = contracts.BACKEND_PINS["grok"]
+        self.fixtures = os.path.join(BACKEND_FIXTURES, "grok")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def build_args(self, session_id, allowed=(), disallowed=()):
+        task = types.SimpleNamespace(model="grok-4", effort="low")
+        manifest = types.SimpleNamespace(project=types.SimpleNamespace(repo=self.repo))
+        return self.mod.build_args(manifest, task, "brief text", session_id,
+                                    allowed=allowed, disallowed=disallowed)
+
+    def test_fixture_lands_where_evidence_sources_predicts(self):
+        fixture = os.path.join(self.fixtures, "session-transcript-complete.jsonl")
+        write_entry(self.queue, 1, fixture)
+        args = self.build_args("66666666-6666-4666-8666-666666666666")
+        proc = subprocess.run(args, cwd=self.repo, env=self.env, capture_output=True, text=True,
+                               timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        realrepo = os.path.realpath(self.repo)
+        (predicted,) = self.mod.evidence_sources(self.home, realrepo,
+                                                  "66666666-6666-4666-8666-666666666666")
+        self.assertTrue(os.path.exists(predicted), predicted)
+        with open(predicted) as got, open(fixture) as want:
+            self.assertEqual(got.read(), want.read())
+
+    def test_version_output_parses_to_the_pinned_version(self):
+        proc = subprocess.run(["grok", "--version"], env=self.env, capture_output=True,
+                               text=True, timeout=10)
+        self.assertEqual(self.mod.parse_version(proc.stdout), self.pins["version_tested"])
+
+    def test_plugin_list_output_matches_the_pinned_pattern(self):
+        proc = subprocess.run(["grok", "plugin", "list", "--json"], env=self.env,
+                               capture_output=True, text=True, timeout=10)
+        match = re.search(self.pins["plugin_version_pattern"], proc.stdout)
+        self.assertIsNotNone(match, proc.stdout)
+        self.assertEqual(match.group("version"), self.pins["plugin_version"])
+
+    def test_build_args_grammar_with_allow_deny_pairs_accepted_a_renamed_flag_rejected(self):
+        fixture = os.path.join(self.fixtures, "session-transcript-complete.jsonl")
+        write_entry(self.queue, 1, fixture)
+        args = self.build_args("77777777-7777-4777-8777-777777777777",
+                                allowed=("Read", "Edit"), disallowed=("Bash(rm -rf*)",))
+        good = subprocess.run(args, cwd=self.repo, env=self.env, capture_output=True, text=True,
+                               timeout=30)
+        self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+
+        bad = list(args)
+        bad[bad.index("--effort")] = "--bogus-flag"
+        result = subprocess.run(bad, cwd=self.repo, env=self.env, capture_output=True, text=True,
+                                 timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_stub_child_env_spawns_a_child_that_holds_the_pipe(self):
+        fixture = os.path.join(self.fixtures, "session-transcript-complete.jsonl")
+        write_entry(self.queue, 1, fixture)
+        env = dict(self.env, RELAY_STUB_CHILD="1")
+        args = self.build_args("88888888-8888-4888-8888-888888888888")
+        stub_log = os.path.join(self.tmp.name, "stub.log")
+        with open(stub_log, "w") as log:
+            proc = subprocess.Popen(args, cwd=self.repo, env=env, stdout=log,
+                                     stderr=subprocess.STDOUT)
+            proc.wait(timeout=30)
+        with open(stub_log) as log:
+            pids = [json.loads(l)["pid"] for l in log if "stub_child" in l]
+        self.assertEqual(len(pids), 1)
+        os.kill(pids[0], 0)
+        os.kill(pids[0], 9)
+
+
+class CrossBackendQueue(unittest.TestCase):
+    """R11: one queue, drained by a Task on one backend and a Closeout on another, stays in
+    strict numeric order. This is what makes the queue safe for a manifest that mixes
+    backends within one run."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = os.path.join(self.tmp.name, "home")
+        self.repo = os.path.join(self.tmp.name, "repo")
+        self.queue = os.path.join(self.tmp.name, "queue")
+        for path in (self.home, self.repo, self.queue):
+            os.makedirs(path)
+        self.env = dict(os.environ, HOME=self.home, RELAY_STUB_QUEUE=self.queue,
+                        PATH=_paths.STUB_DIR + os.pathsep + os.environ.get("PATH", ""))
+        self.env.pop("RELAY_STUB_SLEEP", None)
+        self.env.pop("RELAY_STUB_CHILD", None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_claude_then_codex_consume_entries_in_order_and_a_third_backend_sees_it_spent(self):
+        claude_fixture = os.path.join(FIXTURES, "success.jsonl")
+        codex_fixture = os.path.join(BACKEND_FIXTURES, "codex", "last-message-complete.txt")
+        write_entry(self.queue, 1, claude_fixture)
+        write_entry(self.queue, 2, codex_fixture)
+
+        claude_session = "99999999-9999-4999-8999-999999999999"
+        claude_proc = subprocess.run(
+            ["claude", "-p", "brief", "--session-id", claude_session] + RUNNER_FLAGS,
+            cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(claude_proc.returncode, 0, claude_proc.stdout + claude_proc.stderr)
+        claude_path = contracts.transcript_path(self.home, os.path.realpath(self.repo),
+                                                 claude_session)
+        with open(claude_path) as got, open(claude_fixture) as want:
+            self.assertEqual(got.read(), want.read(), "claude must consume entry 1, not entry 2")
+
+        codex_mod = backends.build("codex")
+        task = types.SimpleNamespace(model="gpt-5-codex", effort="medium")
+        manifest = types.SimpleNamespace(project=types.SimpleNamespace(repo=self.repo))
+        log_path = os.path.join(self.tmp.name, "T-2.stdout.log")
+        codex_args = codex_mod.build_args(manifest, task, "brief", "unused-session",
+                                           allowed=(), disallowed=(), log_path=log_path,
+                                           repo=self.repo)
+        codex_proc = subprocess.run(codex_args, cwd=self.repo, env=self.env,
+                                     capture_output=True, text=True, timeout=30)
+        self.assertEqual(codex_proc.returncode, 0, codex_proc.stdout + codex_proc.stderr)
+        last_message, _log = codex_mod.evidence_sources(self.home, self.repo, "unused-session",
+                                                          log_path=log_path)
+        with open(last_message) as got, open(codex_fixture) as want:
+            self.assertEqual(got.read(), want.read(), "codex must consume entry 2, not entry 1")
+
+        grok_mod = backends.build("grok")
+        grok_args = grok_mod.build_args(manifest, task, "brief", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                                         allowed=(), disallowed=())
+        third = subprocess.run(grok_args, cwd=self.repo, env=self.env, capture_output=True,
+                                text=True, timeout=30)
+        self.assertEqual(third.returncode, 97, "a spent queue must fail loudly for any backend")
+
 
 if __name__ == "__main__":
     unittest.main()

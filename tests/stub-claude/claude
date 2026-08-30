@@ -6,35 +6,21 @@ fixture into the place the real CLI would write it: ~/.claude/projects/<slug>/<i
 os.path.expanduser("~"), so a test that sets HOME redirects it. The slug rule must match the
 runner's (relay.contracts.slug_for) exactly; the test suite checks that they agree.
 
-Queue protocol (RELAY_STUB_QUEUE names a directory):
-  <queue>/<n>/entry.json   {"fixture": "<path>", "stream": "<path>", "exit": 0, "sleep": 0}
-  <queue>/<n>/git.sh       optional; run with bash in the cwd after the fixture is written
-  <queue>/counter          advanced under flock, so one runner drives task, closeout, task ...
-Entries are consumed in numeric order of <n>. A fixture path is absolute or relative to the
-queue directory. With no queue the stub writes nothing and exits 0.
-
-`stream` is opt in and separate from `fixture`. `fixture` is the session transcript the
-classifier reads off disk; `stream` is echoed to stdout, which is what the runner captures into
-<state>/logs/<id>.stdout.log and what `relay tail` decodes. Without it the stub prints only
-`system` and `result` lines, which carry no assistant message and decode to nothing, so a test
-that needs visible task activity sets it. Every test that does not is unaffected.
+Queue protocol, sleep, orphan-child, and git.sh hook: see _stub.py, alongside this binary and
+shared with the `codex` and `grok` stubs.
 
 Other knobs:
-  RELAY_STUB_SLEEP=<seconds>       overrides the entry's sleep (U6 timeout tests)
-  RELAY_STUB_CHILD=1               spawns one sleeping child so a group kill test has an orphan
   RELAY_STUB_CLI_VERSION=<text>    overrides the fake `--version` output (default matches
                                     contracts.CLI_VERSION_TESTED; bump both together on a
                                     real version pin change or every test that doesn't set this
                                     starts observing harmless-but-misleading drift)
 """
-import fcntl
-import json
 import os
 import re
 import shutil
-import subprocess
 import sys
-import time
+
+import _stub
 
 
 def slug_for(path):
@@ -62,28 +48,6 @@ def parse_args(argv):
     return flags
 
 
-def next_entry(queue):
-    """Take the next queue entry under flock and return its directory, or None when spent."""
-    counter_path = os.path.join(queue, "counter")
-    with open(counter_path, "a+") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        handle.seek(0)
-        text = handle.read().strip()
-        taken = int(text) if text else 0
-        entries = sorted(
-            (int(name) for name in os.listdir(queue) if name.isdigit()),
-        )
-        if taken >= len(entries):
-            fcntl.flock(handle, fcntl.LOCK_UN)
-            return None
-        handle.seek(0)
-        handle.truncate()
-        handle.write(str(taken + 1))
-        handle.flush()
-        fcntl.flock(handle, fcntl.LOCK_UN)
-    return os.path.join(queue, str(entries[taken]))
-
-
 def main(argv):
     if argv == ["plugin", "list"]:
         print("  ❯ compound-engineering@compound-engineering-plugin\n"
@@ -98,65 +62,20 @@ def main(argv):
 
     flags = parse_args(argv)
     session_id = flags.get("session-id", "")
-    print(json.dumps({"type": "system", "subtype": "stub_start", "session_id": session_id}), flush=True)
 
-    child = None
-    if os.environ.get("RELAY_STUB_CHILD") == "1":
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
-        print(json.dumps({"type": "system", "subtype": "stub_child", "pid": child.pid}), flush=True)
-
-    queue = os.environ.get("RELAY_STUB_QUEUE")
-    entry = {}
-    entry_dir = None
-    if queue:
-        entry_dir = next_entry(queue)
-        if entry_dir is None:
-            print(json.dumps({"type": "system", "subtype": "stub_queue_spent"}), flush=True)
-            return 97
-        with open(os.path.join(entry_dir, "entry.json")) as handle:
-            entry = json.load(handle)
-
-    sleep_seconds = float(os.environ.get("RELAY_STUB_SLEEP", entry.get("sleep", 0)))
-    if sleep_seconds:
-        time.sleep(sleep_seconds)
-
-    fixture = entry.get("fixture")
-    if fixture and session_id:
-        if not os.path.isabs(fixture):
-            fixture = os.path.join(queue, fixture)
+    def write_evidence(entry, queue):
+        fixture = entry.get("fixture")
+        if not (fixture and session_id):
+            return
+        fixture = _stub.resolve(queue, fixture)
         slug = slug_for(os.path.realpath(os.getcwd()))
         target_dir = os.path.join(os.path.expanduser("~"), ".claude", "projects", slug)
         os.makedirs(target_dir, exist_ok=True)
         target = os.path.join(target_dir, session_id + ".jsonl")
         shutil.copyfile(fixture, target)
-        print(json.dumps({"type": "system", "subtype": "stub_transcript", "path": target}), flush=True)
+        _stub.emit({"type": "system", "subtype": "stub_transcript", "path": target})
 
-    stream = entry.get("stream")
-    if stream:
-        if not os.path.isabs(stream):
-            stream = os.path.join(queue, stream)
-        with open(stream, encoding="utf-8") as handle:
-            for line in handle:
-                line = line.rstrip("\n")
-                if line:
-                    print(line, flush=True)
-
-    if entry_dir is not None:
-        script = os.path.join(entry_dir, "git.sh")
-        if os.path.exists(script):
-            proc = subprocess.run(["bash", script], capture_output=True, text=True)
-            print(
-                json.dumps({"type": "system", "subtype": "stub_git", "exit": proc.returncode, "stderr": proc.stderr[-500:]}),
-                flush=True,
-            )
-            if proc.returncode != 0:
-                return 98
-
-    print(json.dumps({"type": "result", "subtype": "stub_done", "session_id": session_id}), flush=True)
-    if child is not None:
-        # Leave the child running on purpose; the group kill test expects to reap it.
-        pass
-    return int(entry.get("exit", 0))
+    return _stub.main(session_id, write_evidence)
 
 
 if __name__ == "__main__":

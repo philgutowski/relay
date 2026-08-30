@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Stub `grok` for Relay's tests (Backends U12). Never calls a model.
+
+Accepts exactly the flag grammar `backends.grok.build_args` builds and writes a queued fixture
+to ~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl, the path
+`backends.grok.evidence_sources` computes from the same encoding rule (KTD4: the same
+`urllib.parse.quote(cwd, safe="")` call, not a re-derived one). Queue protocol, sleep, orphan
+child, and the git.sh hook: see _stub.py.
+
+RELAY_STUB_CLI_VERSION=<text> overrides the fake `--version` output (default is
+contracts.BACKEND_PINS["grok"]["version_output_sample"]).
+"""
+import os
+import shutil
+import sys
+from urllib.parse import quote
+
+import _stub
+
+_SCRIPTS_DIR = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "skills", "relay", "scripts"))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from relay import contracts  # noqa: E402
+
+_PINS = contracts.BACKEND_PINS["grok"]
+
+# Flags backends.grok.build_args actually emits. Anything outside this set is refused (KTD2):
+# a lenient stub would silently accept a build_args regression instead of failing the test that
+# exercises it.
+_SINGLE_VALUE_FLAGS = {"-s", "--model", "--effort", "--permission-mode", "--output-format"}
+_REPEATED_VALUE_FLAGS = {"--allow", "--deny"}
+
+
+def parse_args(argv):
+    if not argv or argv[0] != "-p":
+        raise ValueError("expected leading '-p', got %r" % (argv[:1],))
+    if len(argv) < 2:
+        raise ValueError("-p needs a value")
+    flags = {"prompt": argv[1], "allow": [], "deny": []}
+    i = 2
+    while i < len(argv):
+        arg = argv[i]
+        if i + 1 >= len(argv):
+            raise ValueError("flag %r needs a value" % arg)
+        value = argv[i + 1]
+        if arg in _REPEATED_VALUE_FLAGS:
+            flags[arg[2:]].append(value)
+        elif arg in _SINGLE_VALUE_FLAGS:
+            flags[arg.lstrip("-")] = value
+        else:
+            raise ValueError("unrecognized flag %r" % arg)
+        i += 2
+    return flags
+
+
+def main(argv):
+    if argv == ["plugin", "list", "--json"]:
+        print('{"name": "compound-engineering", "version": "%s", "status": "installed"}'
+              % _PINS["plugin_version"])
+        return 0
+
+    if argv[:1] == ["--version"]:
+        print(os.environ.get("RELAY_STUB_CLI_VERSION", _PINS["version_output_sample"]))
+        return 0
+
+    try:
+        flags = parse_args(argv)
+    except ValueError as exc:
+        print("grok stub: %s" % exc, file=sys.stderr)
+        return 2
+
+    session_id = flags.get("s", "")
+
+    def write_evidence(entry, queue):
+        fixture = entry.get("fixture")
+        if not (fixture and session_id):
+            return
+        fixture = _stub.resolve(queue, fixture)
+        encoded = quote(os.path.realpath(os.getcwd()), safe="")
+        target_dir = os.path.join(os.path.expanduser("~"), ".grok", "sessions", encoded,
+                                   session_id)
+        os.makedirs(target_dir, exist_ok=True)
+        target = os.path.join(target_dir, "updates.jsonl")
+        shutil.copyfile(fixture, target)
+        _stub.emit({"type": "system", "subtype": "stub_transcript", "path": target})
+
+    return _stub.main(session_id, write_evidence)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
