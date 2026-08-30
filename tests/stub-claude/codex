@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Stub `codex` for Relay's tests (Backends U12). Never calls a model.
+
+Accepts exactly the flag grammar `backends.codex.build_args` builds and writes a queued fixture
+to the `--output-last-message` file, the path `backends.codex.evidence_sources` also predicts
+from the same `log_path`. The stdout tool-event log is not a separate write here: it is whatever
+a queued `stream` entry echoes to stdout (see _stub.echo_stream), which is what the runner
+captures into the log Codex's own `normalize_transcript` reads. Queue protocol, sleep, orphan
+child, and the git.sh hook: see _stub.py.
+
+RELAY_STUB_CLI_VERSION=<text> overrides the fake `--version` output (default is
+contracts.BACKEND_PINS["codex"]["version_output_sample"]).
+"""
+import os
+import shutil
+import sys
+
+import _stub
+
+_stub.ensure_relay_on_path()
+from relay import contracts  # noqa: E402
+
+_PINS = contracts.BACKEND_PINS["codex"]
+
+# Flags backends.codex.build_args actually emits. Anything outside this set is refused (KTD2):
+# a lenient stub would silently accept a build_args regression instead of failing the test that
+# exercises it.
+_VALUE_FLAGS = {"--sandbox", "--model", "-C", "--output-last-message", "--add-dir"}
+_BOOL_FLAGS = {"--json"}
+
+
+# Every flag build_args always emits, --add-dir excluded since it is zero-or-more.
+_REQUIRED_FLAGS = (_VALUE_FLAGS | _BOOL_FLAGS) - {"--add-dir"}
+
+
+def parse_args(argv):
+    if not argv or argv[0] != "exec":
+        raise ValueError("expected leading 'exec', got %r" % (argv[:1],))
+    flags = {"add-dir": []}
+    seen = set()
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg in _BOOL_FLAGS:
+            flags[arg[2:]] = True
+            seen.add(arg)
+            i += 1
+        elif arg in _VALUE_FLAGS:
+            if i + 1 >= len(argv):
+                raise ValueError("flag %r needs a value" % arg)
+            value = argv[i + 1]
+            if arg == "--add-dir":
+                flags["add-dir"].append(value)
+            else:
+                flags[arg.lstrip("-")] = value
+            seen.add(arg)
+            i += 2
+        elif i == len(argv) - 1 and not arg.startswith("-"):
+            flags["brief"] = arg
+            i += 1
+        else:
+            raise ValueError("unrecognized flag %r" % arg)
+    missing = _REQUIRED_FLAGS - seen
+    if missing:
+        raise ValueError("missing required flag(s) %r" % sorted(missing))
+    if "brief" not in flags:
+        raise ValueError("missing brief text")
+    return flags
+
+
+def main(argv):
+    if argv == ["plugin", "list"]:
+        print("compound-engineering@compound-engineering-plugin installed, enabled %s "
+              % _PINS["plugin_version"])
+        return 0
+
+    if argv[:1] == ["--version"]:
+        print(os.environ.get("RELAY_STUB_CLI_VERSION", _PINS["version_output_sample"]))
+        return 0
+
+    try:
+        flags = parse_args(argv)
+    except ValueError as exc:
+        print("codex stub: %s" % exc, file=sys.stderr)
+        return 2
+
+    last_message = flags.get("output-last-message")
+
+    def write_evidence(entry, queue):
+        fixture = entry.get("fixture")
+        if not (fixture and last_message):
+            return
+        fixture = _stub.resolve(queue, fixture)
+        target_dir = os.path.dirname(last_message)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
+        shutil.copyfile(fixture, last_message)
+        _stub.emit({"type": "system", "subtype": "stub_last_message", "path": last_message})
+
+    # Codex assigns its own thread id (session_id_choosable is False); the runner names
+    # evidence by log path, not by a session id this stub ever sees.
+    return _stub.main("", write_evidence)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
