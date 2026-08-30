@@ -111,7 +111,7 @@ def cmd_validate(args, env, out):
     manifest, failure = _load(args.manifest, out)
     if failure:
         return failure
-    result = manifest_module.validate(manifest, env=env)
+    result = manifest_module.validate(manifest, check_environment=True, env=env)
     for applied in result.defaults_applied:
         out.write("default applied: %s\n" % applied)
     for warning in result.warnings:
@@ -141,7 +141,7 @@ def cmd_run(args, env, out):
     manifest, failure = _load(args.manifest, out)
     if failure:
         return failure
-    result = manifest_module.validate(manifest, env=env)
+    result = manifest_module.validate(manifest, check_environment=True, env=env)
     if not result.ok:
         for error in result.errors:
             out.write("error: %s\n" % error)

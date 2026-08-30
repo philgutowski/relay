@@ -98,6 +98,24 @@ class CapabilityRecord(unittest.TestCase):
         self.assertIsNone(cap.allow_flag)
         self.assertIsNone(cap.deny_flag)
 
+    def test_plugin_version_pattern_is_present_for_each_backend(self):
+        for name in mf.BACKENDS:
+            self.assertTrue(backends.build(name).CAPABILITY.plugin_version_pattern, name)
+
+    def test_plugin_version_patterns_parse_the_observed_list_shapes(self):
+        samples = {
+            "claude": "  ❯ compound-engineering@compound-engineering-plugin\n    Version: 3.23.4",
+            "codex": "compound-engineering@compound-engineering-plugin  installed, enabled  3.23.4   /tmp/plugin",
+            "grok": '{"name":"compound-engineering", "version":"3.23.4"}',
+        }
+        for name, output in samples.items():
+            self.assertEqual(mf._plugin_version(backends.build(name).CAPABILITY, output), "3.23.4", name)
+
+    def test_grok_pattern_does_not_borrow_another_plugins_version(self):
+        output = ('[{"name":"compound-engineering", "version":"3.0.0"}, '
+                  '{"name":"other-plugin", "version":"9.0.0"}]')
+        self.assertEqual(mf._plugin_version(backends.build("grok").CAPABILITY, output), "3.0.0")
+
 
 class SharedSurface(unittest.TestCase):
     def test_every_backend_implements_exactly_the_interface(self):
