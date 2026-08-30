@@ -105,7 +105,8 @@ class Arguments(LaunchCase):
         self.assertEqual(args[2], BRIEF)
         for flag in contracts.CLI_FLAGS:
             self.assertIn(flag, args)
-        self.assertEqual(args[args.index("--permission-mode") + 1], contracts.PERMISSION_MODE)
+        self.assertEqual(args[args.index("--permission-mode") + 1],
+                         contracts.BACKEND_PINS["claude"]["permission_mode"])
         self.assertEqual(args[args.index("--output-format") + 1], contracts.OUTPUT_FORMAT)
         self.assertEqual(args[args.index("--model") + 1], "opus")
         self.assertEqual(args[args.index("--effort") + 1], "high")

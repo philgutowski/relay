@@ -81,7 +81,8 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
    The gate is one command, the one the operator named; when a project's merge bar is several
    commands, ask which one the runner runs and say what covers the others (a pre-commit hook,
    usually). Do not author a wrapper script to bundle them unless the operator asks for one.
-   Do not add a permission mode field: Relay always runs `dontAsk` and offers no switch.
+   Do not add a permission mode field: permission posture is fixed per backend by
+   `contracts.BACKEND_PINS`, never a manifest choice.
 
 The examples under `docs/examples/` are the three shapes, one per adapter.
 
@@ -170,7 +171,7 @@ The classes and what they mean for the operator:
 | `remote_advanced` | the default branch moved during the task, or the merge conflicted | rebase or redo the task branch by hand, resume |
 | `partial_landing` | the code is on the remote but the card did not move | move the card by hand, then run `verify` for that task |
 | `tracker_write_denied` | a tracker write was refused, so the card stayed put | check the tracker credentials, move the card, then `verify` |
-| `path_gate` | the task needs an edit under `.claude/`, which `dontAsk` refuses whatever the allowlist says | apply that edit attended, then resume |
+| `path_gate` | the task needs an edit under `.claude/`, which the task's backend permission posture refuses whatever the allowlist says | apply that edit attended, then resume |
 | `closeout_out_of_scope` | the closeout committed outside its allowed paths; the runner reset it | look at what it tried to write, then resume |
 | `timeout` | the task ran past its bound and was killed with its whole process group | raise the timeout or split the task, then resume |
 | `unclean_exit` | the process left a dirty tree, or claimed to finish and left nothing to merge | inspect the tree, clean it, resume |
