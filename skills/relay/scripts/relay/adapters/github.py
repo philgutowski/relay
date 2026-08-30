@@ -13,6 +13,10 @@ import subprocess
 
 from . import NETWORK_TIMEOUT_SECONDS, OUTCOME_LANDED, reference_hit, skipped
 
+# gh project item-list stops at 30 items unless told otherwise; a board past 30 made every
+# later card read as absent from the board (2026-08-29).
+PROJECT_ITEM_LIMIT = 500
+
 ISSUE_FIELDS = "title,body,state,comments"
 CLOSED_STATE = "CLOSED"
 
@@ -55,6 +59,10 @@ class GitHubAdapter:
         payload, reason = self._gh([
             "gh", "project", "item-list", str(self._project_number),
             "--owner", str(self._owner), "--format", "json",
+            # gh returns the first 30 items when no limit is given. The board crossed 30 on
+            # 2026-08-29 and every later card read as absent, so a landed task whose card
+            # had moved was still classified partial_landing.
+            "--limit", str(PROJECT_ITEM_LIMIT),
         ])
         if payload is None:
             return [], reason
