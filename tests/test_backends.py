@@ -101,7 +101,10 @@ class CapabilityRecord(unittest.TestCase):
 
     def test_plugin_version_patterns_parse_the_observed_list_shapes(self):
         samples = {
-            "claude": "  ❯ compound-engineering@compound-engineering-plugin\n    Version: 3.23.4",
+            "claude": ("  ❯ compound-engineering@compound-engineering-plugin\n"
+                       "    Version: 3.23.4\n"
+                       "    Scope: user\n"
+                       "    Status: ✔ enabled"),
             "codex": "compound-engineering@compound-engineering-plugin  installed, enabled  3.23.4   /tmp/plugin",
             "grok": '{"name":"compound-engineering", "version":"3.23.4"}',
         }
@@ -112,6 +115,42 @@ class CapabilityRecord(unittest.TestCase):
         output = ('[{"name":"compound-engineering", "version":"3.0.0"}, '
                   '{"name":"other-plugin", "version":"9.0.0"}]')
         self.assertEqual(mf._plugin_version(backends.build("grok").CAPABILITY, output), "3.0.0")
+
+    def test_claude_pattern_rejects_a_disabled_plugin(self):
+        # skills-relay-contracts-129-disabled-plugin-ready: a disabled plugin still reports its
+        # installed version on the `Version:` line, so readiness must also require `Status:`.
+        output = ("  ❯ compound-engineering@compound-engineering-plugin\n"
+                  "    Version: 3.23.4\n"
+                  "    Scope: user\n"
+                  "    Status: ✘ disabled")
+        self.assertIsNone(mf._plugin_version(backends.build("claude").CAPABILITY, output))
+
+    def test_claude_pattern_does_not_borrow_a_later_plugins_enabled_status(self):
+        output = ("  ❯ compound-engineering@compound-engineering-plugin\n"
+                  "    Version: 3.23.4\n"
+                  "    Scope: user\n"
+                  "    Status: ✘ disabled\n"
+                  "\n"
+                  "  ❯ other-plugin@other\n"
+                  "    Version: 1.0.0\n"
+                  "    Scope: user\n"
+                  "    Status: ✔ enabled")
+        self.assertIsNone(mf._plugin_version(backends.build("claude").CAPABILITY, output))
+
+    def test_codex_pattern_already_excludes_a_disabled_status(self):
+        # codex's CLI has no disable/enable subcommand and cannot currently produce this state,
+        # but the pattern's literal "installed, enabled" requirement already excludes it.
+        output = "compound-engineering@compound-engineering-plugin  installed, disabled  3.23.4   /tmp/plugin"
+        self.assertIsNone(mf._plugin_version(backends.build("codex").CAPABILITY, output))
+
+    def test_claude_pattern_accepts_a_status_line_with_no_glyph(self):
+        # The glyph before "enabled"/"disabled" is optional in the pattern so a future CLI
+        # dropping it doesn't silently stop matching; pin that branch directly.
+        output = ("  ❯ compound-engineering@compound-engineering-plugin\n"
+                  "    Version: 3.23.4\n"
+                  "    Scope: user\n"
+                  "    Status: enabled")
+        self.assertEqual(mf._plugin_version(backends.build("claude").CAPABILITY, output), "3.23.4")
 
 
 class SharedSurface(unittest.TestCase):

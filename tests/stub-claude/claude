@@ -86,7 +86,10 @@ def next_entry(queue):
 
 def main(argv):
     if argv == ["plugin", "list"]:
-        print("  ❯ compound-engineering@compound-engineering-plugin\n    Version: 3.23.4")
+        print("  ❯ compound-engineering@compound-engineering-plugin\n"
+              "    Version: 3.23.4\n"
+              "    Scope: user\n"
+              "    Status: ✔ enabled")
         return 0
 
     if argv[:1] == ["--version"]:

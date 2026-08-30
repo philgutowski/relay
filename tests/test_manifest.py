@@ -9,7 +9,7 @@ from unittest import mock
 
 import _paths
 import _repo
-from relay import contracts, manifest as mf
+from relay import backends, contracts, manifest as mf
 
 FIXTURE = os.path.join(_paths.FIXTURES_DIR, "manifests", "complete.toml")
 
@@ -301,8 +301,12 @@ class BackendReadiness(ManifestCase):
     def plugin_result(self, output, code=0):
         return SimpleNamespace(returncode=code, stdout=output, stderr="")
 
-    def claude_plugin_output(self, version="3.23.4"):
-        return "  ❯ compound-engineering@compound-engineering-plugin\n    Version: %s" % version
+    def claude_plugin_output(self, version="3.23.4", status="enabled"):
+        symbol = "✔" if status == "enabled" else "✘"
+        return ("  ❯ compound-engineering@compound-engineering-plugin\n"
+                "    Version: %s\n"
+                "    Scope: user\n"
+                "    Status: %s %s" % (version, symbol, status))
 
     def test_missing_binary_names_the_backend_before_launch(self):
         with mock.patch.object(mf.shutil, "which", return_value=None) as which, \
@@ -320,6 +324,27 @@ class BackendReadiness(ManifestCase):
         self.assertFalse(result.ok)
         self.assertTrue(any("claude" in error and "plugin" in error for error in result.errors))
         self.assertFalse(any("binary" in error for error in result.errors))
+
+    def test_disabled_plugin_is_refused_even_at_a_qualifying_version(self):
+        # skills-relay-contracts-129-disabled-plugin-ready: a listed, version-qualifying plugin
+        # that is disabled cannot provide the skills a Task process needs.
+        with mock.patch.object(mf.shutil, "which", return_value="/test-bin/claude"), \
+                mock.patch.object(mf, "_run_plugin_query",
+                                  return_value=self.plugin_result(self.claude_plugin_output(status="disabled"))):
+            result = mf.validate(self.load(), check_repo=False, check_environment=True, env=self.environment())
+        self.assertFalse(result.ok)
+        self.assertTrue(any("claude" in error and "plugin" in error for error in result.errors))
+
+    def test_the_stub_binary_produces_output_the_real_pattern_accepts(self):
+        # End-to-end, no mocking of _run_plugin_query: runs the actual stub `claude` subprocess
+        # and feeds its real stdout through the real extraction regex, so the stub's plugin-list
+        # shape and the pattern it stands in for cannot silently drift apart the way every other
+        # test in this class (which mocks _run_plugin_query) would never catch.
+        capability = backends.build("claude").CAPABILITY
+        env = dict(os.environ, PATH=_paths.STUB_DIR + os.pathsep + os.environ.get("PATH", ""))
+        completed = mf._run_plugin_query(capability, env)
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(mf._plugin_version(capability, completed.stdout), "3.23.4")
 
     def test_below_floor_plugin_is_refused(self):
         with mock.patch.object(mf.shutil, "which", return_value="/test-bin/claude"), \
