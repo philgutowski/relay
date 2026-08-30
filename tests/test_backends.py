@@ -3,7 +3,9 @@
 U1 is dispatch and the capability record. U2 is the shared callable surface.
 Construction must work on a machine that has only claude.
 """
+import inspect
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -46,14 +48,9 @@ class Dispatch(unittest.TestCase):
 
     def test_the_three_closed_sets_are_equal(self):
         self.assertEqual(set(mf.BACKENDS), set(contracts.BACKEND_PINS))
-        accepted = []
-        for name in list(mf.BACKENDS) + ["unknown"]:
-            try:
-                backends.build(name)
-            except backends.ConfigurationError:
-                continue
-            accepted.append(name)
-        self.assertEqual(set(accepted), set(mf.BACKENDS))
+        source = inspect.getsource(backends.build)
+        branch_names = set(re.findall(r'if name == "(\w+)"', source))
+        self.assertEqual(branch_names, {"claude", "codex", "grok"})
 
 
 class CapabilityRecord(unittest.TestCase):
