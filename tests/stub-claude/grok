@@ -2,9 +2,8 @@
 """Stub `grok` for Relay's tests (Backends U12). Never calls a model.
 
 Accepts exactly the flag grammar `backends.grok.build_args` builds and writes a queued fixture
-to ~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl, the path
-`backends.grok.evidence_sources` computes from the same encoding rule (KTD4: the same
-`urllib.parse.quote(cwd, safe="")` call, not a re-derived one). Queue protocol, sleep, orphan
+to the path `backends.grok.evidence_sources` computes (KTD4: called directly, not re-derived),
+~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl. Queue protocol, sleep, orphan
 child, and the git.sh hook: see _stub.py.
 
 RELAY_STUB_CLI_VERSION=<text> overrides the fake `--version` output (default is
@@ -13,18 +12,14 @@ contracts.BACKEND_PINS["grok"]["version_output_sample"]).
 import os
 import shutil
 import sys
-from urllib.parse import quote
 
 import _stub
 
-_SCRIPTS_DIR = os.path.normpath(os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "skills", "relay", "scripts"))
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
-
-from relay import contracts  # noqa: E402
+_stub.ensure_relay_on_path()
+from relay import backends, contracts  # noqa: E402
 
 _PINS = contracts.BACKEND_PINS["grok"]
+_GROK = backends.build("grok")
 
 # Flags backends.grok.build_args actually emits. Anything outside this set is refused (KTD2):
 # a lenient stub would silently accept a build_args regression instead of failing the test that
@@ -78,11 +73,9 @@ def main(argv):
         if not (fixture and session_id):
             return
         fixture = _stub.resolve(queue, fixture)
-        encoded = quote(os.path.realpath(os.getcwd()), safe="")
-        target_dir = os.path.join(os.path.expanduser("~"), ".grok", "sessions", encoded,
-                                   session_id)
-        os.makedirs(target_dir, exist_ok=True)
-        target = os.path.join(target_dir, "updates.jsonl")
+        (target,) = _GROK.evidence_sources(os.path.expanduser("~"),
+                                            os.path.realpath(os.getcwd()), session_id)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
         shutil.copyfile(fixture, target)
         _stub.emit({"type": "system", "subtype": "stub_transcript", "path": target})
 

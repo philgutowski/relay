@@ -32,13 +32,16 @@ def write_entry(queue, n, fixture, exit_code=0, sleep=0, git_sh=None):
             handle.write(git_sh)
 
 
-class StubClaude(unittest.TestCase):
+class _StubTestCase(unittest.TestCase):
+    """The tempdir, HOME, queue, and PATH scaffolding every stub test class needs, shared the
+    way _stub.py shares the binaries' own queue-and-replay machinery."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = os.path.join(self.tmp.name, "home")
-        self.cwd = os.path.join(self.tmp.name, "repo")
+        self.repo = os.path.join(self.tmp.name, "repo")
         self.queue = os.path.join(self.tmp.name, "queue")
-        for path in (self.home, self.cwd, self.queue):
+        for path in (self.home, self.repo, self.queue):
             os.makedirs(path)
         self.env = dict(os.environ, HOME=self.home, RELAY_STUB_QUEUE=self.queue,
                         PATH=_paths.STUB_DIR + os.pathsep + os.environ.get("PATH", ""))
@@ -48,10 +51,27 @@ class StubClaude(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def assert_child_holds_pipe(self, argv):
+        """A grandchild inherits stdout, so the pipe stays open after the stub exits. U6 relies
+        on this shape to prove its group kill; here we only check the child exists."""
+        env = dict(self.env, RELAY_STUB_CHILD="1")
+        stub_log = os.path.join(self.tmp.name, "stub.log")
+        with open(stub_log, "w") as log:
+            proc = subprocess.Popen(argv, cwd=self.repo, env=env, stdout=log,
+                                     stderr=subprocess.STDOUT)
+            proc.wait(timeout=30)
+        with open(stub_log) as log:
+            pids = [json.loads(l)["pid"] for l in log if "stub_child" in l]
+        self.assertEqual(len(pids), 1)
+        os.kill(pids[0], 0)
+        os.kill(pids[0], 9)
+
+
+class StubClaude(_StubTestCase):
     def invoke(self, session_id):
         return subprocess.run(
             ["claude", "-p", "brief text", "--session-id", session_id] + RUNNER_FLAGS,
-            cwd=self.cwd, env=self.env, capture_output=True, text=True, timeout=30,
+            cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=30,
         )
 
     def test_two_entry_queue_replays_fixtures_exit_codes_and_git_script(self):
@@ -62,14 +82,14 @@ class StubClaude(unittest.TestCase):
         second = self.invoke("22222222-2222-4222-8222-222222222222")
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         self.assertEqual(second.returncode, 3, second.stdout + second.stderr)
-        realcwd = os.path.realpath(self.cwd)
+        realcwd = os.path.realpath(self.repo)
         for sid, fixture in (("11111111-1111-4111-8111-111111111111", "success.jsonl"),
                              ("22222222-2222-4222-8222-222222222222", "blocked.jsonl")):
             expected = contracts.transcript_path(self.home, realcwd, sid)
             self.assertTrue(os.path.exists(expected), "transcript missing at %s" % expected)
             with open(expected) as got, open(os.path.join(FIXTURES, fixture)) as want:
                 self.assertEqual(got.read(), want.read())
-        self.assertTrue(os.path.exists(os.path.join(self.cwd, "marker.txt")))
+        self.assertTrue(os.path.exists(os.path.join(self.repo, "marker.txt")))
         third = self.invoke("33333333-3333-4333-8333-333333333333")
         self.assertEqual(third.returncode, 97, "a spent queue must fail loudly")
 
@@ -81,7 +101,7 @@ class StubClaude(unittest.TestCase):
 
     def test_slug_agrees_with_runner_on_a_symlinked_path(self):
         link = os.path.join(self.tmp.name, "link")
-        os.symlink(self.cwd, link)
+        os.symlink(self.repo, link)
         write_entry(self.queue, 1, os.path.join(FIXTURES, "success.jsonl"))
         proc = subprocess.run(
             ["claude", "-p", "x", "--session-id", "44444444-4444-4444-8444-444444444444"] + RUNNER_FLAGS,
@@ -94,41 +114,17 @@ class StubClaude(unittest.TestCase):
         self.assertEqual(written, predicted)
 
     def test_stub_child_env_spawns_a_child_that_holds_the_pipe(self):
-        """A grandchild inherits stdout, so the pipe stays open after the stub exits. U6 relies
-        on this shape to prove its group kill; here we only check the child exists."""
         write_entry(self.queue, 1, os.path.join(FIXTURES, "success.jsonl"))
-        env = dict(self.env, RELAY_STUB_CHILD="1")
-        log_path = os.path.join(self.tmp.name, "stub.log")
-        with open(log_path, "w") as log:
-            proc = subprocess.Popen(
-                ["claude", "-p", "x", "--session-id", "55555555-5555-4555-8555-555555555555"] + RUNNER_FLAGS,
-                cwd=self.cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
-            )
-            proc.wait(timeout=30)
-        with open(log_path) as log:
-            pids = [json.loads(l)["pid"] for l in log if "stub_child" in l]
-        self.assertEqual(len(pids), 1)
-        os.kill(pids[0], 0)
-        os.kill(pids[0], 9)
+        self.assert_child_holds_pipe(
+            ["claude", "-p", "x", "--session-id", "55555555-5555-4555-8555-555555555555"] + RUNNER_FLAGS)
 
-class StubCodex(unittest.TestCase):
+
+class StubCodex(_StubTestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.home = os.path.join(self.tmp.name, "home")
-        self.repo = os.path.join(self.tmp.name, "repo")
-        self.queue = os.path.join(self.tmp.name, "queue")
-        for path in (self.home, self.repo, self.queue):
-            os.makedirs(path)
-        self.env = dict(os.environ, HOME=self.home, RELAY_STUB_QUEUE=self.queue,
-                        PATH=_paths.STUB_DIR + os.pathsep + os.environ.get("PATH", ""))
-        self.env.pop("RELAY_STUB_SLEEP", None)
-        self.env.pop("RELAY_STUB_CHILD", None)
+        super().setUp()
         self.mod = backends.build("codex")
         self.pins = contracts.BACKEND_PINS["codex"]
         self.fixtures = os.path.join(BACKEND_FIXTURES, "codex")
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def build_args(self, log_path, allowed=(), disallowed=()):
         task = types.SimpleNamespace(model="gpt-5-codex", effort="medium")
@@ -181,39 +177,16 @@ class StubCodex(unittest.TestCase):
     def test_stub_child_env_spawns_a_child_that_holds_the_pipe(self):
         fixture = os.path.join(self.fixtures, "last-message-complete.txt")
         write_entry(self.queue, 1, fixture)
-        env = dict(self.env, RELAY_STUB_CHILD="1")
         log_path = os.path.join(self.tmp.name, "T-3.stdout.log")
-        args = self.build_args(log_path)
-        stub_log = os.path.join(self.tmp.name, "stub.log")
-        with open(stub_log, "w") as log:
-            proc = subprocess.Popen(args, cwd=self.repo, env=env, stdout=log,
-                                     stderr=subprocess.STDOUT)
-            proc.wait(timeout=30)
-        with open(stub_log) as log:
-            pids = [json.loads(l)["pid"] for l in log if "stub_child" in l]
-        self.assertEqual(len(pids), 1)
-        os.kill(pids[0], 0)
-        os.kill(pids[0], 9)
+        self.assert_child_holds_pipe(self.build_args(log_path))
 
 
-class StubGrok(unittest.TestCase):
+class StubGrok(_StubTestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.home = os.path.join(self.tmp.name, "home")
-        self.repo = os.path.join(self.tmp.name, "repo")
-        self.queue = os.path.join(self.tmp.name, "queue")
-        for path in (self.home, self.repo, self.queue):
-            os.makedirs(path)
-        self.env = dict(os.environ, HOME=self.home, RELAY_STUB_QUEUE=self.queue,
-                        PATH=_paths.STUB_DIR + os.pathsep + os.environ.get("PATH", ""))
-        self.env.pop("RELAY_STUB_SLEEP", None)
-        self.env.pop("RELAY_STUB_CHILD", None)
+        super().setUp()
         self.mod = backends.build("grok")
         self.pins = contracts.BACKEND_PINS["grok"]
         self.fixtures = os.path.join(BACKEND_FIXTURES, "grok")
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def build_args(self, session_id, allowed=(), disallowed=()):
         task = types.SimpleNamespace(model="grok-4", effort="low")
@@ -265,39 +238,13 @@ class StubGrok(unittest.TestCase):
     def test_stub_child_env_spawns_a_child_that_holds_the_pipe(self):
         fixture = os.path.join(self.fixtures, "session-transcript-complete.jsonl")
         write_entry(self.queue, 1, fixture)
-        env = dict(self.env, RELAY_STUB_CHILD="1")
-        args = self.build_args("88888888-8888-4888-8888-888888888888")
-        stub_log = os.path.join(self.tmp.name, "stub.log")
-        with open(stub_log, "w") as log:
-            proc = subprocess.Popen(args, cwd=self.repo, env=env, stdout=log,
-                                     stderr=subprocess.STDOUT)
-            proc.wait(timeout=30)
-        with open(stub_log) as log:
-            pids = [json.loads(l)["pid"] for l in log if "stub_child" in l]
-        self.assertEqual(len(pids), 1)
-        os.kill(pids[0], 0)
-        os.kill(pids[0], 9)
+        self.assert_child_holds_pipe(self.build_args("88888888-8888-4888-8888-888888888888"))
 
 
-class CrossBackendQueue(unittest.TestCase):
+class CrossBackendQueue(_StubTestCase):
     """R11: one queue, drained by a Task on one backend and a Closeout on another, stays in
     strict numeric order. This is what makes the queue safe for a manifest that mixes
     backends within one run."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.home = os.path.join(self.tmp.name, "home")
-        self.repo = os.path.join(self.tmp.name, "repo")
-        self.queue = os.path.join(self.tmp.name, "queue")
-        for path in (self.home, self.repo, self.queue):
-            os.makedirs(path)
-        self.env = dict(os.environ, HOME=self.home, RELAY_STUB_QUEUE=self.queue,
-                        PATH=_paths.STUB_DIR + os.pathsep + os.environ.get("PATH", ""))
-        self.env.pop("RELAY_STUB_SLEEP", None)
-        self.env.pop("RELAY_STUB_CHILD", None)
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def test_claude_then_codex_consume_entries_in_order_and_a_third_backend_sees_it_spent(self):
         claude_fixture = os.path.join(FIXTURES, "success.jsonl")

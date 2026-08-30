@@ -25,6 +25,17 @@ import sys
 import time
 
 
+def ensure_relay_on_path():
+    """Puts skills/relay/scripts on sys.path so a stub can `from relay import ...` the same
+    contracts and backends modules the runner itself reads, rather than a second hardcoded
+    copy. Idempotent; codex and grok both call this, claude does not (its own defaults are a
+    deliberately unchanged literal, not a pin lookup)."""
+    scripts_dir = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "skills", "relay", "scripts"))
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+
+
 def emit(obj):
     print(json.dumps(obj), flush=True)
 

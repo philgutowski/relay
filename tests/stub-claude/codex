@@ -17,11 +17,7 @@ import sys
 
 import _stub
 
-_SCRIPTS_DIR = os.path.normpath(os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "skills", "relay", "scripts"))
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
-
+_stub.ensure_relay_on_path()
 from relay import contracts  # noqa: E402
 
 _PINS = contracts.BACKEND_PINS["codex"]
