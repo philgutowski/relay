@@ -112,7 +112,6 @@ CLI_FLAGS = (
     "--output-format",
     "--verbose",
 )
-PERMISSION_MODE = "dontAsk"
 FORBIDDEN_PERMISSION_MODE = "bypassPermissions"
 OUTPUT_FORMAT = "stream-json"
 
@@ -361,8 +360,9 @@ HALT_LINES = {
     HALT_LANDED: "landed at {ref}",
     HALT_BLOCKED_ENVELOPE: "blocked: {blocker}",
     HALT_NO_ENVELOPE: "exited without a return envelope; last message: {last_message}",
-    HALT_DENIED_TOOL: "{tool} denied under dontAsk on {target}",
-    HALT_PATH_GATE: "edit under .claude/ denied under dontAsk; apply attended, see solutions doc",
+    HALT_DENIED_TOOL: "{tool} denied by the task's permission posture on {target}",
+    HALT_PATH_GATE: "edit under .claude/ denied by the task's permission posture; "
+                    "apply attended, see solutions doc",
     HALT_TRACKER_WRITE_DENIED: "code landed, card unmoved: {tool} denied",
     HALT_REMOTE_ADVANCED: "remote moved during the task; merge aborted at {sha}",
     HALT_CLOSEOUT_OUT_OF_SCOPE: "closeout changed {path} outside {allowed}",

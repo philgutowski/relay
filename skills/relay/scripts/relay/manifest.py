@@ -396,10 +396,11 @@ def validate(manifest, check_repo=True, check_environment=False, env=None):
     if not _is_string_list(manifest.project.mirror):
         err("project.mirror must be an array of strings (an argument list, never a shell string)")
 
-    # R10, R11: dontAsk only; the disallow list carries every R10 variant.
+    # R10, R11: the disallow list carries every R10 variant, for whichever backend a task runs.
     raw_perms = manifest.raw.get("permissions", {})
     if "permission_mode" in raw_perms or "mode" in raw_perms:
-        err("permissions.permission_mode is not a field; Relay always runs dontAsk (R11)")
+        err("permissions.permission_mode is not a field; permission posture is fixed per "
+            "backend by contracts.BACKEND_PINS, not settable from a manifest (R11)")
     if not _is_string_list(manifest.permissions.allowed) or not manifest.permissions.allowed:
         err("permissions.allowed must be a non-empty array of tool names")
     elif any(contracts.FORBIDDEN_PERMISSION_MODE in item for item in manifest.permissions.allowed):
