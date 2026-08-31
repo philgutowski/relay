@@ -1058,3 +1058,76 @@ class ContinuePastWithoutRepair(RunCase):
         third = self.go()
         self.assertEqual(third.exit_code, runner.EXIT_OK, third.message)
         self.assertEqual(self.store().get("T-2")["status"], contracts.STATUS_LANDED)
+
+
+CODEX_LAST_MESSAGE = os.path.join(_paths.FIXTURES_DIR, "backends", "codex",
+                                  "last-message-complete.txt")
+
+
+class UnenforcedRun(RunCase):
+    """Backends U10: record, bound, and audit on a Codex Task."""
+
+    def load_codex(self, bound=None):
+        bound = bound or ["src/"]
+        text = MANIFEST.replace("__REPO__", self.repo)
+        text = text.replace("[permissions]",
+                            "[permissions]\n"
+                            "unenforced_acceptance = \"fixture: operator accepts unenforced Codex\"\n"
+                            "task_allowed_paths = %s" % json.dumps(bound), 1)
+        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        # One Task: drop T-2 and T-3 so the queue is a single Task plus its Closeout.
+        text = text.split("[[tasks]]")[0] + "[[tasks]]" + text.split("[[tasks]]")[1]
+        with open(self.manifest_path, "w") as handle:
+            handle.write(text)
+        self.manifest = mf.load(self.manifest_path)
+
+    def stream(self, command):
+        path = os.path.join(self.tmp.name, "codex-stream.jsonl")
+        event = {"type": "item.completed", "item": {
+            "id": "item_1", "type": "command_execution", "command": command,
+            "aggregated_output": "ok\n", "exit_code": 0, "status": "completed"}}
+        with open(path, "w") as handle:
+            handle.write(json.dumps(event) + "\n")
+        return path
+
+    def queue_codex(self, command="/bin/zsh -lc 'pwd'", git_sh=None):
+        self.queue_entry(CODEX_LAST_MESSAGE, git_sh or TASK_BRANCH_SH % ("T-1", "t_1", "T-1"),
+                         stream=self.stream(command))
+
+    def test_a_commit_outside_the_bound_halts_and_the_branch_survives(self):
+        self.load_codex(bound=["docs/"])
+        self.queue_codex()
+        origin = gitread.rev_parse(self.repo, "origin/main")
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED, outcome.message)
+        record = self.store().get("T-1")
+        self.assertEqual(record["halt_class"], contracts.HALT_PATH_GATE)
+        self.assertIn("src/t_1.py", record["halt_evidence"]["detail"])
+        self.assertIn("relay/T-1", self.relay_branches())
+        self.assertEqual(gitread.rev_parse(self.repo, "origin/main"), origin)
+        self.assertIsInstance(record.get("unenforced_restrictions"), str)
+
+    def test_a_non_destructive_disallowed_call_lands_with_a_finding(self):
+        self.load_codex(bound=["src/"])
+        self.queue_codex("/bin/zsh -lc 'pwd && git clean -fd'")
+        self.closeout_landed("T-1")
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        record = self.store().get("T-1")
+        self.assertEqual(record["status"], contracts.STATUS_LANDED)
+        hits = [f for f in record["findings"] if f["class"] == contracts.UNENFORCED_DISALLOWED]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["pattern"], "Bash(git clean*)")
+        self.assertIn("git clean", record["unenforced_restrictions"])
+
+    def test_a_destructive_call_refuses_the_landing(self):
+        self.load_codex(bound=["src/"])
+        self.queue_codex("/bin/zsh -lc 'ls && rm -rf /tmp/x'")
+        origin = gitread.rev_parse(self.repo, "origin/main")
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED, outcome.message)
+        record = self.store().get("T-1")
+        self.assertEqual(record["halt_class"], contracts.HALT_UNEXPECTED_ERROR)
+        self.assertEqual(record["halt_evidence"]["error_type"], "destructive_call")
+        self.assertIn("relay/T-1", self.relay_branches())
+        self.assertEqual(gitread.rev_parse(self.repo, "origin/main"), origin)
