@@ -3,6 +3,7 @@ title: In a headless task process ending the turn is exiting, so a backgrounded 
 date: 2026-08-27
 category: workflow-issues
 module: runner
+last_updated: 2026-08-31
 problem_type: workflow_issue
 component: runner
 severity: high
@@ -116,6 +117,41 @@ And it was exercised live the same day it was written. T-3 on the relay-proof th
 and T-1 of Relay's own first self run, a 15 minute task that landed at `bbdeba3` with a full
 suite run inside it, both completed under the new brief without ending a turn on backgrounded
 work.
+
+## Recurrence
+
+The brief rule alone did not hold. Round six, 2026-08-30, task #35 committed its fix, launched
+the unittest suite as a background Bash call, and still ended its turn on "Standing by for the
+test suite's completion notification." Under `claude -p` no such notification arrives after the
+final turn; the process exited with no envelope after 296s, and the runner classified
+`unclean_exit` off the task's own untracked plan file, a downstream symptom that named the dirty
+tree, not the waiting turn that caused it.
+
+Task #49 (commit `c9043ba`, merged `9076000`, 2026-08-31) closed the gap the brief-only fix left
+open: a task can still end on language that reads as waiting even after being told not to
+background work, and when it does, the record should say so regardless of which halt class the
+run lands in. The fix has two parts. The brief's foreground rule
+(`skills/relay/templates/brief-local-merge.md`, `brief-pr-terminal.md`) was sharpened to name
+background completion notifications specifically and forbid ending a turn on a promise to
+resume. And `skills/relay/scripts/relay/classify.py` gained a `waiting_last_message` finding
+(finding-only, KTD6, not a new halt class): whenever the run does not end in a complete envelope,
+a regex checks the last message for phrasings like "standing by," "will resume," or "once it
+finishes," and attaches the matched text as a finding so the Cause line names the real mechanism
+even when a halt like `unclean_exit` fires from unrelated evidence gathered afterward.
+
+The regex itself carries its own lesson. Two independent code-review lenses on task #49 caught
+that an earlier draft of the third branch required a noun between the pronoun and the verb, so
+it never matched the brief's own quoted cautionary phrase, "once it finishes," which is the
+exact wording a real task is most likely to echo back. A regex written to mirror a brief's
+language needs a fixture asserting it matches the brief's literal words, not the developer's
+paraphrase of them; `tests/fixtures/transcripts/once_it_finishes.jsonl` now pins that case
+alongside `outstanding_by.jsonl`, `will_resume.jsonl`, and `will_check_back.jsonl` for the other
+phrasings.
+
+The standing takeaway: a brief rule stated once is necessary but not sufficient for a class of
+failure the model can still fall into under a different disguise. Treat the brief as the first
+line of defense and the classifier finding as the second, and expect a third occurrence to look
+different again.
 
 ## Why This Matters
 
