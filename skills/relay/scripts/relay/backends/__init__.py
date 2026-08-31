@@ -98,6 +98,13 @@ def _read_jsonl(path):
     return lines, malformed, True
 
 
+def read_jsonl(path):
+    """Public name for `_read_jsonl`, for callers outside this package (classify.scan_self_kill).
+    Every in-package normalizer keeps using `_read_jsonl` directly; this just gives an outside
+    caller a name that is not the underscore-prefixed internal one."""
+    return _read_jsonl(path)
+
+
 def _argument_of(tool_input, keys):
     """The first present argument value among `keys`, in order. Shared by every backend's
     `normalize_stream`, parameterized by that backend's own argument-key tuple."""

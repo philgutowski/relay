@@ -160,12 +160,19 @@ def scan_self_kill(log_path, victim_pid):
     subprocess starts writing). Best-effort forensic scan, not a gate: a false match only adds a
     finding to an already-halted record. Returns a finding dict naming the matched command and
     its full PID list, or None when no kill-family command named `victim_pid`."""
-    lines, _malformed, opened = backends._read_jsonl(log_path)
+    lines, _malformed, opened = backends.read_jsonl(log_path)
     if not opened:
         return None
     victim = str(victim_pid)
     for _number, obj in lines:
         for leaf in _string_leaves(obj):
+            # Cheap prefilter: every KILL_LIKE_TOOLS glob (kill*, pkill*, killall*) requires the
+            # literal substring "kill", and unwrapping/splitting a command never invents one, so
+            # a leaf without it cannot match any of the three patterns. Skips the regex/split
+            # work in matches_disallow_pattern on every non-command string in the log (assistant
+            # prose, thinking traces, unrelated tool output).
+            if "kill" not in leaf:
+                continue
             for pattern in contracts.KILL_LIKE_TOOLS:
                 if matches_disallow_pattern(leaf, pattern):
                     pids = _PID_TOKEN_RE.findall(leaf)
