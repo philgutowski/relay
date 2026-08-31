@@ -133,6 +133,12 @@ class Skill(unittest.TestCase):
     def test_the_skill_names_no_permission_mode_but_dont_ask(self):
         self.assertNotIn("bypassPermissions", self.text)
 
+    def test_the_skill_points_at_the_backend_rubric_in_its_own_directory(self):
+        self.assertIn("references/backend-rubric.md", self.text)
+        self.assertRegex(self.text, r"(?i)do not write a backend the operator")
+        self.assertRegex(self.text, r"(?i)unenforced_acceptance")
+        self.assertRegex(self.text, r"(?i)never invent")
+
     def test_the_skill_still_carries_its_frontmatter_name_and_description(self):
         self.assertRegex(self.text, r"(?m)^name: relay$")
         self.assertRegex(self.text, r"(?m)^description: .{40,}$")
