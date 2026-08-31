@@ -11,7 +11,7 @@ the manifest, check it, start the runner, and later explain what happened. You n
 runner's work by hand.
 
 Read `CONCEPTS.md` at the repo root for the vocabulary: Runner, Manifest, Task process, Closeout
-process, Halt class, Verify-landed. Use those words with the operator.
+process, Backend, Halt class, Verify-landed. Use those words with the operator.
 
 ## The runner
 
@@ -22,7 +22,11 @@ Resolve `<runner>` once, from this skill's own directory as the harness gave it 
 
 ```text
 <runner> = <this skill's directory>/scripts/relay_cli.py
+<rubric> = <this skill's directory>/references/backend-rubric.md
 ```
+
+Read the file at `<rubric>` before proposing a backend. That path is under this skill's own
+directory, not the target repo. If the file cannot be opened, stop rather than inventing routing.
 
 The seven verbs, with the follower options on the two that follow:
 
@@ -60,9 +64,12 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
 1. Ask which repo and which tracker (jira, github, or markdown), then write a draft manifest and
    run `validate <manifest> --list` to read the candidate tasks back.
 2. Confirm with the operator, one question at a time: which tasks to include and in what order;
-   the model and effort for each; any task to exclude and why; and the three degraded path
+   the model, effort, and backend for each; any task to exclude and why; and the three degraded path
    answers, `on_blocked.merge_partial`, `on_blocked.open_followup`, and
-   `on_halt.continue_past_task_halt`. The third trades a mid run stop for throughput: on, a
+   `on_halt.continue_past_task_halt`. For each included Task, propose a backend from the rubric
+   with a one-line reason, then wait for accept or change. Do not write a backend the operator
+   has not seen. Nothing re-applies the rubric after they choose. A Jira tracker can only pair
+   with `claude`. The third degraded-path answer trades a mid run stop for throughput: on, a
    halt contained to one task pauses that task and the later independent tasks keep running,
    so several halts in a row surface only in the summary; off, the first halt stops the run.
    A value the operator gives goes into the manifest verbatim. Recommend when asked; never substitute your
@@ -70,19 +77,29 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
    `local_merge`, where the runner merges and pushes. `pr_terminal` is named in the schema and
    refused by `validate`: the run loop has no pull request sequence, so every task under it
    would halt without one being opened or checked.
-3. Ask for the four qualifying sentences, in the operator's own words, as data:
+3. If any chosen backend does not enforce tool restrictions at launch (today that is `codex`),
+   state that condition in plain words: launch-time refusal is gone, the Task path bound covers
+   commit scope only, and the evidence audit detects after the fact. Ask the operator to write
+   `permissions.unenforced_acceptance` in their own words, and to set `permissions.task_allowed_paths`.
+   Write only what they supply. Never invent either sentence or list, including to make validate
+   pass.
+4. Ask for the four qualifying sentences, in the operator's own words, as data:
    - `qualifying.gate`: what refuses a broken change, and how it is invoked.
    - `qualifying.durable_state`: where the state carried between tasks lives.
    - `qualifying.independence`: why the listed tasks do not depend on each other.
    - `qualifying.editors`: who can edit these cards and their comments. This one matters because
      card text is fed verbatim to an unattended process, so it names the accounts whose text is
      trusted to instruct one.
-4. Write the TOML. The gate command and any mirror rule are argument lists, never shell strings.
+5. Write the TOML. The gate command and any mirror rule are argument lists, never shell strings.
    The gate is one command, the one the operator named; when a project's merge bar is several
    commands, ask which one the runner runs and say what covers the others (a pre-commit hook,
    usually). Do not author a wrapper script to bundle them unless the operator asks for one.
    Do not add a permission mode field: permission posture is fixed per backend by
-   `contracts.BACKEND_PINS`, never a manifest choice.
+   `contracts.BACKEND_PINS`, never a manifest choice. Put a `[defaults] backend` when every Task
+   should inherit one. The resolved default is that value when the key is present, else `claude`.
+   On a Task whose backend differs from that resolved default, write `reason` with the one-line
+   reason they accepted, or the string they supplied after they changed the backend. One `reason`
+   also covers an excluded Task. A Task that matches the resolved default needs no reason.
 
 The examples under `docs/examples/` are the three shapes, one per adapter.
 
@@ -95,14 +112,19 @@ python3 <runner> validate <manifest>
 Refuse to launch when it exits nonzero, and name the property that failed rather than the exit
 code. A missing qualifying satisfier is the most common one: say which of `qualifying.gate`,
 `qualifying.durable_state`, `qualifying.independence`, or `qualifying.editors` has no sentence,
-and ask the operator for it. Do not invent one on their behalf. If validate names a missing
-credential environment variable, ask them to set it and run validate again.
+and ask the operator for it. Do not invent one on their behalf. A missing
+`permissions.unenforced_acceptance`, a missing `task_allowed_paths` on an unenforced backend,
+or a Task whose backend differs from the default with no `reason`, is the same shape: ask for
+the operator's words, never invent them. If validate names a missing credential environment
+variable, ask them to set it and run validate again. A backend readiness failure (binary
+missing, plugin missing or below floor) is also a validate refusal, before any Task launches.
+See Backend readiness below.
 
 ## Confirm before launch
 
 Launching starts an unattended process that will merge and push to the operator's repository.
-After validate passes, show the manifest path, the task list with model and effort, and the
-gate command, then ask for an explicit go. Do not launch on the strength of the manifest being
+After validate passes, show the manifest path, the task list with model, effort, and backend,
+and the gate command, then ask for an explicit go. Do not launch on the strength of the manifest being
 valid, and do not launch when the operator has said to stop before launch.
 
 ## Launch
@@ -215,6 +237,7 @@ stranded `relay/<task-id>` branch still carries commits; that work is theirs to 
 
 ## What this skill never does
 
-Never merge, push, or move a card yourself. Never edit a manifest's qualifying sentences to make
-validate pass. Never break a live lease without the operator saying so. Never suggest a permission
-mode other than the one Relay uses.
+Never merge, push, or move a card yourself. Never edit a manifest's qualifying sentences, the
+unenforced acceptance sentence, or a Task `reason` to make validate pass. Never break a live
+lease without the operator saying so. Never suggest a permission mode other than the one Relay
+uses. This skill itself runs in Claude Code. Only the launched Task and Closeout processes vary.

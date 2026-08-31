@@ -64,7 +64,8 @@ per-Task timeouts, and how each of the project's qualifying properties is satisf
 One unit of work the operator defined before the run started, identified by a Tracker record. Tasks
 in a Manifest are independent of each other by requirement; a Task that depends on another belongs
 in a later run. A Task may be marked excluded from unattended runs, with a stated reason, when
-something about it needs a human present.
+something about it needs a human present. The same `reason` field is required when a Task's
+backend differs from the manifest default. A Task that matches the default needs none.
 
 ### Task process
 The single headless agent invocation that carries one Task from plan to landing. It starts with an
@@ -82,7 +83,10 @@ kills a background command is the process's own turn ending, not the Runner noti
 ### Backend
 The CLI that runs a Task process and that Task's Closeout process, one of `claude`, `codex`, or
 `grok`. A Task names its backend. A Manifest may default it. Absence of every backend key means
-`claude`. The Runner launches on that CLI. It does not choose or change the backend during a run.
+`claude`. `/relay` proposes one from a written rubric while the Manifest is authored. The
+operator sees every proposal and can change it. The Runner launches on that CLI. It does not
+choose or change the backend during a run. `/relay` itself still runs in Claude Code. Only
+the launched processes vary.
 
 ### Capability record
 The frozen facts the Runner reads about one backend: whether it enforces tool restrictions at
