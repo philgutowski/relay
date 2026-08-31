@@ -115,6 +115,7 @@ class Acquire(StateCase):
         self.assertEqual(record["halt_class"], contracts.HALT_RUNNER_CRASHED)
         self.assertEqual(record["halt_evidence"]["status_before"], contracts.STATUS_MERGING)
         self.assertEqual(record["halt_evidence"]["last_git_op"]["op"], "merge")
+        self.assertEqual(record["halt_evidence"]["previous_holder"]["holder_pid"], 100)
         self.assertEqual(self.store(pid=200).get("T-1")["status"], contracts.STATUS_LANDED)
 
     def test_stale_lease_reclaim_finds_the_task_s_own_kill_of_the_previous_holder(self):

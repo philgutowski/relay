@@ -209,7 +209,7 @@ class RunCase(unittest.TestCase):
         return state.StateStore(self.manifest_path, self.repo, home=self.home)
 
     def seed_stale_lease(self, pid=999999, ttl_seconds=1):
-        """A lease belonging to a different pid, self-recorded with a short ttl -- the shape a
+        """A lease belonging to a different pid, self-recorded with a short ttl, the shape a
         crashed runner leaves behind. state.py's staleness check reads this ttl off the lease
         record itself, so a caller reclaiming it only needs its own clock to read past
         `ttl_seconds`, real or injected; the seed store's own clock does not matter afterward."""
@@ -915,7 +915,13 @@ class ContinuePastHalt(RunCase):
         self.task_success("T-3")
         self.closeout_landed("T-3")
 
-        outcome = self.go(store=self.reclaiming_store())
+        store = self.reclaiming_store()
+        result = store.acquire()
+        self.assertEqual(result.code, state.STALE_RECLAIMED)
+        self.assertIsNone(store.terminal(), "the reclaim itself must not write a run-level "
+                          "terminal record before the run decides its own ending (R1)")
+
+        outcome = self.go(store=store)
         self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
         self.assertEqual(self.store().get("T-1")["halt_class"], contracts.HALT_GATE_REFUSED)
         self.assertTrue(self.store().get("T-1")["continued_past"])
@@ -937,7 +943,13 @@ class ContinuePastHalt(RunCase):
         self.seed_stale_reclaim_on_t1()
         self.task_success("T-1")
 
-        outcome = self.go(store=self.reclaiming_store())
+        store = self.reclaiming_store()
+        result = store.acquire()
+        self.assertEqual(result.code, state.STALE_RECLAIMED)
+        self.assertIsNone(store.terminal(), "the reclaim itself must not write a run-level "
+                          "terminal record before the run decides its own ending (R1)")
+
+        outcome = self.go(store=store)
         self.assertEqual(outcome.exit_code, runner.EXIT_HALTED, outcome.message)
         self.assertEqual(outcome.halt_task, "T-1")
         terminal = self.store().terminal()
