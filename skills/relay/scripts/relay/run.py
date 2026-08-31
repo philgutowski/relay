@@ -295,7 +295,7 @@ def _unenforced_scalar(manifest):
     """A Cause-line-safe string naming the unenforced disallow patterns."""
     inners = []
     for pattern in manifest_module.resolved_disallowed(manifest):
-        inner = pattern[5:-1] if pattern.startswith("Bash(") and pattern.endswith(")") else pattern
+        inner = contracts.disallow_inner(pattern)
         if inner not in inners:
             inners.append(inner)
     return "disallowed tools not enforced at launch: " + ", ".join(inners)

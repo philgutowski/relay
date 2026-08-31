@@ -95,6 +95,8 @@ class OwnVocabulary(unittest.TestCase):
         self.assertTrue(set(contracts.DESTRUCTIVE_TOOLS).issubset(contracts.DISALLOWED_TOOLS))
         self.assertIn("Bash(git reset --hard*)", contracts.DESTRUCTIVE_TOOLS)
         self.assertNotIn("Bash(git clean*)", contracts.DESTRUCTIVE_TOOLS)
+        self.assertEqual(contracts.disallow_inner("Bash(git clean*)"), "git clean*")
+        self.assertEqual(contracts.disallow_inner("Edit"), "Edit")
 
     def test_denial_regex_matches_the_observed_text(self):
         text = "Permission to use Edit has been denied because Claude Code is running in don't ask mode."

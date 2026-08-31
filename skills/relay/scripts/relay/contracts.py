@@ -257,6 +257,14 @@ DISALLOWED_TOOLS = (
     "Bash(rm -R *)",
 )
 
+
+def disallow_inner(pattern):
+    """The glob inside a `Bash(...)` rule, or the pattern unchanged."""
+    if pattern.startswith("Bash(") and pattern.endswith(")"):
+        return pattern[5:-1]
+    return pattern
+
+
 # Named subset of DISALLOWED_TOOLS. A match on an unenforced backend refuses the landing
 # rather than only annotating it. Force push, hard reset, and recursive delete. git clean
 # and git checkout -- .* stay in the parent tuple and land with a finding.

@@ -120,7 +120,7 @@ def _command_candidates(command):
 
 def matches_disallow_pattern(command, pattern):
     """True when `command` (Codex-shaped or bare) matches one DISALLOWED_TOOLS glob."""
-    inner = pattern[5:-1] if pattern.startswith("Bash(") and pattern.endswith(")") else pattern
+    inner = contracts.disallow_inner(pattern)
     for candidate in _command_candidates(command):
         if fnmatch.fnmatch(candidate, inner) or fnmatch.fnmatch(candidate, pattern):
             return True
