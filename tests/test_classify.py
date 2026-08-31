@@ -520,6 +520,79 @@ class CodexEvidence(unittest.TestCase):
         self.assertEqual(classes(r), [])
 
 
+class UnenforcedAudit(unittest.TestCase):
+    """Backends U10: walk Codex tool_use commands against DISALLOWED_TOOLS."""
+
+    def _event(self, command):
+        return {
+            "type": "item.completed",
+            "item": {
+                "id": "item_1",
+                "type": "command_execution",
+                "command": command,
+                "aggregated_output": "",
+                "exit_code": 0,
+                "status": "completed",
+            },
+        }
+
+    def _classify(self, command, patterns=None, backend="codex", last_message="last-message-complete.txt"):
+        import json
+        import tempfile
+        event = self._event(command)
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+            handle.write(json.dumps(event) + "\n")
+            log_path = handle.name
+        try:
+            launch = SimpleNamespace(timed_out=False, exit_code=0, log_path=log_path)
+            return classify.classify(
+                os.path.join(CODEX_FIXTURES, last_message), launch,
+                backend=backend,
+                disallow_patterns=patterns or list(contracts.DISALLOWED_TOOLS),
+            )
+        finally:
+            os.unlink(log_path)
+
+    def test_a_wrapped_git_clean_is_a_finding_and_still_routable(self):
+        r = self._classify("/bin/zsh -lc 'pwd && git clean -fd'")
+        hits = [f for f in r["findings"] if f["class"] == contracts.UNENFORCED_DISALLOWED]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["tool"], "Bash")
+        self.assertIn("git clean -fd", hits[0]["argument"])
+        self.assertEqual(hits[0]["pattern"], "Bash(git clean*)")
+        self.assertTrue(r["routable"])
+        self.assertIsNone(r["halt_class"])
+        self.assertIsInstance(r["tool_calls"], int)
+
+    def test_a_wrapped_rm_rf_is_a_finding_and_classify_does_not_halt(self):
+        r = self._classify("/bin/zsh -lc 'ls && rm -rf /tmp/x'")
+        hits = [f for f in r["findings"] if f["class"] == contracts.UNENFORCED_DISALLOWED]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["pattern"], "Bash(rm -rf*)")
+        self.assertIsNone(r["halt_class"])
+        self.assertTrue(r["routable"])
+
+    def test_a_claude_denial_does_not_also_raise_the_unenforced_class(self):
+        r = classify.classify(
+            os.path.join(FIXTURES, "path_gate.jsonl"), EXITED,
+            backend="claude",
+            disallow_patterns=list(contracts.DISALLOWED_TOOLS),
+        )
+        self.assertNotIn(contracts.UNENFORCED_DISALLOWED, classes(r))
+        self.assertIn(contracts.HALT_PATH_GATE, classes(r))
+
+    def test_unreadable_evidence_does_not_look_like_a_clean_audit(self):
+        empty_log = os.path.join(_paths.FIXTURES_DIR, "does-not-exist.jsonl")
+        launch = SimpleNamespace(timed_out=False, exit_code=0, log_path=empty_log)
+        r = classify.classify(
+            os.path.join(CODEX_FIXTURES, "last-message-complete.txt"), launch,
+            backend="codex",
+            disallow_patterns=list(contracts.DISALLOWED_TOOLS),
+        )
+        self.assertTrue(r["findings_unavailable"])
+        self.assertIsNone(r["findings"])
+
+
 GROK_FIXTURES = os.path.join(BACKEND_FIXTURES, "grok")
 
 

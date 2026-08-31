@@ -19,10 +19,18 @@ gate_refused, partial_landing,
 tracker_write_denied as a class, remote_advanced, closeout_out_of_scope, and ci_undecided need
 git or tracker evidence and are assigned by verify (U8); the findings here attach to them.
 """
+import fnmatch
 import json
 import re
 
 from . import backends, contracts, summary
+
+# Codex wraps the real command in `/bin/zsh -lc '...'`. The inner script, and each
+# `&&` / `||` / `;` / newline segment of it, is what DISALLOWED_TOOLS globs against.
+_SHELL_WRAP = re.compile(
+    r"^(?:/(?:usr/)?bin/)?(?:[\w.+-]+/)*(?:ba)?sh(?:\s+-l)?\s+-[lc]\s+(.*)\Z",
+    re.DOTALL | re.IGNORECASE,
+)
 
 LAST_MESSAGE_CHARS = 200
 ARGUMENT_CHARS = 120
@@ -83,6 +91,42 @@ def matches_write_pattern(tool_use, patterns):
         for suffix in patterns.get("paths", ()):
             if path == suffix or path.endswith("/" + suffix):
                 return True
+    return False
+
+
+def _unwrap_command(command):
+    """Strip a `Bash(...)` wrapper and a `zsh -lc` / `bash -c` wrapper. Inner quotes stay off."""
+    text = (command or "").strip()
+    if text.startswith("Bash(") and text.endswith(")"):
+        text = text[5:-1]
+    match = _SHELL_WRAP.match(text)
+    if not match:
+        return text
+    inner = match.group(1).strip()
+    if len(inner) >= 2 and inner[0] == inner[-1] and inner[0] in "'\"":
+        inner = inner[1:-1]
+    return inner
+
+
+def _command_candidates(command):
+    unwrapped = _unwrap_command(command)
+    parts = [p for p in re.split(r"\s*(?:&&|\|\||;|\n)\s*", unwrapped) if p]
+    seen = []
+    for candidate in (command, unwrapped) + tuple(parts):
+        if candidate and candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
+def matches_disallow_pattern(command, pattern):
+    """True when `command` (Codex-shaped or bare) matches one DISALLOWED_TOOLS glob."""
+    inner = pattern[5:-1] if pattern.startswith("Bash(") and pattern.endswith(")") else pattern
+    for candidate in _command_candidates(command):
+        if fnmatch.fnmatch(candidate, inner) or fnmatch.fnmatch(candidate, pattern):
+            return True
+        bash_form = "Bash(%s)" % candidate
+        if fnmatch.fnmatch(bash_form, pattern):
+            return True
     return False
 
 
@@ -170,7 +214,8 @@ def parse_envelope(text):
     }
 
 
-def classify(transcript_path, launch_result, write_tool_patterns=None, backend="claude"):
+def classify(transcript_path, launch_result, write_tool_patterns=None, backend="claude",
+             disallow_patterns=None):
     """Signature from plan U7, extended by Backends U6 with `backend`. `launch_result` needs
     `timed_out` and `exit_code` attributes; U6 also reads its `log_path` when present, since a
     backend's evidence can span more than one file (Codex's last-message file plus its stdout
@@ -201,6 +246,11 @@ def classify(transcript_path, launch_result, write_tool_patterns=None, backend="
     result["undetectable"] = sorted(evidence.undetectable)
     if module.readable(transcript_path, evidence):
         result["transcript_present"] = True
+    audit = (
+        bool(disallow_patterns)
+        and result["transcript_present"]
+        and not module.CAPABILITY.enforces_at_launch
+    )
     lines = evidence.lines
 
     tool_uses = {}
@@ -221,6 +271,22 @@ def classify(transcript_path, launch_result, write_tool_patterns=None, backend="
                 if block.get("type") == "tool_use":
                     result["tool_calls"] += 1
                     tool_uses[block.get("id")] = dict(block, _line=number)
+                    if audit:
+                        command = ""
+                        inp = block.get("input")
+                        if isinstance(inp, dict):
+                            command = str(inp.get("command") or "")
+                        if command:
+                            for pattern in disallow_patterns:
+                                if matches_disallow_pattern(command, pattern):
+                                    result["findings"].append({
+                                        "class": contracts.UNENFORCED_DISALLOWED,
+                                        "tool": block.get("name") or "Bash",
+                                        "argument": command,
+                                        "line": number,
+                                        "pattern": pattern,
+                                    })
+                                    break
                     if block.get("name") == "Skill":
                         skill = str((block.get("input") or {}).get("skill", ""))
                         required = required_skill_for(skill, backend)

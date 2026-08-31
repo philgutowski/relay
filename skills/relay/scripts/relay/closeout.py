@@ -53,6 +53,7 @@ FULL_DEPTH_FINDINGS = (
     contracts.HALT_PATH_GATE,
     contracts.HALT_TRACKER_WRITE_DENIED,
     contracts.HALT_SKILL_SUBSTITUTION,
+    contracts.UNENFORCED_DISALLOWED,
 )
 
 
