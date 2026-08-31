@@ -158,6 +158,18 @@ _KILL_COMMAND_RE = re.compile(
     )
 )
 
+# Round six #49: a last message that reads as waiting on background work headless will never
+# resume, task #35's own shape ("Standing by for the test suite's completion notification.").
+# Bounded to the task text's three named phrasings plus close variants, not a general sentiment
+# classifier; a differently phrased occurrence is an accepted false negative on a best-effort
+# diagnostic finding, the same posture _KILL_COMMAND_RE takes for its own three command names.
+_WAITING_LAST_MESSAGE_RE = re.compile(
+    r"\bstanding by\b"
+    r"|\bwill (?:resume|check back)\b"
+    r"|\bonce (?:it|this|the \w+) (?:finishes|completes|is done)\b",
+    re.I,
+)
+
 
 def _string_leaves(value):
     """Every string value nested inside a parsed JSON object, list, or string, depth-first.
@@ -415,6 +427,24 @@ def classify(transcript_path, launch_result, write_tool_patterns=None, backend="
     result["last_message_tail"] = (last_text or "")[-LAST_MESSAGE_CHARS:] or None
     envelope = parse_envelope(last_text) if last_text else None
     result["envelope"] = envelope
+
+    # Round six #49: a finding, not a halt class (KTD6). Fires whenever the run did not end in a
+    # complete envelope, regardless of which halt class the record ends up with, so it survives
+    # to the record ahead of a downstream halt like unclean_exit from a dirty tree (run.py raises
+    # that one from git evidence gathered after this digest is already written).
+    if last_text and not (envelope and envelope["status"] == contracts.ENVELOPE_STATUS_COMPLETE):
+        waiting_match = _WAITING_LAST_MESSAGE_RE.search(last_text)
+        if waiting_match:
+            # Centered on the match rather than reusing the head-truncated `last_message`: the
+            # phrase this finding exists to surface can sit past the first LAST_MESSAGE_CHARS,
+            # the same truncation gap `last_message_tail` above exists to cover for a different
+            # field.
+            start = max(0, waiting_match.start() - LAST_MESSAGE_CHARS // 2)
+            end = waiting_match.end() + LAST_MESSAGE_CHARS // 2
+            result["findings"].append({
+                "class": contracts.WAITING_LAST_MESSAGE,
+                "last_message": last_text[start:end],
+            })
 
     # Precedence (KTD6): timeout beats all; then an evidence source that would not open; then
     # the envelope; a path_gate finding on a blocked or absent envelope is the more specific

@@ -125,6 +125,7 @@ class SkillPinning(BriefCase):
         for mode, text in self.each_template():
             self.assertIn("foreground", text, mode)
             self.assertIn("ending your turn is exiting", text, mode)
+            self.assertIn("completion notification does not survive the final turn", text, mode)
 
     def test_the_contract_strings_come_from_contracts_rather_than_the_template(self):
         local = self.render()

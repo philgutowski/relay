@@ -125,6 +125,42 @@ NO_ENVELOPE_TEXT = (
     "Alternatively, say \"merge without it\" and I will merge the nine commits as they stand.\n\n"
     "Current state, verified just now: branch relay/T-1, 8 commits ahead of main, clean tree, nothing pushed."
 )
+WAITING_TEXT = (
+    "The fix is committed. Kicking off the test suite in the background now.\n\n"
+    "Standing by for the test suite's completion notification."
+)
+# The recap runs past LAST_MESSAGE_CHARS (200) before the waiting phrase, so a finding that
+# reused the head-truncated `last_message` would miss it entirely.
+WAITING_FAR_TEXT = (
+    "Recap of everything applied this round, file by file, so the reviewer has full context "
+    "before the next step: contracts.py gained the new finding class, classify.py gained the "
+    "detection regex and the append site, both brief templates gained the sharpened rule, and "
+    "every touched test file gained matching coverage.\n\n"
+    "Standing by for the test suite's completion notification."
+)
+OUTSTANDING_BY_TEXT = (
+    "Nine commits landed. One item outstanding by end of day: the dashboard link needs the "
+    "reviewer's sign-off before merge.\n\n" + ENVELOPE_COMPLETE
+)
+WAITING_THEN_COMPLETE_TEXT = (
+    "The gate is still finishing. Standing by for the test suite's completion notification. "
+    "It just finished green.\n\n" + ENVELOPE_COMPLETE
+)
+WILL_RESUME_TEXT = (
+    "The fix is committed and the suite is running in the background.\n\n"
+    "I will resume once it wraps up."
+)
+WILL_CHECK_BACK_TEXT = (
+    "The fix is committed and the suite is running in the background.\n\n"
+    "I will check back once it wraps up."
+)
+ONCE_IT_FINISHES_TEXT = (
+    "Kicking off the full suite in the background now.\n\n"
+    "Once it finishes, I'll report back."
+)
+WAITING_THEN_BLOCKED_TEXT = (
+    "Standing by for the test suite's completion notification.\n\n" + ENVELOPE_BLOCKED
+)
 QUOTED_CARD_TEXT = (
     "Read the card. It currently reads:\n\n"
     "> status: Done\n> assignee: nobody\n\n"
@@ -178,6 +214,50 @@ def blocked():
 
 def no_envelope():
     return finish(build_common_prefix(), NO_ENVELOPE_TEXT)
+
+
+def waiting_last_message():
+    """Round six #35's own shape: a background gate command and an ending on a promise to
+    resume, which headless claude -p never delivers."""
+    return finish(build_common_prefix(), WAITING_TEXT)
+
+
+def waiting_last_message_past_the_head_truncation():
+    """The waiting phrase sits past the first 200 characters of the last message."""
+    return finish(build_common_prefix(), WAITING_FAR_TEXT)
+
+
+def will_resume():
+    """The regex's second alternative, isolated from the other two."""
+    return finish(build_common_prefix(), WILL_RESUME_TEXT)
+
+
+def will_check_back():
+    """The regex's second alternative, the other named phrasing."""
+    return finish(build_common_prefix(), WILL_CHECK_BACK_TEXT)
+
+
+def once_it_finishes():
+    """The brief's own quoted cautionary phrase, verbatim, isolated from the other branches."""
+    return finish(build_common_prefix(), ONCE_IT_FINISHES_TEXT)
+
+
+def waiting_then_blocked():
+    """R4's gate is `not complete`, not `absent`: a blocked envelope preceded by waiting
+    language still trips the finding, unlike a complete one."""
+    return finish(build_common_prefix(), WAITING_THEN_BLOCKED_TEXT)
+
+
+def outstanding_by():
+    """`"standing by"` has no word-boundary protection of its own; `"outstanding by"` must not
+    match it, the same substring-match trap `_KILL_COMMAND_RE` is anchored to avoid."""
+    return finish(build_common_prefix(), OUTSTANDING_BY_TEXT)
+
+
+def waiting_then_complete():
+    """R4: waiting language followed by a delivered, complete envelope did not exhibit the
+    failure. The finding must not fire for it."""
+    return finish(build_common_prefix(), WAITING_THEN_COMPLETE_TEXT)
 
 
 def path_gate():
@@ -300,6 +380,15 @@ if __name__ == "__main__":
     write("success.jsonl", success)
     write("blocked.jsonl", blocked)
     write("no_envelope.jsonl", no_envelope)
+    write("waiting_last_message.jsonl", waiting_last_message)
+    write("waiting_last_message_past_the_head_truncation.jsonl",
+          waiting_last_message_past_the_head_truncation)
+    write("outstanding_by.jsonl", outstanding_by)
+    write("will_resume.jsonl", will_resume)
+    write("will_check_back.jsonl", will_check_back)
+    write("once_it_finishes.jsonl", once_it_finishes)
+    write("waiting_then_blocked.jsonl", waiting_then_blocked)
+    write("waiting_then_complete.jsonl", waiting_then_complete)
     write("path_gate.jsonl", path_gate)
     write("skill_substitution.jsonl", skill_substitution)
     write("tracker_denied.jsonl", tracker_denied)

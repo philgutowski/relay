@@ -19,7 +19,11 @@ $data_end
 Run every command in the foreground and wait for it to finish. Never start a command or an agent
 in the background and end your turn to wait for it: in this session, ending your turn is exiting,
 and everything still running is killed with you. A mutation driver, a test suite, or a build that
-takes twenty minutes is twenty minutes of waiting, not a reason to background it.
+takes twenty minutes is twenty minutes of waiting, not a reason to background it. A background
+command's completion notification does not survive the final turn either, so run the gate itself
+in the foreground and wait for it the same way. Never end a turn on a promise to resume, "standing
+by", "will check back", "once it finishes", whether or not you actually backgrounded anything:
+there is no next turn to keep that promise on.
 
 $skill_form_rule
 
