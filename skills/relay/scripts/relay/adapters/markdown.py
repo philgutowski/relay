@@ -27,7 +27,7 @@ unclosed card.
 import re
 
 from .. import gitread
-from . import OUTCOME_LANDED, reference_hit, skipped
+from . import OUTCOME_HALTED, OUTCOME_LANDED, reference_hit, skipped
 
 TASK_RE = re.compile(r"^-\s*\[(?P<mark>[ xX])\]\s+(?P<id>\S+)\s*(?P<rest>.*?)\s*$")
 COMMENT_RE = re.compile(r"^\s+-\s+(?P<body>.*?)\s*$")
@@ -155,6 +155,10 @@ class MarkdownAdapter:
             return ("Edit the task's line in %s: change `[ ]` to `[x]` and append the landing "
                     "reference below in parentheses at the end of the line. Commit that file and "
                     "do not push; the runner pushes it under the gate." % self._file)
+        if outcome == OUTCOME_HALTED:
+            return ("Append one indented comment line under the task's line in %s naming the halt "
+                    "class and the cause line below, in the form `  - <date> <text>`. Leave the "
+                    "`[ ]` box unchecked. Commit that file and do not push." % self._file)
         return ("Append one indented comment line under the task's line in %s carrying the blocker "
                 "digest below, in the form `  - <date> <text>`. Leave the `[ ]` box unchecked. "
                 "Commit that file and do not push." % self._file)

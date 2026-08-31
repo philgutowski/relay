@@ -11,7 +11,7 @@ project board equals the status field the manifest names. The second is what let
 import json
 import subprocess
 
-from . import NETWORK_TIMEOUT_SECONDS, OUTCOME_LANDED, reference_hit, skipped
+from . import NETWORK_TIMEOUT_SECONDS, OUTCOME_HALTED, OUTCOME_LANDED, reference_hit, skipped
 
 # gh project item-list stops at 30 items unless told otherwise; a board past 30 made every
 # later card read as absent from the board (2026-08-29).
@@ -163,5 +163,9 @@ class GitHubAdapter:
         if outcome == OUTCOME_LANDED:
             return ("Close the issue with `gh issue close <number>` and add one comment naming the "
                     "landing reference below, or move its project item to the terminal status.")
+        if outcome == OUTCOME_HALTED:
+            return ("Add one comment naming the halt class and the cause line below with `gh issue "
+                    "comment`. Do not close the issue and do not move its project item: a halted "
+                    "task is not finished.")
         return ("Add one comment carrying the blocker digest below with `gh issue comment`. Do not "
                 "close the issue and do not move its project item: a blocked task stays open.")

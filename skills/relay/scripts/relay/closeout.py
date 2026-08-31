@@ -29,6 +29,7 @@ from . import backends, brief, classify, contracts, launch, manifest as manifest
 
 OUTCOME_LANDED = "landed"
 OUTCOME_BLOCKED = "blocked"
+OUTCOME_HALTED = "halted"
 
 RESULT_COMPLETE = "complete"
 RESULT_SKIPPED = "skipped"
@@ -150,16 +151,23 @@ def compound_command(depth, hint, backend):
 
 def render(manifest, card, outcome, digest, comments, adapter, allowed_paths, backend,
            landing_ref=None, branch=None, commit_range=None, plan_path=None, gate=None,
-           wall_seconds=None, active_seconds=None):
+           wall_seconds=None, active_seconds=None, halt_class=None, cause_line=None):
     """The closeout brief. Deterministic from its inputs, like the task brief, and it never
     receives the task process transcript (R27), only the digest the runner composed from it.
 
-    `backend` is required for the same reason `compound_command`'s is."""
+    `backend` is required for the same reason `compound_command`'s is. `halt_class`/`cause_line`
+    are set only for `OUTCOME_HALTED`, the runner's own values for the halt already raised (R4);
+    `cause_line` is defanged because, unlike a landing sha, it can carry task-influenced text (a
+    denied call's captured argument, a dirty tree's file list) that must not close the data block
+    or forge a runner instruction (R56)."""
     task_id = card.get("id")
     depth = depth_for(digest)
     envelope = (digest or {}).get("envelope") or {}
     landing_line = ""
-    if outcome == OUTCOME_LANDED and landing_ref:
+    if outcome == OUTCOME_HALTED:
+        landing_line = "Halt class: %s\nCause: %s" % (
+            halt_class or "unknown", brief.defang(cause_line or "no cause line recorded"))
+    elif outcome == OUTCOME_LANDED and landing_ref:
         landing_line = "Landing reference: %s" % landing_ref
     elif outcome == OUTCOME_LANDED:
         landing_line = "Landing reference: not recorded"
@@ -236,7 +244,8 @@ def _closeout_task(manifest, task_id, backend):
 def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths,
         backend,
         landing_ref=None, branch=None, commit_range=None, plan_path=None, gate=None,
-        wall_seconds=None, active_seconds=None, timeout_seconds=None,
+        wall_seconds=None, active_seconds=None, halt_class=None, cause_line=None,
+        timeout_seconds=None,
         **launch_kwargs):
     """Render, launch, and read the ending. Returns what happened; it changes no git state and
     writes nothing to the tracker itself. The caller runs the scope check and the push.
@@ -247,7 +256,7 @@ def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths
     text = render(manifest, card, outcome, digest, comments, adapter, allowed_paths, backend,
                   landing_ref=landing_ref, branch=branch, commit_range=commit_range,
                   plan_path=plan_path, gate=gate, wall_seconds=wall_seconds,
-                  active_seconds=active_seconds)
+                  active_seconds=active_seconds, halt_class=halt_class, cause_line=cause_line)
     brief_path = store.path("briefs", task_id + ".closeout.md")
     with open(brief_path, "w", encoding="utf-8") as handle:
         handle.write(text)

@@ -50,6 +50,7 @@ INTERFACE = (
 
 OUTCOME_LANDED = "landed"
 OUTCOME_BLOCKED = "blocked"
+OUTCOME_HALTED = "halted"
 
 
 class ConfigurationError(ValueError):
