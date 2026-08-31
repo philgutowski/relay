@@ -452,6 +452,16 @@ def path_allowed(path, allowed_paths):
     return False
 
 
+def task_scope_offenders(repo, baseline_sha, branch, allowed_paths):
+    """Paths any Task commit touched that fall outside the Task path bound.
+
+    Returns the list and mutates nothing. Do not call closeout_scope_check for this:
+    its failure path calls reset_hard, which would destroy the Task branch.
+    """
+    paths = gitread.paths_touched_in_range(repo, baseline_sha, branch)
+    return [path for path in paths if not path_allowed(path, allowed_paths)]
+
+
 def closeout_scope_check(repo, pre_closeout_head, allowed_paths, ops=None, task_id=None, env=None):
     """R53 and KTD15: the closeout commits docs and never pushes, so the runner checks what it
     produced before its own push. A path outside the allowed set resets the branch to the
