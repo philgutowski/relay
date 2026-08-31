@@ -402,45 +402,55 @@ def _one_task(cfg, task):
                        baseline_comment_id=baseline_comment_id, digest=digest,
                        launched=launched, findings=findings, **vars(cfg))
 
-    if launched.launch_error:
-        raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR,
-                    "%s could not be launched: %s" % (task.id, launched.launch_error),
-                    {"task": task.id, "error": launched.launch_error, "error_type": "launch failure"})
+    # From here on, every raise is a halt on a task whose process has already launched and whose
+    # brief already told it to move the card (R1). The wrap makes that halt visible on the card
+    # too (R4): _note_halt runs once, right where the halt is classified, and never changes what
+    # gets raised (KTD4).
+    try:
+        if launched.launch_error:
+            raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR,
+                        "%s could not be launched: %s" % (task.id, launched.launch_error),
+                        {"task": task.id, "error": launched.launch_error,
+                         "error_type": "launch failure"})
 
-    if launched.lease_lost:
-        raise _Halt(task.id, contracts.HALT_RUNNER_CRASHED,
-                    "the lease was lost while %s was running; another runner may hold it" % task.id,
-                    {"status_before": contracts.STATUS_RUNNING, "branch": branch})
+        if launched.lease_lost:
+            raise _Halt(task.id, contracts.HALT_RUNNER_CRASHED,
+                        "the lease was lost while %s was running; another runner may hold it"
+                        % task.id,
+                        {"status_before": contracts.STATUS_RUNNING, "branch": branch})
 
-    destructive = _destructive_finding(findings)
-    if destructive is not None:
-        line = summary.cause_line(contracts.UNENFORCED_DISALLOWED, destructive)
-        raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR, line,
-                    {"task": task.id, "error_type": "destructive_call", "error": line})
+        destructive = _destructive_finding(findings)
+        if destructive is not None:
+            line = summary.cause_line(contracts.UNENFORCED_DISALLOWED, destructive)
+            raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR, line,
+                        {"task": task.id, "error_type": "destructive_call", "error": line})
 
-    if not capability.enforces_at_launch and digest.get("findings_unavailable"):
-        raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR,
-                    "%s evidence could not be read; unenforced restrictions were not audited"
-                    % task.id,
-                    {"task": task.id, "error_type": "findings_unavailable",
-                     "error": "unenforced restrictions were not audited"})
+        if not capability.enforces_at_launch and digest.get("findings_unavailable"):
+            raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR,
+                        "%s evidence could not be read; unenforced restrictions were not audited"
+                        % task.id,
+                        {"task": task.id, "error_type": "findings_unavailable",
+                         "error": "unenforced restrictions were not audited"})
 
-    if digest.get("halt_class") == contracts.HALT_TIMEOUT:
-        return _timeout_route(context)
+        if digest.get("halt_class") == contracts.HALT_TIMEOUT:
+            return _timeout_route(context)
 
-    routable, note = _routable(manifest, adapter, digest, repo, branch, baseline_sha)
-    if note and stream is not None:
-        stream("%s: %s" % (task.id, note))
-    if routable:
-        return _merge_route(context)
-    if digest.get("routable"):
-        # The process claimed complete and produced nothing the runner can merge. That is not a
-        # blocked task, which leaves the repo as it found it deliberately; it is an exit the
-        # runner cannot act on, so it halts for a human.
-        raise _Halt(task.id, contracts.HALT_UNCLEAN_EXIT,
-                    "%s reported status complete but left no commits on %s" % (task.id, branch),
-                    {"branch": branch, "baseline_sha": baseline_sha})
-    return _blocked_route(context, digest.get("halt_class") or contracts.HALT_BLOCKED_ENVELOPE)
+        routable, note = _routable(manifest, adapter, digest, repo, branch, baseline_sha)
+        if note and stream is not None:
+            stream("%s: %s" % (task.id, note))
+        if routable:
+            return _merge_route(context)
+        if digest.get("routable"):
+            # The process claimed complete and produced nothing the runner can merge. That is not
+            # a blocked task, which leaves the repo as it found it deliberately; it is an exit the
+            # runner cannot act on, so it halts for a human.
+            raise _Halt(task.id, contracts.HALT_UNCLEAN_EXIT,
+                        "%s reported status complete but left no commits on %s" % (task.id, branch),
+                        {"branch": branch, "baseline_sha": baseline_sha})
+        return _blocked_route(context, digest.get("halt_class") or contracts.HALT_BLOCKED_ENVELOPE)
+    except _Halt as halt:
+        _note_halt(context, halt)
+        raise
 
 
 @dataclass
@@ -627,11 +637,14 @@ def _blocked_route(ctx, halt_class):
                      halt_evidence=evidence)
 
 
-def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None, gate=None):
+def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None, gate=None,
+                  halt_class=None, cause_line=None):
     """Launch the closeout, then bound what it committed before anything is pushed (R53).
 
     The order matters: the check runs against the local head before the push, so a commit
     outside the allowed paths is reset rather than reported after the fact (KTD15).
+
+    `halt_class`/`cause_line` are set only for `closeout.OUTCOME_HALTED`, from `_note_halt`.
     """
     allowed_paths = list(ctx.allowed_paths)
     pre_closeout_head = gitread.rev_parse(ctx.repo, "HEAD")
@@ -647,6 +660,7 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
         landing_ref=landing_ref, branch=branch or ctx.branch,
         commit_range=commit_range, plan_path=envelope.get("plan_path"), gate=gate,
         wall_seconds=ctx.launched.wall_seconds, active_seconds=ctx.launched.active_seconds,
+        halt_class=halt_class, cause_line=cause_line,
         timeout_seconds=ctx.overrides.get("closeout_seconds"),
         home=ctx.home, base_env=ctx.base_env, stream=ctx.stream, heartbeat=ctx.store.heartbeat,
         on_release=ctx.store.release, **ctx.launch_kwargs)
@@ -684,3 +698,51 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
                          "log": ctx.store.path("gate", ctx.task.id + ".log"),
                          "push_output": pushed.output})
     return result
+
+
+def _note_halt(ctx, halt):
+    """R4: make a halt visible on the tracker card without changing its status, by launching the
+    Closeout with `outcome=halted` -- the same mechanism a landed or blocked outcome already
+    uses. Best effort: every check below is a `return` that leaves the halt already raised
+    (`halt`) as the run's only record of what happened, per KTD4 (this repo's own CLAUDE.md:
+    "every stop is a named class with evidence, not an exception").
+
+    Four checks gate the launch, each closing a specific gap KTD3 names:
+
+    1. The halt class is run-scoped, or means the Closeout mechanism itself just misbehaved
+       (`CLOSEOUT_MISBEHAVED_HALT_CLASSES`): the repository, a second runner, or Closeout's own
+       trustworthiness is uncertain, so no second process is launched onto it.
+    2. The tree is dirty: that state is the operator's own evidence to inspect, not a workspace
+       to launch a process into (mirrors R16's pre-flight refusal for the task process).
+    3. The default branch is ahead of `origin/<default>`: `local_merge_tail`'s push step can fail
+       after the merge already applied locally, and a commit the halted closeout makes on top
+       would otherwise carry that unverified merge to origin alongside it.
+    4. The lease can no longer be confirmed as this runner's: the same freshness check
+       `_continue_past` already applies before its own repository mutation.
+    """
+    if (halt.halt_class in contracts.RUN_SCOPED_HALT_CLASSES
+            or halt.halt_class in contracts.CLOSEOUT_MISBEHAVED_HALT_CLASSES):
+        return
+    if not gitread.is_clean(ctx.repo):
+        if ctx.stream is not None:
+            ctx.stream("%s: tree left dirty on %s; skipping the halt comment"
+                       % (halt.task_id, gitread.current_branch(ctx.repo)))
+        return
+    if gitread.rev_parse(ctx.repo, ctx.default) != gitread.rev_parse(ctx.repo, "origin/" + ctx.default):
+        if ctx.stream is not None:
+            ctx.stream("%s: %s is ahead of origin/%s; skipping the halt comment"
+                       % (halt.task_id, ctx.default, ctx.default))
+        return
+    if not ctx.store.heartbeat():
+        if ctx.stream is not None:
+            ctx.stream("%s: lease no longer confirmed; skipping the halt comment" % halt.task_id)
+        return
+    gitwrite.blocked_path(ctx.repo, ctx.default, ctx.branch, ops=ctx.store, task_id=halt.task_id,
+                          env=ctx.env)
+    try:
+        _run_closeout(ctx, closeout.OUTCOME_HALTED, halt_class=halt.halt_class,
+                      cause_line=halt.message)
+    except Exception as exc:
+        if ctx.stream is not None:
+            ctx.stream("%s: could not comment halt %s on the tracker: %s"
+                       % (halt.task_id, halt.halt_class, exc))
