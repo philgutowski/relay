@@ -200,6 +200,7 @@ def values(manifest, task, card, branch=None, mode=None):
         "title": defang(str(card.get("title") or "")).strip(),
         "description": defang(str(card.get("description") or "")).strip(),
         "branch": branch,
+        "tracker_start_step": tracker_steps["start_step"],
         "tracker_review_step": tracker_steps["review_step"],
         "tracker_blocked_step": tracker_steps["blocked_step"],
         "default_branch": default_branch,

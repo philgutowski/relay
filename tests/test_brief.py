@@ -424,6 +424,45 @@ class TrackerStepsPerAdapter(unittest.TestCase):
                 self.assertIn("Comment the blocker on the tracker card", text)
                 self.assertNotIn("no tracker write", text)
 
+    def test_the_start_step_moves_the_card_before_the_branch_is_created(self):
+        """R1: the card moves as the process's first action, not only near the end."""
+        for name in ("manifest-jira-local-merge.toml", "manifest-github-projects.toml"):
+            with self.subTest(example=name):
+                m = self.load(name)
+                text = brief.render(m, m.tasks[0], {"id": "T-1", "title": "t", "description": "d"})
+                steps = steps_section(text)
+                move_index = steps.index("Move the tracker card to `%s`" % m.tracker.in_review_status)
+                create_index = steps.index("Create `")
+                self.assertLess(move_index, create_index, "%s moves the card after the branch" % name)
+
+    def test_the_near_end_review_step_only_comments_now(self):
+        """R2: the move already happened at the start step, so the near-end step's own text no
+        longer asks the task to move the card a second time."""
+        for name in ("manifest-jira-local-merge.toml", "manifest-github-projects.toml"):
+            with self.subTest(example=name):
+                m = self.load(name)
+                text = brief.render(m, m.tasks[0], {"id": "T-1", "title": "t", "description": "d"})
+                steps = steps_section(text)
+                comment_step = steps[steps.index("Comment the head commit"):]
+                self.assertNotIn("Move", comment_step[:comment_step.index("\n")])
+
+    def test_the_markdown_start_step_is_a_no_op(self):
+        """R3: markdown has no in_review_status concept, so the start step explains rather than
+        instructs, matching the existing no-op shape of its review step."""
+        m = self.load("manifest-markdown.toml")
+        text = brief.render(m, m.tasks[0], {"id": "T-1", "title": "t", "description": "d"})
+        steps = steps_section(text)
+        self.assertIn("no in-progress mark for you to set", steps)
+        self.assertNotIn("Move the tracker card", text)
+
+    def test_the_envelope_references_the_renumbered_plan_step(self):
+        """Coherence review finding: the return-envelope block references the ce-plan step number
+        in prose outside the Steps list, which must track the renumbering."""
+        m = self.load("manifest-jira-local-merge.toml")
+        text = brief.render(m, m.tasks[0], {"id": "T-1", "title": "t", "description": "d"})
+        self.assertIn("plan_path: <the plan path from step 3>", text)
+        self.assertNotIn("from step 2>", text)
+
 
 if __name__ == "__main__":
     unittest.main()

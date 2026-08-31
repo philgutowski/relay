@@ -74,20 +74,29 @@ def skipped(reason):
 
 
 def task_tracker_steps(manifest, branch):
-    """The two places the task brief tells the process to touch the tracker: the review step
-    before the envelope, and the comment when it cannot finish. Resolved by adapter name rather
-    than by building the adapter, so a brief renders without a tracker credential.
+    """The three places the task brief tells the process to touch the tracker: the start step
+    before any other work, the review step before the envelope, and the comment when it cannot
+    finish. Resolved by adapter name rather than by building the adapter, so a brief renders
+    without a tracker credential.
 
     The markdown adapter is the reason this exists (first live run, 2026-08-26). Its tracker is
     a file the closeout edits and the runner reads at the remote head, so a task told to "move
     the card to in review" had no card to move and blocked on that step with the code done and
     the gate green. Under markdown the task makes no tracker write at all.
+
+    The start step exists so the board shows a task as in progress the moment its process
+    launches, rather than only near the end of the session (relay task 50). The review step no
+    longer moves the card itself -- the start step already did -- so it carries only the comment
+    duty now.
     """
     name = manifest.tracker.adapter
     in_review = manifest.tracker.in_review_status or "its in review status"
     if name == "markdown":
         path = manifest.tracker.file or "the tracker file"
         return {
+            "start_step": ("There is no tracker write for you to make yet. This project's tracker "
+                           "is `%s` in the repository, which only the runner's closeout process "
+                           "edits; there is no in-progress mark for you to set." % path),
             "review_step": ("There is no tracker write for you to make. This project's tracker is `%s` "
                             "in the repository, which the runner's own closeout process edits after "
                             "you exit. Do not edit `%s` yourself; confirm the head of `%s` is "
@@ -97,9 +106,11 @@ def task_tracker_steps(manifest, branch):
                              % path),
         }
     return {
-        "review_step": ("Move the tracker card to `%s` and comment the head commit of `%s` on it. "
-                        "This is the last tracker write you make; the runner launches a separate "
-                        "process to close the card once the merge exists." % (in_review, branch)),
+        "start_step": ("Move the tracker card to `%s` now, before anything else in this session. "
+                       "This is your first tracker write of the run." % in_review),
+        "review_step": ("Comment the head commit of `%s` on the tracker card. This is the last "
+                        "tracker write you make; the runner launches a separate process to close "
+                        "the card once the merge exists." % branch),
         "blocked_step": ("Comment the blocker on the tracker card, then print the envelope with "
                          "`status: blocked` and the blockers listed."),
     }
