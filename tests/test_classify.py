@@ -74,6 +74,7 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(len(gates), 1)
         self.assertEqual(gates[0]["tool"], "Edit")
         self.assertTrue(gates[0]["target"].endswith(".claude/skills/itg-brief/SKILL.md"))
+        self.assertEqual(gates[0]["detail"], contracts.PATH_GATE_CLAUDE_DIR)
         self.assertIsNotNone(gates[0]["tool_use_line"])
         self.assertEqual(r["halt_class"], contracts.HALT_PATH_GATE)
         self.assertIn(contracts.HALT_NO_ENVELOPE, classes(r), "the missing envelope stays visible")

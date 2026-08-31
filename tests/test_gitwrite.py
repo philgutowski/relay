@@ -131,6 +131,7 @@ class PathGateBackstop(TailBase):
         self.assertFalse(result.ok)
         self.assertEqual(result.halt_class, contracts.HALT_PATH_GATE)
         self.assertIn(".claude/settings.json", result.evidence["paths"])
+        self.assertEqual(result.evidence["detail"], contracts.PATH_GATE_CLAUDE_DIR)
         self.assertFalse(os.path.exists(self.gate_log), "the gate ran despite the backstop")
         self.assertTrue(gitread.branch_exists(self.repo, self.branch))
 

@@ -64,7 +64,8 @@ RECORD_ROWS = {
         "run._blocked_route, class from the digest",
     ),
     contracts.HALT_PATH_GATE: (
-        {"paths": [".claude/skills/x/SKILL.md"], "branch": "relay/T-1"},
+        {"detail": contracts.PATH_GATE_CLAUDE_DIR, "branch": "relay/T-1",
+         "paths": ".claude/skills/x/SKILL.md"},
         {"status": contracts.STATUS_BLOCKED, "branch": "relay/T-1"},
         "gitwrite.local_merge_tail, the backstop refusal",
     ),
@@ -146,6 +147,16 @@ FINDING_ROWS = {
     contracts.BLOCKED_UNRECORDED: (
         {"task": "T-1", "evidence": "no comment newer than 'c-1' after the closeout"},
         "closeout.confirm_blocked_comment",
+    ),
+    contracts.HALT_PATH_GATE: (
+        {"detail": contracts.PATH_GATE_CLAUDE_DIR, "tool": "Edit",
+         "target": ".claude/skills/x/SKILL.md", "line": 91, "tool_use_line": 88},
+        "classify.classify, a denial whose file_path is under .claude/",
+    ),
+    contracts.UNENFORCED_DISALLOWED: (
+        {"tool": "Bash", "argument": "git clean -fd", "line": 44,
+         "pattern": "Bash(git clean*)"},
+        "classify.classify, an unenforced disallowed tool_use",
     ),
 }
 

@@ -65,7 +65,8 @@ class OwnVocabulary(unittest.TestCase):
     def test_the_halt_class_set_stays_closed_and_the_finding_classes_sit_inside_the_line_set(self):
         """KTD6 fixes the halt class set. A closeout finding is never a record's own class, so
         it belongs to LINE_CLASSES and not to HALT_CLASSES."""
-        for cls in (contracts.CLOSEOUT_UNFINISHED, contracts.BLOCKED_UNRECORDED):
+        for cls in (contracts.CLOSEOUT_UNFINISHED, contracts.BLOCKED_UNRECORDED,
+                    contracts.UNENFORCED_DISALLOWED):
             self.assertNotIn(cls, contracts.HALT_CLASSES)
             self.assertIn(cls, contracts.LINE_CLASSES)
         for cls in contracts.FINDING_CLASSES:
@@ -89,6 +90,11 @@ class OwnVocabulary(unittest.TestCase):
         for fragment in ("git push --force", "git reset --hard", "rm -rf", "git clean"):
             self.assertIn(fragment, joined)
         self.assertNotIn(contracts.FORBIDDEN_PERMISSION_MODE, joined)
+
+    def test_destructive_tools_are_a_named_subset_of_the_disallow_list(self):
+        self.assertTrue(set(contracts.DESTRUCTIVE_TOOLS).issubset(contracts.DISALLOWED_TOOLS))
+        self.assertIn("Bash(git reset --hard*)", contracts.DESTRUCTIVE_TOOLS)
+        self.assertNotIn("Bash(git clean*)", contracts.DESTRUCTIVE_TOOLS)
 
     def test_denial_regex_matches_the_observed_text(self):
         text = "Permission to use Edit has been denied because Claude Code is running in don't ask mode."

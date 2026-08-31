@@ -346,7 +346,8 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
     hits = claude_dir_backstop(repo, baseline_sha, branch)
     if hits:
         return TailResult(False, contracts.HALT_PATH_GATE, "backstop",
-                          evidence={"paths": hits, "branch": branch})
+                          evidence={"paths": hits, "branch": branch,
+                                    "detail": contracts.PATH_GATE_CLAUDE_DIR})
 
     gate = run_gate(repo, gate_command, gate_log_path, gate_timeout_seconds, env=env)
     if not gate.ok:
