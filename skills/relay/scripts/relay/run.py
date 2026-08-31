@@ -714,9 +714,10 @@ def _note_halt(ctx, halt):
        trustworthiness is uncertain, so no second process is launched onto it.
     2. The tree is dirty: that state is the operator's own evidence to inspect, not a workspace
        to launch a process into (mirrors R16's pre-flight refusal for the task process).
-    3. The default branch is ahead of `origin/<default>`: `local_merge_tail`'s push step can fail
-       after the merge already applied locally, and a commit the halted closeout makes on top
-       would otherwise carry that unverified merge to origin alongside it.
+    3. The default branch is not in sync with `origin/<default>` (`gitwrite.head_equals_remote`,
+       the same check pre-flight and the resume disposition already share): `local_merge_tail`'s
+       push step can fail after the merge already applied locally, and a commit the halted
+       closeout makes on top would otherwise carry that unverified merge to origin alongside it.
     4. The lease can no longer be confirmed as this runner's: the same freshness check
        `_continue_past` already applies before its own repository mutation.
     """
@@ -728,9 +729,9 @@ def _note_halt(ctx, halt):
             ctx.stream("%s: tree left dirty on %s; skipping the halt comment"
                        % (halt.task_id, gitread.current_branch(ctx.repo)))
         return
-    if gitread.rev_parse(ctx.repo, ctx.default) != gitread.rev_parse(ctx.repo, "origin/" + ctx.default):
+    if not gitwrite.head_equals_remote(ctx.repo, ctx.default, {}):
         if ctx.stream is not None:
-            ctx.stream("%s: %s is ahead of origin/%s; skipping the halt comment"
+            ctx.stream("%s: %s is not in sync with origin/%s; skipping the halt comment"
                        % (halt.task_id, ctx.default, ctx.default))
         return
     if not ctx.store.heartbeat():
