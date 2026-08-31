@@ -483,6 +483,10 @@ def validate(manifest, check_repo=True, check_environment=False, env=None):
     # key is present, else claude.
     dflt = manifest.raw.get("defaults") or {}
     default_backend = str(dflt["backend"]) if "backend" in dflt else DEFAULT_BACKEND
+    if "backend" in dflt and default_backend not in BACKENDS:
+        err("defaults.backend must be one of %s, not %r"
+            % (", ".join(BACKENDS), default_backend))
+    resolved_default = default_backend if default_backend in BACKENDS else DEFAULT_BACKEND
     seen = set()
     for index, task in enumerate(manifest.tasks):
         label = "tasks[%d]" % index
@@ -497,11 +501,10 @@ def validate(manifest, check_repo=True, check_environment=False, env=None):
         seen.add(task.id)
         if task.excluded and not (task.reason or "").strip():
             err("%s (%s) is excluded but carries no reason (R5)" % (label, task.id or "?"))
-        if (task.backend in BACKENDS and default_backend in BACKENDS
-                and task.backend != default_backend
+        if (task.backend in BACKENDS and task.backend != resolved_default
                 and not (task.reason or "").strip()):
             err("%s (%s) names backend %s, which differs from the default %s, but carries no reason"
-                % (label, task.id or "?", task.backend, default_backend))
+                % (label, task.id or "?", task.backend, resolved_default))
     if not manifest.tasks:
         err("tasks is empty")
 

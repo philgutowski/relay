@@ -301,7 +301,9 @@ class Backends(ManifestCase):
         text = self.base.replace("[[tasks]]", '[defaults]\nbackend = ""\n\n[[tasks]]', 1)
         result = mf.validate(self.load(text))
         self.assertFalse(result.ok)
-        self.assertEqual(sum("backend" in e for e in result.errors), len(self.load(text).tasks))
+        self.assertTrue(any(error.startswith("defaults.backend") for error in result.errors))
+        self.assertEqual(sum("tasks[" in e and ".backend" in e for e in result.errors),
+                         len(self.load(text).tasks))
 
 
 class BackendReason(ManifestCase):
@@ -334,6 +336,44 @@ class BackendReason(ManifestCase):
         result = mf.validate(self.load(text))
         self.assertTrue(result.ok, result.errors)
 
+    def test_a_task_that_repeats_a_non_claude_default_needs_no_reason(self):
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
+        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        text = text.replace("[permissions]",
+                            '[permissions]\n'
+                            'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+                            'task_allowed_paths = ["src/"]',
+                            1)
+        self.assertTrue(mf.validate(self.load(text)).ok, mf.validate(self.load(text)).errors)
+
+    def test_a_task_that_leaves_a_non_claude_default_without_a_reason_is_refused(self):
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
+        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "claude"', 1)
+        text = text.replace("[permissions]",
+                            '[permissions]\n'
+                            'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+                            'task_allowed_paths = ["src/"]',
+                            1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("differs from the default" in error for error in result.errors))
+
+    def test_a_grok_task_without_a_reason_is_refused_without_unenforced_fields(self):
+        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "grok"', 1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("differs from the default" in error for error in result.errors))
+        self.assertFalse(any("unenforced_acceptance" in error for error in result.errors))
+
+    def test_an_invalid_defaults_backend_does_not_skip_the_reason_check(self):
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "CODEX"\n\n[[tasks]]', 1)
+        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "grok"', 1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        joined = " ".join(result.errors)
+        self.assertIn("defaults.backend", joined)
+        self.assertTrue(any("differs from the default" in error for error in result.errors))
+
     def test_whitespace_only_reason_is_refused_when_the_backend_differs(self):
         text = self._mixed_codex('\nreason = "   "')
         result = mf.validate(self.load(text))
@@ -362,7 +402,7 @@ class BackendReason(ManifestCase):
         self.assertFalse(result.ok)
         joined = " ".join(result.errors)
         self.assertIn("excluded but carries no reason", joined)
-        self.assertTrue(any("no reason" in error for error in result.errors))
+        self.assertTrue(any("differs from the default" in error for error in result.errors))
 
 
 class BackendReadiness(ManifestCase):

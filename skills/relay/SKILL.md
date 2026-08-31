@@ -25,8 +25,8 @@ Resolve `<runner>` once, from this skill's own directory as the harness gave it 
 <rubric> = <this skill's directory>/references/backend-rubric.md
 ```
 
-Read `<rubric>` before proposing a backend. Resolve it from this skill's own directory, the same
-way as `<runner>`, so a session in a target repo still finds the file.
+Read the file at `<rubric>` before proposing a backend. That path is under this skill's own
+directory, not the target repo. If the file cannot be opened, stop rather than inventing routing.
 
 The seven verbs, with the follower options on the two that follow:
 
@@ -96,10 +96,10 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
    usually). Do not author a wrapper script to bundle them unless the operator asks for one.
    Do not add a permission mode field: permission posture is fixed per backend by
    `contracts.BACKEND_PINS`, never a manifest choice. Put a `[defaults] backend` when every Task
-   should inherit one. On a Task whose backend differs from that default, write `reason` with
-   the one-line reason they accepted, or the string they supplied after they changed the
-   backend. One `reason` also covers an excluded Task. A Task that matches the default needs no
-   reason.
+   should inherit one. The resolved default is that value when the key is present, else `claude`.
+   On a Task whose backend differs from that resolved default, write `reason` with the one-line
+   reason they accepted, or the string they supplied after they changed the backend. One `reason`
+   also covers an excluded Task. A Task that matches the resolved default needs no reason.
 
 The examples under `docs/examples/` are the three shapes, one per adapter.
 

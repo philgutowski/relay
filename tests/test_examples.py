@@ -136,8 +136,15 @@ class Skill(unittest.TestCase):
     def test_the_skill_points_at_the_backend_rubric_in_its_own_directory(self):
         self.assertIn("references/backend-rubric.md", self.text)
         self.assertRegex(self.text, r"(?i)do not write a backend the operator")
+        self.assertRegex(self.text, r"(?i)nothing re-applies the rubric")
         self.assertRegex(self.text, r"(?i)unenforced_acceptance")
         self.assertRegex(self.text, r"(?i)never invent")
+        with open(os.path.join(REPO_ROOT, "skills", "relay", "references", "backend-rubric.md")) as handle:
+            rubric = handle.read()
+        for name in ("claude", "codex", "grok"):
+            self.assertIn("`%s`" % name, rubric)
+        self.assertRegex(rubric, r"(?i)detects rather than prevents")
+        self.assertRegex(rubric, r"(?i)commit scope")
 
     def test_the_skill_still_carries_its_frontmatter_name_and_description(self):
         self.assertRegex(self.text, r"(?m)^name: relay$")
