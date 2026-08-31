@@ -16,8 +16,8 @@ from types import SimpleNamespace
 
 import _paths
 import _repo
-from relay import (classify, contracts, gitread, gitwrite, launch, manifest as mf, run as runner,
-                   state, verify)
+from relay import (classify, closeout, contracts, gitread, gitwrite, launch, manifest as mf,
+                   run as runner, state, verify)
 
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
 
@@ -203,6 +203,12 @@ class RunCase(unittest.TestCase):
         self.queue_entry("closeout_skipped.jsonl", CLOSE_SH % (task_id, task_id))
 
     def closeout_blocked(self, task_id):
+        self.queue_entry("closeout_skipped.jsonl", COMMENT_SH % (task_id, task_id))
+
+    def closeout_halted(self, task_id):
+        """The halt-comment closeout (U3, relay task 50): fired after a task-scoped, non-run
+        halt on a clean tree, appending a comment the same way `closeout_blocked` does under the
+        markdown adapter."""
         self.queue_entry("closeout_skipped.jsonl", COMMENT_SH % (task_id, task_id))
 
     def store(self):
@@ -851,6 +857,218 @@ class LeaseOwnership(RunCase):
                          gitread.rev_parse(self.repo, "main"))
 
 
+class NoteHalt(RunCase):
+    """U3, relay task 50: `_note_halt`'s four-check gate, exercised directly against a
+    constructed `_Context` so each check is provable without driving a full task process
+    through the stub. `_run_closeout` is replaced with a recorder rather than actually
+    launched, since these tests are about whether it is called and with what, not about the
+    closeout brief itself (covered in test_closeout.py)."""
+
+    def ctx(self, branch="relay/T-1"):
+        env = launch.child_env(self.manifest, self.base_env(), self.home)
+        allowed = tuple(mf.completed_allowed_paths(self.manifest, mf.docs_root_for(self.repo)))
+        store = self.store()
+        store.acquire()
+        task = self.manifest.tasks[0]
+        card = {"id": "T-1", "title": "t", "description": "d"}
+        launched = SimpleNamespace(wall_seconds=1, active_seconds=1)
+        cfg = runner._Run(self.manifest, None, store, self.repo, "main", env, self.base_env(),
+                          self.home, None, False, {}, {}, time.time, allowed)
+        return runner._Context(task=task, card=card, branch=branch, baseline_sha=None,
+                               baseline_comment_id=None, digest={}, launched=launched,
+                               findings=[], **vars(cfg))
+
+    def recorder(self):
+        calls = []
+
+        def fake(ctx, outcome, **kwargs):
+            calls.append((outcome, kwargs))
+        return calls, fake
+
+    def test_a_run_scoped_class_never_launches_the_closeout(self):
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(ctx, runner._Halt("T-1", contracts.HALT_RUNNER_CRASHED, "m", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(calls, [])
+
+    def test_a_closeout_misbehaved_class_never_launches_the_closeout(self):
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_CLOSEOUT_OUT_OF_SCOPE, "m", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(calls, [])
+
+    def test_a_dirty_tree_never_launches_the_closeout(self):
+        ctx = self.ctx()
+        with open(os.path.join(self.repo, "operator-wip.txt"), "w") as handle:
+            handle.write("wip\n")
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(ctx, runner._Halt("T-1", contracts.HALT_GATE_REFUSED, "m", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(calls, [])
+        os.remove(os.path.join(self.repo, "operator-wip.txt"))
+
+    def test_a_local_default_ahead_of_origin_never_launches_the_closeout(self):
+        """R6a: a merge already applied locally but never confirmed pushed."""
+        from test_gitwrite import commit_on_branch
+
+        commit_on_branch(self.repo, "main", {"src/unpushed.py": "value = 1\n"}, "unpushed",
+                         base="main")
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(ctx, runner._Halt("T-1", contracts.HALT_GATE_REFUSED, "m", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(calls, [])
+
+    def test_a_lost_lease_never_launches_the_closeout(self):
+        """R6b: the same freshness check `_continue_past` already applies."""
+        ctx = self.ctx()
+        ctx.store.heartbeat = lambda: False
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(ctx, runner._Halt("T-1", contracts.HALT_GATE_REFUSED, "m", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(calls, [])
+
+    def test_a_clean_task_scoped_halt_launches_the_closeout_with_class_and_cause(self):
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_GATE_REFUSED, "gate refused relay/T-1", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(len(calls), 1)
+        outcome, kwargs = calls[0]
+        self.assertEqual(outcome, closeout.OUTCOME_HALTED)
+        self.assertEqual(kwargs["halt_class"], contracts.HALT_GATE_REFUSED)
+        self.assertEqual(kwargs["cause_line"], "gate refused relay/T-1")
+        # R7: the repo returned to the default branch, stranding the task branch rather than
+        # deleting it.
+        self.assertEqual(gitread.current_branch(self.repo), "main")
+
+    def test_a_failure_inside_the_halt_comment_never_escapes_or_replaces_the_halt(self):
+        """R8: a second failure while commenting must not shadow the halt already raised."""
+        ctx = self.ctx()
+        original = runner._run_closeout
+
+        def explode(ctx, outcome, **kwargs):
+            raise RuntimeError("the closeout blew up")
+        runner._run_closeout = explode
+        try:
+            halt = runner._Halt("T-1", contracts.HALT_GATE_REFUSED, "gate refused", {})
+            runner._note_halt(ctx, halt)  # must not raise
+            self.assertEqual(halt.halt_class, contracts.HALT_GATE_REFUSED)
+            self.assertEqual(halt.message, "gate refused")
+        finally:
+            runner._run_closeout = original
+
+    def test_a_check_that_raises_never_escapes_or_replaces_the_halt(self):
+        """Code review finding (reliability): the four checks themselves, not only the closeout
+        launch, must be inside the best-effort guard, or a git failure while checking would
+        escape _note_halt and reach run()'s own except-Exception handler, which fabricates a
+        new halt from that failure and masks the real one (R8, KTD4)."""
+        ctx = self.ctx()
+        original = gitread.is_clean
+        gitread.is_clean = lambda repo: (_ for _ in ()).throw(RuntimeError("git blew up"))
+        try:
+            halt = runner._Halt("T-1", contracts.HALT_GATE_REFUSED, "gate refused", {})
+            runner._note_halt(ctx, halt)  # must not raise
+            self.assertEqual(halt.halt_class, contracts.HALT_GATE_REFUSED)
+            self.assertEqual(halt.message, "gate refused")
+        finally:
+            gitread.is_clean = original
+
+    def test_a_closeout_scope_reset_never_launches_a_second_closeout(self):
+        """Code review finding (correctness): gitwrite.closeout_scope_check's own
+        HALT_UNCLEAN_EXIT raise resets the tree before raising, so the tree-clean check alone
+        would not catch it -- the evidence's reset_to key is the signal that this halt is the
+        Closeout mechanism itself misbehaving, not an ordinary unclean exit."""
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_UNCLEAN_EXIT, "closeout left work uncommitted",
+                                  {"reset_to": "abc1234"}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(calls, [])
+
+    def test_an_ordinary_unclean_exit_without_reset_to_still_launches_the_closeout(self):
+        """The reset_to exclusion is narrow: an unrelated HALT_UNCLEAN_EXIT raise (no reset_to
+        in its evidence) still gets the comment, since only the closeout-scope-check raise site
+        carries that key."""
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_UNCLEAN_EXIT, "left the tree dirty", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(len(calls), 1)
+
+    def test_a_halt_after_landing_passes_the_landing_ref_through(self):
+        """Code review finding (adversarial, agent-native): a halt raised after this task's own
+        landed closeout already ran (a mirror push refusal or a failing final verify) must carry
+        the landing reference through, so the comment reads as a post-landing failure rather than
+        an undifferentiated halt on a card the runner already moved to a terminal status."""
+        ctx = self.ctx()
+        ctx.store.upsert("T-1", landing_ref="abc1234def")
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_GATE_REFUSED,
+                                  "the mirror push was refused for T-1", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(len(calls), 1)
+        outcome, kwargs = calls[0]
+        self.assertEqual(kwargs["landing_ref"], "abc1234def")
+
+    def test_a_halt_before_landing_passes_no_landing_ref(self):
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_GATE_REFUSED, "gate refused", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(len(calls), 1)
+        outcome, kwargs = calls[0]
+        self.assertIsNone(kwargs.get("landing_ref"))
+
+
 GATE_REFUSES_SH = "test ! -e %s"
 
 PRE_PUSH_REFUSES_TASK = """#!/bin/bash
@@ -884,6 +1102,7 @@ class ContinuePastHalt(RunCase):
         self.task_success("T-1")
         self.closeout_landed("T-1")
         self.task_success("T-2")
+        self.closeout_halted("T-2")
         self.task_success("T-3")
         self.closeout_landed("T-3")
 
@@ -910,6 +1129,7 @@ class ContinuePastHalt(RunCase):
         self.opt_in(gate=["bash", "-c", GATE_REFUSES_SH % "src/t_1.py"])
         self.seed_stale_reclaim_on_t1()
         self.task_success("T-1")
+        self.closeout_halted("T-1")
         self.task_success("T-2")
         self.closeout_landed("T-2")
         self.task_success("T-3")
@@ -942,6 +1162,7 @@ class ContinuePastHalt(RunCase):
         self.manifest = mf.load(self.manifest_path)
         self.seed_stale_reclaim_on_t1()
         self.task_success("T-1")
+        self.closeout_halted("T-1")
 
         store = self.reclaiming_store()
         result = store.acquire()
@@ -998,9 +1219,11 @@ class ContinuePastHalt(RunCase):
     def test_two_paused_tasks_around_a_landed_one_still_complete_the_run(self):
         self.opt_in(gate=["bash", "-c", "test ! -e src/t_1.py -a ! -e src/t_3.py"])
         self.task_success("T-1")
+        self.closeout_halted("T-1")
         self.task_success("T-2")
         self.closeout_landed("T-2")
         self.task_success("T-3")
+        self.closeout_halted("T-3")
 
         outcome = self.go()
         self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
@@ -1016,6 +1239,7 @@ class ContinuePastHalt(RunCase):
         self.task_success("T-1")
         self.closeout_landed("T-1")
         self.task_success("T-2")
+        self.closeout_halted("T-2")
         self.task_success("T-3")
         self.closeout_landed("T-3")
         first = self.go()
@@ -1155,6 +1379,7 @@ class ContinuePastWithoutRepair(RunCase):
         self.task_success("T-1")
         self.closeout_landed("T-1")
         self.task_success("T-2")
+        self.closeout_halted("T-2")
         self.task_success("T-3")
         self.closeout_landed("T-3")
         first = self.go()

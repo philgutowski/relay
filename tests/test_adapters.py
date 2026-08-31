@@ -183,6 +183,14 @@ class SharedContract(AdapterCase):
             self.assertNotEqual(adapter.closeout_instructions("landed"),
                                 adapter.closeout_instructions("blocked"), name)
 
+    def test_every_adapter_writes_a_halted_instruction_that_moves_nothing(self):
+        for name, adapter in self.each():
+            text = adapter.closeout_instructions("halted")
+            self.assertTrue(text.strip(), "%s has no halted instructions" % name)
+            self.assertNotEqual(text, adapter.closeout_instructions("landed"), name)
+            self.assertNotEqual(text, adapter.closeout_instructions("blocked"), name)
+            self.assertNotIn("`[x]`", text, "%s halted instructions check the box" % name)
+
 
 class Jira(AdapterCase):
     def opener(self, **routes):

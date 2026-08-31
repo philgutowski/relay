@@ -397,6 +397,16 @@ RUN_SCOPED_HALT_CLASSES = (
     HALT_UNEXPECTED_ERROR,  # a defect or library error with unknown blast radius
 )
 
+# Classes that mean the Closeout process itself just misbehaved. Distinct from
+# RUN_SCOPED_HALT_CLASSES (neither stops the whole run, per _continue_past): the run.py halt
+# comment (KTD3, R5) skips relaunching Closeout on these, since relaunching the exact mechanism
+# that just went out of scope would trust it again on the strength of the trust that just failed.
+# HALT_TRACKER_WRITE_DENIED is deliberately absent: it is a FINDING_CLASSES member, attached to a
+# record rather than ever raised as a _Halt's own class, so it can never reach this check.
+CLOSEOUT_MISBEHAVED_HALT_CLASSES = (
+    HALT_CLOSEOUT_OUT_OF_SCOPE,
+)
+
 # Classes that are findings attached to a record rather than the record's own class.
 FINDING_CLASSES = (
     HALT_DENIED_TOOL,

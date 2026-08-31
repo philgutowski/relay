@@ -14,8 +14,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import (ConfigurationError, NETWORK_TIMEOUT_SECONDS, OUTCOME_LANDED, reference_hit,
-               skipped)
+from . import (ConfigurationError, NETWORK_TIMEOUT_SECONDS, OUTCOME_HALTED, OUTCOME_LANDED,
+               reference_hit, skipped)
 
 ISSUE_FIELDS = "summary,description,status,comment"
 # The issue endpoint is the one the plan pins. Enhanced search is the current Jira Cloud path for
@@ -175,5 +175,8 @@ class JiraAdapter:
         if outcome == OUTCOME_LANDED:
             return ("Transition the card to its terminal status, then add one comment naming the "
                     "landing reference below. Use the Jira tools on your allowlist and nothing else.")
+        if outcome == OUTCOME_HALTED:
+            return ("Add one comment naming the halt class and the cause line below. Do not "
+                    "transition the card: a halted task keeps its current status.")
         return ("Add one comment carrying the blocker digest below. Do not transition the card: a "
                 "blocked task keeps its current status so the board still shows it as open.")

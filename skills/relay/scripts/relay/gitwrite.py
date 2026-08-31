@@ -244,9 +244,11 @@ def _tree_is_clean(repo, evidence):
     return not porcelain.strip()
 
 
-def _head_equals_remote(repo, default_branch, evidence):
-    """The `head_equals_remote` check, shared the same way. Both shas go into the evidence so
-    a refusal can name them."""
+def head_equals_remote(repo, default_branch, evidence):
+    """The `head_equals_remote` check, shared by pre-flight, the resume disposition, and
+    `run._note_halt`'s R6a guard. Both shas go into the evidence so a refusal can name them, and
+    `None`-safety matters: an unreadable ref must never read as "equal" to another unreadable
+    one."""
     local = gitread.rev_parse(repo, default_branch)
     remote = gitread.rev_parse(repo, "origin/" + default_branch)
     evidence.update(local_sha=local, remote_sha=remote)
@@ -264,7 +266,7 @@ def preflight(repo, default_branch, task_branch, env=None):
     evidence["branch"] = branch
     if branch != default_branch:
         return PreflightResult(False, "on_default", evidence)
-    if not _head_equals_remote(repo, default_branch, evidence):
+    if not head_equals_remote(repo, default_branch, evidence):
         return PreflightResult(False, "head_equals_remote", evidence)
     if gitread.branch_exists(repo, task_branch):
         evidence["task_branch"] = task_branch
@@ -436,7 +438,7 @@ def resume_disposition(repo, default_branch, ops=None, task_id=None, env=None):
     if branch != default_branch:
         checkout(repo, default_branch, ops=ops, task_id=task_id, env=env)
         evidence["checked_out_from"] = branch
-    if not _head_equals_remote(repo, default_branch, evidence):
+    if not head_equals_remote(repo, default_branch, evidence):
         return PreflightResult(False, "head_equals_remote", evidence)
     return PreflightResult(True, None, evidence)
 

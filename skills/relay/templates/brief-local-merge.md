@@ -37,15 +37,16 @@ $blocked_followup
 $unenforced_restrictions
 ## Steps
 
-1. Create `$branch` from `$default_branch` and stay on it for the rest of the session.
-2. Run `$ce_plan` from the task text above and note the path of the plan it writes. It runs its
+1. $tracker_start_step
+2. Create `$branch` from `$default_branch` and stay on it for the rest of the session.
+3. Run `$ce_plan` from the task text above and note the path of the plan it writes. It runs its
    own document review, so there is no separate review step for the plan.
-3. Run `$ce_work $return_mode <plan path>` with that path.
-4. Run `$ce_simplify` unless the diff is documentation only or under ten lines.
-5. Run `$ce_review $review_mode plan:<plan path>`, apply its findings, and commit the fixes.
-6. Run the project gate and make it pass. The gate is: $gate_description
-7. $tracker_review_step
-8. Print the return envelope below as your final message, with nothing after it.
+4. Run `$ce_work $return_mode <plan path>` with that path.
+5. Run `$ce_simplify` unless the diff is documentation only or under ten lines.
+6. Run `$ce_review $review_mode plan:<plan path>`, apply its findings, and commit the fixes.
+7. Run the project gate and make it pass. The gate is: $gate_description
+8. $tracker_review_step
+9. Print the return envelope below as your final message, with nothing after it.
 
 ## If you cannot finish
 
@@ -61,7 +62,7 @@ Your final message must end with this fenced block:
 status: complete
 blockers:
 changed_files:
-plan_path: <the plan path from step 2>
+plan_path: <the plan path from step 3>
 learnings:
 ```
 
