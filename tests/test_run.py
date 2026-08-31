@@ -208,6 +208,30 @@ class RunCase(unittest.TestCase):
     def store(self):
         return state.StateStore(self.manifest_path, self.repo, home=self.home)
 
+    def seed_stale_lease(self, pid=999999, ttl_seconds=1):
+        """A lease belonging to a different pid, self-recorded with a short ttl, the shape a
+        crashed runner leaves behind. state.py's staleness check reads this ttl off the lease
+        record itself, so a caller reclaiming it only needs its own clock to read past
+        `ttl_seconds`, real or injected; the seed store's own clock does not matter afterward."""
+        seed = state.StateStore(self.manifest_path, self.repo, home=self.home, pid=pid,
+                                ttl_seconds=ttl_seconds)
+        seed.acquire()
+        return seed
+
+    def seed_stale_reclaim_on_t1(self, pid=999999, ttl_seconds=1):
+        """seed_stale_lease() plus T-1 marked running under it, simulating T-1's runner
+        crashing mid task."""
+        seed = self.seed_stale_lease(pid=pid, ttl_seconds=ttl_seconds)
+        seed.upsert("T-1", status=contracts.STATUS_RUNNING)
+        return seed
+
+    def reclaiming_store(self, ttl_seconds=1):
+        """A store whose clock already reads past a lease seeded with `ttl_seconds`, so
+        `go(store=...)` reclaims it without a real sleep. The clock is frozen rather than
+        `time.time`-relative so every timestamp this run's store writes stays consistent."""
+        frozen = time.time() + ttl_seconds + 1
+        return state.StateStore(self.manifest_path, self.repo, home=self.home, now=lambda: frozen)
+
     def go(self, **kwargs):
         kwargs.setdefault("base_env", self.base_env())
         kwargs.setdefault("home", self.home)
@@ -876,6 +900,61 @@ class ContinuePastHalt(RunCase):
         self.assertIsNone(terminal["halt_task"])
         self.assertEqual(gitread.current_branch(self.repo), "main")
         self.assertIn("relay/T-2", self.relay_branches(), "the paused task's branch was removed")
+
+    def test_a_reclaim_then_a_real_continue_past_halt_leaves_one_true_terminal_record(self):
+        """R1 at the integration level: the stale lease reclaim (U1) must not leave a phantom
+        terminal record behind. T-1's stale lease is reclaimed (marking it halted/runner_crashed
+        internally), then T-1 is retried fresh and halts for real on a refused gate, and since
+        continue_past_task_halt is opted in, the run continues past it and completes. The run's
+        own terminal record must be the real completion, never the reclaim's crash marking."""
+        self.opt_in(gate=["bash", "-c", GATE_REFUSES_SH % "src/t_1.py"])
+        self.seed_stale_reclaim_on_t1()
+        self.task_success("T-1")
+        self.task_success("T-2")
+        self.closeout_landed("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+
+        store = self.reclaiming_store()
+        result = store.acquire()
+        self.assertEqual(result.code, state.STALE_RECLAIMED)
+        self.assertIsNone(store.terminal(), "the reclaim itself must not write a run-level "
+                          "terminal record before the run decides its own ending (R1)")
+
+        outcome = self.go(store=store)
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        self.assertEqual(self.store().get("T-1")["halt_class"], contracts.HALT_GATE_REFUSED)
+        self.assertTrue(self.store().get("T-1")["continued_past"])
+        terminal = self.store().terminal()
+        self.assertEqual(terminal["run_status"], contracts.RUN_COMPLETED)
+        self.assertIsNone(terminal["halt_task"])
+
+    def test_a_reclaim_then_a_real_full_stop_halt_names_the_real_halt_not_the_reclaim(self):
+        """Same seeded reclaim and gate as above, but continue_past_task_halt is not opted in.
+        The run halts for real on T-1's gate refusal, and the terminal record must name that
+        real halt, not the reclaim's phantom runner_crashed marking. This proves the fix does
+        not change whether the run continues (issue #15's separate logic), only that the
+        transient reclaim marking never leaks into the run-level terminal record either way."""
+        text = MANIFEST.replace("__REPO__", self.repo).replace(
+            'command = ["true"]', "command = %s" % json.dumps(["bash", "-c", GATE_REFUSES_SH % "src/t_1.py"]))
+        with open(self.manifest_path, "w") as handle:
+            handle.write(text)
+        self.manifest = mf.load(self.manifest_path)
+        self.seed_stale_reclaim_on_t1()
+        self.task_success("T-1")
+
+        store = self.reclaiming_store()
+        result = store.acquire()
+        self.assertEqual(result.code, state.STALE_RECLAIMED)
+        self.assertIsNone(store.terminal(), "the reclaim itself must not write a run-level "
+                          "terminal record before the run decides its own ending (R1)")
+
+        outcome = self.go(store=store)
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED, outcome.message)
+        self.assertEqual(outcome.halt_task, "T-1")
+        terminal = self.store().terminal()
+        self.assertEqual(terminal["halt_task"], "T-1")
+        self.assertEqual(terminal["halt_class"], contracts.HALT_GATE_REFUSED)
 
     def test_a_dirty_timeout_still_stops_and_names_the_refused_check(self):
         self.opt_in()

@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -291,6 +292,40 @@ class FollowedRun(CliCase):
         self.assertIn("relay tail %s" % self.manifest_path, out)
         self.wait_for_terminal()
 
+    def test_a_followed_run_that_reclaims_a_stale_lease_still_follows_to_completion(self):
+        """R3: seed a stale lease with T-1 already marked running under it, the way a crashed
+        runner would leave things. The detached child this --follow launch spawns is the one
+        that has to discover and reclaim that lease during its own startup, not this test, so the
+        lease is left in place rather than reclaimed in-process. If the reclaim (U1) still leaked
+        a phantom terminal record, or if some regression made the run stop right after reclaiming
+        instead of continuing, the follow would end early: the completion line, the terminal
+        record's run_status, and the phase headers for every one of the three tasks all have to
+        show up for this to pass, which rules out a coincidental early exit.
+
+        R4 rides along here rather than in its own fixture: the same run that proves the reclaim
+        doesn't disturb `status`/`--follow` is used again to prove summary.build()'s halt_task/
+        halt_class stay consistent with run_status once that run is done.
+
+        Real sleep here, not an injected clock: the detached child constructs its own store
+        with the real clock, and there is no plumbing to inject a fake one across that process
+        boundary (unlike the in-process reclaims elsewhere in this fix's tests)."""
+        self.seed_stale_reclaim_on_t1()
+        time.sleep(1.1)
+
+        self.queue_complete()
+        code, out = self.call("run", self.manifest_path, "--follow")
+
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("relay run completed", out)
+        self.assertEqual(self.store().terminal()["run_status"], contracts.RUN_COMPLETED)
+        self.assertIn("== T-1 %s ==" % tail.PHASE_TASK, out)
+        self.assertIn("== T-3 %s ==" % tail.PHASE_TASK, out)
+
+        data = summary.build(self.manifest, self.store())
+        self.assertEqual(data["run_status"], contracts.RUN_COMPLETED)
+        self.assertIsNone(data["halt_task"])
+        self.assertIsNone(data["halt_class"])
+
     def test_notifications_are_off_unless_the_flag_is_given(self):
         """The suite is hermetic by construction: no case passes --notify, so no case can fire
         one. This pins the default rather than trusting it."""
@@ -340,6 +375,17 @@ class StatusVerb(CliCase):
         _, out = self.call("status", self.manifest_path)
         self.assertNotIn("stale state", out)
         self.assertNotIn("not in this manifest", out)
+
+    def test_status_right_after_a_bare_reclaim_prints_no_terminal_record(self):
+        """R2: reclaiming a stale lease (U1) only marks the in-flight record halted/crashed; it
+        must not fabricate a run-level terminal record. No run() call happens here at all, so if
+        `status` prints one it can only be a phantom conjured by the reclaim itself."""
+        self.seed_stale_lease()
+        self.assertTrue(self.reclaiming_store().acquire().ok)
+
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertNotIn("terminal record:", out)
 
 
 class StatusAgainstAShrunkManifest(CliCase):

@@ -81,17 +81,25 @@ class Acquire(StateCase):
         first.release()
         self.assertEqual(second.acquire().code, st.OK)
 
-    def test_stale_lease_is_reclaimed_and_old_holder_recorded_as_crashed(self):
+    def test_stale_lease_is_reclaimed_without_writing_a_run_level_terminal_record(self):
         self.store(pid=100).acquire()
         self.clock.advance(601)
         result = self.store(pid=200).acquire()
         self.assertEqual(result.code, st.STALE_RECLAIMED)
         self.assertEqual(result.previous_holder["holder_pid"], 100)
         store = self.store(pid=200)
-        terminal = store.terminal()
-        self.assertEqual(terminal["run_status"], contracts.RUN_CRASHED)
-        self.assertEqual(terminal["previous_holder"]["holder_pid"], 100)
+        self.assertIsNone(store.terminal(), "only run()'s own three call sites may write terminal")
         self.assertEqual(store.lease()["holder_pid"], 200)
+
+    def test_stale_lease_reclaim_leaves_a_prior_terminal_record_untouched(self):
+        store = self.store(pid=100)
+        store.acquire()
+        before = store.write_terminal(contracts.RUN_COMPLETED, halt_task=None, halt_class=None)
+        self.clock.advance(601)
+        result = self.store(pid=200).acquire()
+        self.assertEqual(result.code, st.STALE_RECLAIMED)
+        after = self.store(pid=200).terminal()
+        self.assertEqual(after, before)
 
     def test_stale_lease_with_merging_record_marks_runner_crashed(self):
         store = self.store(pid=100)
@@ -107,6 +115,7 @@ class Acquire(StateCase):
         self.assertEqual(record["halt_class"], contracts.HALT_RUNNER_CRASHED)
         self.assertEqual(record["halt_evidence"]["status_before"], contracts.STATUS_MERGING)
         self.assertEqual(record["halt_evidence"]["last_git_op"]["op"], "merge")
+        self.assertEqual(record["halt_evidence"]["previous_holder"]["holder_pid"], 100)
         self.assertEqual(self.store(pid=200).get("T-1")["status"], contracts.STATUS_LANDED)
 
     def test_stale_lease_reclaim_finds_the_task_s_own_kill_of_the_previous_holder(self):

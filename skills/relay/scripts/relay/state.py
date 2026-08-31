@@ -281,7 +281,8 @@ class StateStore:
 
     def _mark_crashed(self, state, previous):
         """R55: a reclaimed lease turns every running or merging record into halted with class
-        runner_crashed, and records the old holder in the terminal record as crashed.
+        runner_crashed, and records the old holder per-record in halt_evidence.previous_holder
+        rather than in a run-level terminal record.
 
         Round six #40: when the crashed task's own stdout log shows it killed the previous
         holder's pid, that self-kill is attached to the record as a runner_self_kill finding
@@ -312,19 +313,6 @@ class StateStore:
                     if finding is not None:
                         record.setdefault("findings", []).append(finding)
                 ids.append(task_id)
-        terminal = state.get("terminal")
-        lease_started = _epoch(previous.get("acquired_at")) or 0
-        written = _epoch((terminal or {}).get("written_at")) or -1
-        if terminal is None or written < lease_started:
-            state["terminal"] = {
-                "run_status": contracts.RUN_CRASHED,
-                "halt_task": ids[0] if ids else None,
-                "halt_class": contracts.HALT_RUNNER_CRASHED if ids else None,
-                "cli_version": {},
-                "cli_version_observed": {},
-                "previous_holder": previous,
-                "written_at": _iso(self.now()),
-            }
         return tuple(ids)
 
     def heartbeat(self):
