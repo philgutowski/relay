@@ -208,6 +208,30 @@ class RunCase(unittest.TestCase):
     def store(self):
         return state.StateStore(self.manifest_path, self.repo, home=self.home)
 
+    def seed_stale_lease(self, pid=999999, ttl_seconds=1):
+        """A lease belonging to a different pid, self-recorded with a short ttl -- the shape a
+        crashed runner leaves behind. state.py's staleness check reads this ttl off the lease
+        record itself, so a caller reclaiming it only needs its own clock to read past
+        `ttl_seconds`, real or injected; the seed store's own clock does not matter afterward."""
+        seed = state.StateStore(self.manifest_path, self.repo, home=self.home, pid=pid,
+                                ttl_seconds=ttl_seconds)
+        seed.acquire()
+        return seed
+
+    def seed_stale_reclaim_on_t1(self, pid=999999, ttl_seconds=1):
+        """seed_stale_lease() plus T-1 marked running under it, simulating T-1's runner
+        crashing mid task."""
+        seed = self.seed_stale_lease(pid=pid, ttl_seconds=ttl_seconds)
+        seed.upsert("T-1", status=contracts.STATUS_RUNNING)
+        return seed
+
+    def reclaiming_store(self, ttl_seconds=1):
+        """A store whose clock already reads past a lease seeded with `ttl_seconds`, so
+        `go(store=...)` reclaims it without a real sleep. The clock is frozen rather than
+        `time.time`-relative so every timestamp this run's store writes stays consistent."""
+        frozen = time.time() + ttl_seconds + 1
+        return state.StateStore(self.manifest_path, self.repo, home=self.home, now=lambda: frozen)
+
     def go(self, **kwargs):
         kwargs.setdefault("base_env", self.base_env())
         kwargs.setdefault("home", self.home)
@@ -877,17 +901,6 @@ class ContinuePastHalt(RunCase):
         self.assertEqual(gitread.current_branch(self.repo), "main")
         self.assertIn("relay/T-2", self.relay_branches(), "the paused task's branch was removed")
 
-    def seed_stale_reclaim_on_t1(self):
-        """Simulates T-1's runner crashing mid task: a lease held by a different pid, recorded
-        with a 1 second ttl on itself, and T-1 marked running under it. Real sleep past that
-        self-recorded ttl is what state.py's staleness check reads, regardless of the ttl the
-        real reclaiming store later uses, so no fake clock is needed here (U2)."""
-        seed = state.StateStore(self.manifest_path, self.repo, home=self.home, pid=999999,
-                                ttl_seconds=1)
-        seed.acquire()
-        seed.upsert("T-1", status=contracts.STATUS_RUNNING)
-        time.sleep(1.1)
-
     def test_a_reclaim_then_a_real_continue_past_halt_leaves_one_true_terminal_record(self):
         """R1 at the integration level: the stale lease reclaim (U1) must not leave a phantom
         terminal record behind. T-1's stale lease is reclaimed (marking it halted/runner_crashed
@@ -902,7 +915,7 @@ class ContinuePastHalt(RunCase):
         self.task_success("T-3")
         self.closeout_landed("T-3")
 
-        outcome = self.go()
+        outcome = self.go(store=self.reclaiming_store())
         self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
         self.assertEqual(self.store().get("T-1")["halt_class"], contracts.HALT_GATE_REFUSED)
         self.assertTrue(self.store().get("T-1")["continued_past"])
@@ -924,7 +937,7 @@ class ContinuePastHalt(RunCase):
         self.seed_stale_reclaim_on_t1()
         self.task_success("T-1")
 
-        outcome = self.go()
+        outcome = self.go(store=self.reclaiming_store())
         self.assertEqual(outcome.exit_code, runner.EXIT_HALTED, outcome.message)
         self.assertEqual(outcome.halt_task, "T-1")
         terminal = self.store().terminal()

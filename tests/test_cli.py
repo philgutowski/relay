@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import _paths
-from relay import cli, contracts, manifest as manifest_module, state, summary, tail
+from relay import cli, contracts, manifest as manifest_module, summary, tail
 from test_run import RunCase
 
 
@@ -304,11 +304,12 @@ class FollowedRun(CliCase):
 
         R4 rides along here rather than in its own fixture: the same run that proves the reclaim
         doesn't disturb `status`/`--follow` is used again to prove summary.build()'s halt_task/
-        halt_class stay consistent with run_status once that run is done."""
-        seed = state.StateStore(self.manifest_path, self.repo, home=self.home, pid=999999,
-                                ttl_seconds=1)
-        seed.acquire()
-        seed.upsert("T-1", status=contracts.STATUS_RUNNING)
+        halt_class stay consistent with run_status once that run is done.
+
+        Real sleep here, not an injected clock: the detached child constructs its own store
+        with the real clock, and there is no plumbing to inject a fake one across that process
+        boundary (unlike the in-process reclaims elsewhere in this fix's tests)."""
+        self.seed_stale_reclaim_on_t1()
         time.sleep(1.1)
 
         self.queue_complete()
@@ -379,12 +380,8 @@ class StatusVerb(CliCase):
         """R2: reclaiming a stale lease (U1) only marks the in-flight record halted/crashed; it
         must not fabricate a run-level terminal record. No run() call happens here at all, so if
         `status` prints one it can only be a phantom conjured by the reclaim itself."""
-        stale = state.StateStore(self.manifest_path, self.repo, home=self.home, pid=999999,
-                                 ttl_seconds=1)
-        stale.acquire()
-        time.sleep(1.1)
-        reclaimer = state.StateStore(self.manifest_path, self.repo, home=self.home, pid=888888)
-        self.assertTrue(reclaimer.acquire().ok)
+        self.seed_stale_lease()
+        self.assertTrue(self.reclaiming_store().acquire().ok)
 
         code, out = self.call("status", self.manifest_path)
         self.assertEqual(code, cli.EXIT_OK, out)
