@@ -44,6 +44,10 @@ than any Task timeout, so a crashed Runner never blocks a repository for the len
 the cost of that choice is that every long operation a Runner performs has to keep renewing, and
 one that does not is how a Runner ends up acting without the claim it thinks it holds.
 
+Reclaiming marks only the Task it inherited; it never records the run's own outcome, because at
+the moment of reclaim the reclaiming run has not yet decided whether it halts there or continues
+past the halt. Only the run's own later conclusion may record that the run itself is over.
+
 ### Follower
 A reader attached to a running Manifest, which decodes the Task processes' output and reports the
 run's phase events. It takes no Lease, decides nothing, and writes nothing, so a Follower can be
