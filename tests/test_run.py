@@ -10,6 +10,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from dataclasses import replace
 
 from types import SimpleNamespace
 
@@ -281,17 +282,59 @@ class EndToEnd(RunCase):
         state.json rather than staying silently invisible."""
         self.go()
         terminal = self.store().terminal()
-        self.assertEqual(terminal["cli_version"], contracts.CLI_VERSION_TESTED)
-        self.assertEqual(terminal["cli_version_observed"], contracts.CLI_VERSION_TESTED)
+        self.assertEqual(terminal["cli_version"], {"claude": contracts.CLI_VERSION_TESTED})
+        self.assertEqual(terminal["cli_version_observed"], {"claude": contracts.CLI_VERSION_TESTED})
 
     def test_the_observed_cli_version_diverges_from_the_pinned_one_when_the_binary_reports_differently(self):
         env = self.base_env()
         env["RELAY_STUB_CLI_VERSION"] = "9.9.9 (Claude Code)"
         self.go(base_env=env)
         terminal = self.store().terminal()
-        self.assertEqual(terminal["cli_version"], contracts.CLI_VERSION_TESTED)
-        self.assertEqual(terminal["cli_version_observed"], "9.9.9")
+        self.assertEqual(terminal["cli_version"], {"claude": contracts.CLI_VERSION_TESTED})
+        self.assertEqual(terminal["cli_version_observed"], {"claude": "9.9.9"})
         self.assertNotEqual(terminal["cli_version"], terminal["cli_version_observed"])
+
+    def test_terminal_version_maps_name_only_backends_that_launched(self):
+        from unittest import mock
+        store = self.store()
+        with mock.patch.object(runner.launch, "cli_version", side_effect=lambda _env, backend: backend):
+            runner._write_terminal(store, self.base_env(), contracts.RUN_COMPLETED,
+                                   used_backends={"codex", "grok"})
+        terminal = store.terminal()
+        self.assertEqual(set(terminal["cli_version"]), {"codex", "grok"})
+        self.assertEqual(terminal["cli_version_observed"], {"codex": "codex", "grok": "grok"})
+        self.assertNotIn("claude", terminal["cli_version"])
+
+    def test_a_launched_record_carries_its_backend_and_actual_command_evidence(self):
+        self.go()
+        record = self.store().get("T-1")
+        self.assertEqual(record["backend"], "claude")
+        self.assertTrue(record["binary_path"].endswith("/claude"))
+        self.assertEqual(record["args"][0], "claude")
+
+    def test_a_launch_error_does_not_add_an_unlaunched_backend_to_terminal_versions(self):
+        def unavailable(*_args, **_kwargs):
+            raise OSError("binary unavailable")
+
+        self.go(launch_kwargs={"popen": unavailable, "sigkill_grace_seconds": 2,
+                                "heartbeat_interval": 0})
+        terminal = self.store().terminal()
+        self.assertEqual(terminal["cli_version"], {})
+        self.assertEqual(terminal["cli_version_observed"], {})
+
+    def test_resume_uses_the_recorded_backend_after_a_manifest_edit(self):
+        self.go()
+        self.task_success("T-2")
+        self.closeout_landed("T-2")
+        self.manifest = replace(
+            self.manifest,
+            tasks=tuple(replace(task, backend="codex") if task.id == "T-2" else task
+                        for task in self.manifest.tasks),
+        )
+        self.go(retry_blocked=True)
+        record = self.store().get("T-2")
+        self.assertEqual(record["backend"], "claude")
+        self.assertEqual(record["args"][0], "claude")
 
     def test_each_landed_record_carries_its_landing_reference_and_verify_timestamp(self):
         self.go()

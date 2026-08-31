@@ -22,6 +22,7 @@ long subagent call; neither the deadline check nor the lease may depend on it sa
 import glob
 import os
 import queue as queuemod
+import shutil
 import signal
 import subprocess
 import threading
@@ -49,6 +50,8 @@ class LaunchResult:
     transcript_present: bool = False
     log_path: str | None = None
     launch_error: str | None = None
+    binary_path: str | None = None
+    args: list | None = None
 
 
 ALWAYS_SCRUBBED = ("JIRA_API_TOKEN", "JIRA_EMAIL")
@@ -280,6 +283,8 @@ def launch(manifest, task, brief_text, log_path, timeout_seconds, session_id=Non
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
     args = build_args(manifest, task, brief_text, session_id, allowed, disallowed,
                       log_path=log_path, repo=repo)
+    result.args = list(args)
+    result.binary_path = shutil.which(args[0], path=env.get("PATH"))
 
     started_wall = time.time()
     started = time.monotonic()

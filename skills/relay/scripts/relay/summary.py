@@ -80,6 +80,7 @@ def _task_entry(store, record):
         # of them written after the halt, so the evidence the raiser recorded has to win.
         "cause": cause_line(record.get("halt_class"), record, landing, evidence),
         "halt_message": record.get("halt_message"),
+        "backend": record.get("backend"),
         "landing_ref": record.get("landing_ref"),
         "branch": record.get("branch"),
         "closeout": record.get("closeout"),
@@ -202,6 +203,8 @@ def lines(data):
         head = "%s  %s" % (entry["id"], entry["status"])
         if entry["class"]:
             head += "  [%s]" % entry["class"]
+        if entry["backend"]:
+            head += "  (%s)" % entry["backend"]
         out.append((head, source + ".status"))
         if entry["cause"]:
             out.append(("    %s" % entry["cause"], source + ".cause"))

@@ -47,7 +47,7 @@ class Acquire(StateCase):
         self.assertEqual(result.code, st.OK)
         with open(store.state_path) as handle:
             data = json.load(handle)
-        self.assertEqual(data["schema_version"], 1)
+        self.assertEqual(data["schema_version"], contracts.STATE_SCHEMA_VERSION)
         self.assertEqual(data["lease"]["holder_pid"], 100)
         self.assertEqual(data["tasks"], {})
         self.assertTrue(os.path.exists(store.repo_lock_path))
@@ -197,7 +197,7 @@ class Records(StateCase):
         store._abort_after_write = None
         self.assertEqual(store.get("T-1")["baseline_sha"], "aaa")
         with open(store.state_path) as handle:
-            self.assertEqual(json.load(handle)["schema_version"], 1)
+            self.assertEqual(json.load(handle)["schema_version"], contracts.STATE_SCHEMA_VERSION)
 
     def test_cursor_and_git_ops(self):
         store = self.store()
@@ -220,20 +220,43 @@ class Terminal(StateCase):
                              cli_version_observed="2.1.247")
         store.release()
         self.assertEqual(store.status_word(), contracts.RUN_COMPLETED)
-        self.assertEqual(store.terminal()["cli_version"], "2.1.245")
-        self.assertEqual(store.terminal()["cli_version_observed"], "2.1.247")
+        self.assertEqual(store.terminal()["cli_version"], {"claude": "2.1.245"})
+        self.assertEqual(store.terminal()["cli_version_observed"], {"claude": "2.1.247"})
         store.acquire()
         store.write_terminal(contracts.RUN_HALTED, halt_task="T-2", halt_class=contracts.HALT_TIMEOUT)
         store.release()
         self.assertEqual(store.status_word(), contracts.RUN_HALTED)
         self.assertEqual(store.terminal()["halt_task"], "T-2")
-        # cli_version_observed defaults to None (the version-probe-failed path), not omitted.
-        self.assertIsNone(store.terminal()["cli_version_observed"])
+        # A failed version probe is an empty per-backend map, not an omitted field.
+        self.assertEqual(store.terminal()["cli_version_observed"], {})
         # A new run acquires, then dies: no terminal after the lease, lease stale.
         self.clock.advance(1)
         store.acquire()
         self.clock.advance(601)
         self.assertEqual(store.status_word(), contracts.RUN_CRASHED)
+
+    def test_legacy_scalar_terminal_and_missing_record_backend_open_as_claude(self):
+        store = self.store()
+        legacy = {
+            "schema_version": 1,
+            "manifest": store.manifest_path,
+            "repo": store.repo_path,
+            "lease": None,
+            "cursor": 0,
+            "tasks": {"T-1": {"id": "T-1", "status": contracts.STATUS_BLOCKED}},
+            "terminal": {"run_status": contracts.RUN_HALTED, "halt_task": "T-1",
+                         "halt_class": contracts.HALT_TIMEOUT, "cli_version": "2.1.245",
+                         "cli_version_observed": "2.1.247", "written_at": "1970-01-01T00:00:00+00:00"},
+            "git_ops": [],
+        }
+        with open(store.state_path, "w", encoding="utf-8") as handle:
+            json.dump(legacy, handle)
+        self.assertEqual(store.get("T-1")["backend"], "claude")
+        self.assertEqual(store.terminal()["cli_version"], {"claude": "2.1.245"})
+        self.assertEqual(store.terminal()["cli_version_observed"], {"claude": "2.1.247"})
+        store.set_cursor(1)
+        with open(store.state_path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["schema_version"], contracts.STATE_SCHEMA_VERSION)
 
 
 class Layout(StateCase):
