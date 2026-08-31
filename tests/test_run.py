@@ -986,6 +986,88 @@ class NoteHalt(RunCase):
         finally:
             runner._run_closeout = original
 
+    def test_a_check_that_raises_never_escapes_or_replaces_the_halt(self):
+        """Code review finding (reliability): the four checks themselves, not only the closeout
+        launch, must be inside the best-effort guard, or a git failure while checking would
+        escape _note_halt and reach run()'s own except-Exception handler, which fabricates a
+        new halt from that failure and masks the real one (R8, KTD4)."""
+        ctx = self.ctx()
+        original = gitread.is_clean
+        gitread.is_clean = lambda repo: (_ for _ in ()).throw(RuntimeError("git blew up"))
+        try:
+            halt = runner._Halt("T-1", contracts.HALT_GATE_REFUSED, "gate refused", {})
+            runner._note_halt(ctx, halt)  # must not raise
+            self.assertEqual(halt.halt_class, contracts.HALT_GATE_REFUSED)
+            self.assertEqual(halt.message, "gate refused")
+        finally:
+            gitread.is_clean = original
+
+    def test_a_closeout_scope_reset_never_launches_a_second_closeout(self):
+        """Code review finding (correctness): gitwrite.closeout_scope_check's own
+        HALT_UNCLEAN_EXIT raise resets the tree before raising, so the tree-clean check alone
+        would not catch it -- the evidence's reset_to key is the signal that this halt is the
+        Closeout mechanism itself misbehaving, not an ordinary unclean exit."""
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_UNCLEAN_EXIT, "closeout left work uncommitted",
+                                  {"reset_to": "abc1234"}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(calls, [])
+
+    def test_an_ordinary_unclean_exit_without_reset_to_still_launches_the_closeout(self):
+        """The reset_to exclusion is narrow: an unrelated HALT_UNCLEAN_EXIT raise (no reset_to
+        in its evidence) still gets the comment, since only the closeout-scope-check raise site
+        carries that key."""
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_UNCLEAN_EXIT, "left the tree dirty", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(len(calls), 1)
+
+    def test_a_halt_after_landing_passes_the_landing_ref_through(self):
+        """Code review finding (adversarial, agent-native): a halt raised after this task's own
+        landed closeout already ran (a mirror push refusal or a failing final verify) must carry
+        the landing reference through, so the comment reads as a post-landing failure rather than
+        an undifferentiated halt on a card the runner already moved to a terminal status."""
+        ctx = self.ctx()
+        ctx.store.upsert("T-1", landing_ref="abc1234def")
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_GATE_REFUSED,
+                                  "the mirror push was refused for T-1", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(len(calls), 1)
+        outcome, kwargs = calls[0]
+        self.assertEqual(kwargs["landing_ref"], "abc1234def")
+
+    def test_a_halt_before_landing_passes_no_landing_ref(self):
+        ctx = self.ctx()
+        calls, fake = self.recorder()
+        original = runner._run_closeout
+        runner._run_closeout = fake
+        try:
+            runner._note_halt(
+                ctx, runner._Halt("T-1", contracts.HALT_GATE_REFUSED, "gate refused", {}))
+        finally:
+            runner._run_closeout = original
+        self.assertEqual(len(calls), 1)
+        outcome, kwargs = calls[0]
+        self.assertIsNone(kwargs.get("landing_ref"))
+
 
 GATE_REFUSES_SH = "test ! -e %s"
 

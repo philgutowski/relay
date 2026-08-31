@@ -201,6 +201,17 @@ class HaltedBrief(CloseoutCase):
         self.assertIn("Halt class: unknown", text)
         self.assertIn("Cause: no cause line recorded", text)
 
+    def test_a_halt_after_landing_names_the_landing_reference(self):
+        """Code review finding (adversarial, agent-native): a halt raised after this task's own
+        landed closeout already ran must say so, or the comment reads as an undifferentiated
+        halt on a card that already shows landed."""
+        text = self.render(outcome="halted", digest=digest_from("success.jsonl"),
+                           landing_ref=MERGE_SHA, halt_class="gate_refused",
+                           cause_line="the mirror push was refused for T-1")
+        self.assertIn("Landed at %s, but the run then halted." % MERGE_SHA, text)
+        self.assertIn("Halt class: gate_refused", text)
+        self.assertIn("Cause: the mirror push was refused for T-1", text)
+
 
 class CompoundDepth(CloseoutCase):
     def test_a_path_gate_finding_chooses_the_full_depth(self):

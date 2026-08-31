@@ -87,7 +87,7 @@ def task_tracker_steps(manifest, branch):
 
     The start step exists so the board shows a task as in progress the moment its process
     launches, rather than only near the end of the session (relay task 50). The review step no
-    longer moves the card itself -- the start step already did -- so it carries only the comment
+    longer moves the card itself, since the start step already did, so it carries only the comment
     duty now.
     """
     name = manifest.tracker.adapter

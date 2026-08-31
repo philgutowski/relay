@@ -159,14 +159,19 @@ def render(manifest, card, outcome, digest, comments, adapter, allowed_paths, ba
     are set only for `OUTCOME_HALTED`, the runner's own values for the halt already raised (R4);
     `cause_line` is defanged because, unlike a landing sha, it can carry task-influenced text (a
     denied call's captured argument, a dirty tree's file list) that must not close the data block
-    or forge a runner instruction (R56)."""
+    or forge a runner instruction (R56). `landing_ref` is also passed for `OUTCOME_HALTED` when
+    the task's own landed closeout already ran before this halt (a mirror push refusal or a
+    failing final verify), naming it keeps the comment from reading as an undifferentiated halt
+    on a card the runner already moved to a terminal status."""
     task_id = card.get("id")
     depth = depth_for(digest)
     envelope = (digest or {}).get("envelope") or {}
     landing_line = ""
     if outcome == OUTCOME_HALTED:
-        landing_line = "Halt class: %s\nCause: %s" % (
+        cause_text = "Halt class: %s\nCause: %s" % (
             halt_class or "unknown", brief.defang(cause_line or "no cause line recorded"))
+        landing_line = ("Landed at %s, but the run then halted.\n%s" % (landing_ref, cause_text)
+                        if landing_ref else cause_text)
     elif outcome == OUTCOME_LANDED and landing_ref:
         landing_line = "Landing reference: %s" % landing_ref
     elif outcome == OUTCOME_LANDED:

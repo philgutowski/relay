@@ -702,16 +702,29 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
 
 def _note_halt(ctx, halt):
     """R4: make a halt visible on the tracker card without changing its status, by launching the
-    Closeout with `outcome=halted` -- the same mechanism a landed or blocked outcome already
-    uses. Best effort: every check below is a `return` that leaves the halt already raised
-    (`halt`) as the run's only record of what happened, per KTD4 (this repo's own CLAUDE.md:
-    "every stop is a named class with evidence, not an exception").
+    Closeout with `outcome=halted`, the same mechanism a landed or blocked outcome already uses.
+    Best effort: everything below is wrapped so a failure anywhere in it, one of the checks, the
+    checkout, or the Closeout launch itself, is logged and swallowed rather than propagating,
+    leaving the halt already raised (`halt`) as the run's only record of what happened, per KTD4
+    (this repo's own CLAUDE.md: "every stop is a named class with evidence, not an exception").
+    An unguarded check that raised would otherwise escape `_one_task`'s `except _Halt` handler
+    and reach `run()`'s own except-Exception path, which fabricates a new halt from whatever
+    broke, exactly the masking this function exists to prevent. This is the same reason
+    `_continue_past` wraps its own mutation in a `try` rather than trusting each check to stay
+    side-effect free.
+
+    Gate 1 also excludes a halt whose evidence carries `reset_to`: that key is unique to
+    `gitwrite.closeout_scope_check`'s own `HALT_UNCLEAN_EXIT` raise (a Closeout that left
+    in-scope work uncommitted), which already reset the tree before raising, so the tree-clean
+    check alone would not catch it, and `HALT_UNCLEAN_EXIT` is too general a class to exclude
+    outright (most of its raise sites are unrelated to Closeout and still want the comment).
 
     Four checks gate the launch, each closing a specific gap KTD3 names:
 
     1. The halt class is run-scoped, or means the Closeout mechanism itself just misbehaved
-       (`CLOSEOUT_MISBEHAVED_HALT_CLASSES`): the repository, a second runner, or Closeout's own
-       trustworthiness is uncertain, so no second process is launched onto it.
+       (`CLOSEOUT_MISBEHAVED_HALT_CLASSES`, or the `reset_to` case above): the repository, a
+       second runner, or Closeout's own trustworthiness is uncertain, so no second process is
+       launched onto it.
     2. The tree is dirty: that state is the operator's own evidence to inspect, not a workspace
        to launch a process into (mirrors R16's pre-flight refusal for the task process).
     3. The default branch is not in sync with `origin/<default>` (`gitwrite.head_equals_remote`,
@@ -720,29 +733,37 @@ def _note_halt(ctx, halt):
        closeout makes on top would otherwise carry that unverified merge to origin alongside it.
     4. The lease can no longer be confirmed as this runner's: the same freshness check
        `_continue_past` already applies before its own repository mutation.
+
+    When this task's record already carries a `landing_ref` (a halt raised after its own landed
+    closeout already ran, from a mirror push refusal or a failing final verify), that reference
+    is passed through so the rendered comment reads as "landed, then this later step failed"
+    instead of an undifferentiated halt on a card that already shows landed.
     """
     if (halt.halt_class in contracts.RUN_SCOPED_HALT_CLASSES
-            or halt.halt_class in contracts.CLOSEOUT_MISBEHAVED_HALT_CLASSES):
+            or halt.halt_class in contracts.CLOSEOUT_MISBEHAVED_HALT_CLASSES
+            or halt.evidence.get("reset_to") is not None):
         return
-    if not gitread.is_clean(ctx.repo):
-        if ctx.stream is not None:
-            ctx.stream("%s: tree left dirty on %s; skipping the halt comment"
-                       % (halt.task_id, gitread.current_branch(ctx.repo)))
-        return
-    if not gitwrite.head_equals_remote(ctx.repo, ctx.default, {}):
-        if ctx.stream is not None:
-            ctx.stream("%s: %s is not in sync with origin/%s; skipping the halt comment"
-                       % (halt.task_id, ctx.default, ctx.default))
-        return
-    if not ctx.store.heartbeat():
-        if ctx.stream is not None:
-            ctx.stream("%s: lease no longer confirmed; skipping the halt comment" % halt.task_id)
-        return
-    gitwrite.blocked_path(ctx.repo, ctx.default, ctx.branch, ops=ctx.store, task_id=halt.task_id,
-                          env=ctx.env)
     try:
-        _run_closeout(ctx, closeout.OUTCOME_HALTED, halt_class=halt.halt_class,
-                      cause_line=halt.message)
+        if not gitread.is_clean(ctx.repo):
+            if ctx.stream is not None:
+                ctx.stream("%s: tree left dirty on %s; skipping the halt comment"
+                           % (halt.task_id, gitread.current_branch(ctx.repo)))
+            return
+        if not gitwrite.head_equals_remote(ctx.repo, ctx.default, {}):
+            if ctx.stream is not None:
+                ctx.stream("%s: %s is not in sync with origin/%s; skipping the halt comment"
+                           % (halt.task_id, ctx.default, ctx.default))
+            return
+        if not ctx.store.heartbeat():
+            if ctx.stream is not None:
+                ctx.stream("%s: lease no longer confirmed; skipping the halt comment"
+                           % halt.task_id)
+            return
+        gitwrite.blocked_path(ctx.repo, ctx.default, ctx.branch, ops=ctx.store,
+                              task_id=halt.task_id, env=ctx.env)
+        record = ctx.store.get(halt.task_id) or {}
+        _run_closeout(ctx, closeout.OUTCOME_HALTED, landing_ref=record.get("landing_ref"),
+                     halt_class=halt.halt_class, cause_line=halt.message)
     except Exception as exc:
         if ctx.stream is not None:
             ctx.stream("%s: could not comment halt %s on the tracker: %s"
