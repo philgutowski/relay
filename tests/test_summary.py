@@ -25,8 +25,9 @@ from test_run import RunCase
 
 
 class _Task:
-    def __init__(self, task_id):
+    def __init__(self, task_id, backend="claude"):
         self.id = task_id
+        self.backend = backend
 
 
 class _Project:
@@ -41,7 +42,8 @@ class _Manifest:
     def __init__(self, path, repo, task_ids):
         self.path = path
         self.project = _Project(repo)
-        self.tasks = [_Task(task_id) for task_id in task_ids]
+        self.tasks = [_Task(*task_id) if isinstance(task_id, tuple) else _Task(task_id)
+                      for task_id in task_ids]
 
 
 # Evidence a raiser records for a class that becomes the record's own `halt_class`. Each row is
@@ -233,6 +235,28 @@ class CauseLineTable(unittest.TestCase):
                 entry = self.summarise(["T-1"])["tasks"][0]
                 self.assertTrue(entry["cause"])
                 self.assertNotIn("{", entry["cause"])
+
+    def test_summary_names_each_task_backend_and_legacy_records_default_to_claude(self):
+        self.store.upsert("T-1", status=contracts.STATUS_LANDED,
+                          halt_class=contracts.HALT_LANDED, backend="codex", findings=[])
+        self.store.upsert("T-2", status=contracts.STATUS_LANDED,
+                          halt_class=contracts.HALT_LANDED, findings=[])
+        data = self.summarise([("T-1", "codex"), ("T-2", "grok")])
+        self.assertEqual([entry["backend"] for entry in data["tasks"]], ["codex", "claude"])
+        text = summary.render(data)
+        self.assertIn("T-1  landed  [landed]  (codex)", text)
+        self.assertIn("T-2  landed  [landed]  (claude)", text)
+
+    def test_cause_line_keeps_a_backend_scalar_when_other_record_values_are_structured(self):
+        original = contracts.HALT_LINES[contracts.HALT_UNEXPECTED_ERROR]
+        contracts.HALT_LINES[contracts.HALT_UNEXPECTED_ERROR] = "{backend}: {error}"
+        try:
+            line = summary.cause_line(contracts.HALT_UNEXPECTED_ERROR,
+                                      {"backend": "grok", "args": ["grok", "-p"],
+                                       "error": "failed"})
+        finally:
+            contracts.HALT_LINES[contracts.HALT_UNEXPECTED_ERROR] = original
+        self.assertEqual(line, "grok: failed")
 
 
 class CauseLinesFromARealRun(RunCase):

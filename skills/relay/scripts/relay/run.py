@@ -21,7 +21,7 @@ The runner never writes to the tracker (R19). Every tracker write in this file h
 closeout process the runner launched; the runner reads the result back and decides from it.
 """
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from . import (adapters, backends, brief, classify, closeout, contracts, gitread, gitwrite,
                launch, manifest as manifest_module, state, summary, verify)
@@ -50,6 +50,7 @@ class _Run:
     launch_kwargs: dict
     now: object
     allowed_paths: tuple
+    used_backends: set = field(default_factory=set)
 
 
 @dataclass
@@ -145,23 +146,6 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
                % ((acquired.previous_holder or {}).get("holder_pid"),
                   len(acquired.reclaimed_ids), contracts.HALT_RUNNER_CRASHED))
 
-    # Read only once the run is actually going to reach a write_terminal call: EXIT_CONFIG and
-    # EXIT_LEASE both return above this point, and a blocking subprocess call whose result those
-    # paths would discard is wasted work on every run that never gets past them.
-    used = []
-    for task in manifest.tasks:
-        if task.excluded:
-            continue
-        if task.backend not in used:
-            used.append(task.backend)
-    observed_by_backend = {name: launch.cli_version(env, backend=name) for name in used}
-    if "claude" in observed_by_backend:
-        observed_cli_version = observed_by_backend["claude"]
-    elif used:
-        observed_cli_version = observed_by_backend[used[0]]
-    else:
-        observed_cli_version = None
-
     # Resolved once, here, from the repo as it stands before any task has touched it. Reading
     # it per closeout would let a task's own merge move the bound its closeout is checked
     # against (R53, KTD15).
@@ -214,14 +198,12 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
                            % (halt.task_id, halt.halt_class))
                 store.set_cursor(index + 1)
                 continue
-            store.write_terminal(contracts.RUN_HALTED, halt.task_id, halt.halt_class,
-                                 contracts.CLI_VERSION_TESTED,
-                                 cli_version_observed=observed_cli_version)
+            _write_terminal(store, env, contracts.RUN_HALTED, halt.task_id, halt.halt_class,
+                            config.used_backends)
             wrote_terminal = True
             return RunOutcome(EXIT_HALTED, halt.task_id, halt.halt_class, halt.message,
                               store, store.records())
-        store.write_terminal(contracts.RUN_COMPLETED, cli_version=contracts.CLI_VERSION_TESTED,
-                             cli_version_observed=observed_cli_version)
+        _write_terminal(store, env, contracts.RUN_COMPLETED, used_backends=config.used_backends)
         wrote_terminal = True
         outcome.records = store.records()
         return outcome
@@ -231,9 +213,8 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
         # or `relay status` reports the previous run's outcome as if it were this one.
         if not wrote_terminal:
             try:
-                store.write_terminal(contracts.RUN_CRASHED,
-                                     cli_version=contracts.CLI_VERSION_TESTED,
-                                     cli_version_observed=observed_cli_version)
+                _write_terminal(store, env, contracts.RUN_CRASHED,
+                                used_backends=config.used_backends)
             except Exception:
                 pass
         store.release()
@@ -243,6 +224,14 @@ def _git_error_fields(exc):
     """The evidence a GitError contributes wherever one is recorded."""
     return {"args": exc.args_list, "returncode": exc.returncode,
             "stderr": (exc.stderr or "")[-2000:]}
+
+
+def _write_terminal(store, env, run_status, halt_task=None, halt_class=None, used_backends=()):
+    """Write terminal version evidence for only the CLIs this invocation actually launched."""
+    used = sorted(used_backends)
+    pinned = {name: backends.build(name).CAPABILITY.version_tested for name in used}
+    observed = {name: launch.cli_version(env, backend=name) for name in used}
+    return store.write_terminal(run_status, halt_task, halt_class, pinned, observed)
 
 
 def _continue_past(cfg, halt):
@@ -314,6 +303,8 @@ def _one_task(cfg, task):
     repo, default, env = cfg.repo, cfg.default, cfg.env
     stream = cfg.stream
     record = store.get(task.id) or state.new_record(task.id)
+    if record.get("backend") and record["backend"] != task.backend:
+        task = replace(task, backend=record["backend"])
     status = record.get("status")
 
     if task.excluded:
@@ -377,13 +368,15 @@ def _one_task(cfg, task):
                  baseline_tracker_status=card_status.get("status"),
                  baseline_comment_id=baseline_comment_id, branch=branch,
                  brief_sha256=brief_sha, started_at=None, halt_class=None, findings=[],
-                 continued_past=False)
+                 continued_past=False, backend=task.backend)
 
     launched = launch.launch(
         manifest, task, brief_text, store.path("logs", task.id + ".stdout.log"),
         cfg.overrides.get("task_seconds") or manifest.timeouts.task_minutes * 60,
         home=cfg.home, base_env=cfg.base_env, stream=stream,
         heartbeat=store.heartbeat, on_release=store.release, **cfg.launch_kwargs)
+    if not launched.launch_error:
+        cfg.used_backends.add(task.backend)
 
     capability = backends.build(task.backend).CAPABILITY
     disallow = (manifest_module.resolved_disallowed(manifest)
@@ -402,7 +395,8 @@ def _one_task(cfg, task):
         extra["unenforced_restrictions"] = _unenforced_scalar(manifest)
     store.upsert(task.id, session_id=launched.session_id,
                  transcript_path=launched.transcript_path, wall_seconds=launched.wall_seconds,
-                 active_seconds=launched.active_seconds, findings=findings, **extra)
+                 active_seconds=launched.active_seconds, findings=findings,
+                 binary_path=launched.binary_path, args=launched.args, **extra)
 
     context = _Context(task=task, card=card, branch=branch, baseline_sha=baseline_sha,
                        baseline_comment_id=baseline_comment_id, digest=digest,

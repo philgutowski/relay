@@ -11,8 +11,8 @@ import re
 # The plugin and CLI versions these pins were read from.
 PLUGIN_NAME = "compound-engineering"
 PLUGIN_MIN_VERSION = "3.23.4"
-# Claude's own pin. U11 turns this into one entry per backend; until then the alternates' tested
-# versions live in BACKEND_PINS below. Re-verified against the installed binary in U1.
+# Backward-compatible Claude pin. New terminal records use the per-backend values in
+# BACKEND_PINS, which are the single source of truth for all three CLIs.
 CLI_VERSION_TESTED = "2.1.250"
 
 # Source paths are relative to the installed plugin root, for the pin check test.
@@ -469,7 +469,7 @@ CONCEPTS_FILE = "CONCEPTS.md"
 LEASE_HEARTBEAT_SECONDS = 60
 LEASE_TTL_SECONDS = 600
 
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 
 
 def slug_for(path):

@@ -33,7 +33,7 @@ RECORD_FIELDS = (
     "status", "baseline_sha", "baseline_tracker_status", "baseline_comment_id", "session_id",
     "branch", "landing_ref", "verify", "halt_class", "halt_evidence", "findings", "closeout",
     "started_at", "ended_at", "wall_seconds", "active_seconds", "transcript_path", "brief_sha256",
-    "excluded_reason", "continued_past",
+    "excluded_reason", "continued_past", "backend", "binary_path", "args",
 )
 
 
@@ -128,7 +128,31 @@ class StateStore:
         if not os.path.exists(self.state_path):
             return None
         with open(self.state_path, encoding="utf-8") as handle:
-            return json.load(handle)
+            state = json.load(handle)
+        return self._normalize_legacy_state(state)
+
+    @staticmethod
+    def _version_map(value):
+        """Accept U10's scalar terminal evidence while every new record is backend-keyed."""
+        if isinstance(value, dict):
+            return dict(value)
+        return {"claude": value} if value is not None else {}
+
+    def _normalize_legacy_state(self, state):
+        """Present pre-U11 state in the current reader shape without rewriting it on read."""
+        if not isinstance(state, dict):
+            return state
+        terminal = state.get("terminal")
+        if isinstance(terminal, dict):
+            terminal["cli_version"] = self._version_map(terminal.get("cli_version"))
+            terminal["cli_version_observed"] = self._version_map(
+                terminal.get("cli_version_observed"))
+        for record in (state.get("tasks") or {}).values():
+            if isinstance(record, dict) and not record.get("backend"):
+                # Before pluggable backends every task was Claude, so this is evidence, not a
+                # guess. It also keeps a resumed task on the CLI that produced its first run.
+                record["backend"] = "claude"
+        return state
 
     def _write_locked(self, state):
         tmp = self.state_path + ".tmp"
@@ -149,6 +173,10 @@ class StateStore:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             state = self.read() or self._empty()
+            # A legacy file is upgraded only when a normal mutation already makes it durable;
+            # opening a state directory remains strictly read-only.
+            if state.get("schema_version", 0) < contracts.STATE_SCHEMA_VERSION:
+                state["schema_version"] = contracts.STATE_SCHEMA_VERSION
             result = fn(state)
             self._write_locked(state)
             return result
@@ -273,8 +301,8 @@ class StateStore:
                 "run_status": contracts.RUN_CRASHED,
                 "halt_task": ids[0] if ids else None,
                 "halt_class": contracts.HALT_RUNNER_CRASHED if ids else None,
-                "cli_version": None,
-                "cli_version_observed": None,
+                "cli_version": {},
+                "cli_version_observed": {},
                 "previous_holder": previous,
                 "written_at": _iso(self.now()),
             }
@@ -398,8 +426,8 @@ class StateStore:
             "run_status": run_status,
             "halt_task": halt_task,
             "halt_class": halt_class,
-            "cli_version": cli_version,
-            "cli_version_observed": cli_version_observed,
+            "cli_version": self._version_map(cli_version),
+            "cli_version_observed": self._version_map(cli_version_observed),
             "written_at": _iso(self.now()),
         }
         self._mutate(lambda state: state.update(terminal=record))
