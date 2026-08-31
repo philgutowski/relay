@@ -234,16 +234,14 @@ def _closeout_task(manifest, task_id, backend):
 
 
 def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths,
-        backend=manifest_module.DEFAULT_BACKEND,
+        backend,
         landing_ref=None, branch=None, commit_range=None, plan_path=None, gate=None,
         wall_seconds=None, active_seconds=None, timeout_seconds=None,
         **launch_kwargs):
     """Render, launch, and read the ending. Returns what happened; it changes no git state and
     writes nothing to the tracker itself. The caller runs the scope check and the push.
 
-    This is the only function on this seam that defaults `backend`, and the default is what
-    `_closeout_task` produced before backends existed, so `run.py` is unchanged until the unit
-    that flips the closeout onto the task's own backend. It feeds all three consumers: the
+    The caller supplies the Task backend. It feeds all three consumers: the
     rendered brief, the launched CLI, and the normalizer that reads what that CLI wrote."""
     task_id = card.get("id")
     text = render(manifest, card, outcome, digest, comments, adapter, allowed_paths, backend,

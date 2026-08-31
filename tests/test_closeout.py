@@ -8,12 +8,13 @@ import json
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import _paths
 import _repo
 from _fakes import FakeAdapter
-from relay import classify, closeout, contracts, launch, manifest as mf, state
+from relay import classify, closeout, contracts, launch, manifest as mf, run as runner, state
 
 FIXTURE = os.path.join(_paths.FIXTURES_DIR, "manifests", "complete.toml")
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
@@ -262,12 +263,13 @@ class RunTheProcess(CloseoutCase):
     def store(self):
         return state.StateStore(self.manifest.path, self.repo, home=self.home)
 
-    def go(self, fixture, outcome="landed", digest=None, adapter=None, **kwargs):
+    def go(self, fixture, outcome="landed", digest=None, adapter=None, backend="claude", **kwargs):
         write_entry(self.queue, 1, os.path.join(TRANSCRIPTS, fixture))
         return closeout.run(
             self.manifest, CARD, outcome,
             digest if digest is not None else digest_from("success.jsonl"),
             [], adapter or self.adapter, self.store(), self.allowed_paths(),
+            backend=backend,
             landing_ref=MERGE_SHA, branch="relay/T-1",
             base_env=self.base_env(), home=self.home, stream=lambda line: None,
             timeout_seconds=30, **kwargs)
@@ -329,12 +331,12 @@ class RunTheProcess(CloseoutCase):
 
 
 class OneBackendValueReachesEveryConsumer(CloseoutCase):
-    """Backends KTD2. `run()` is the only defaulting site, and the value it resolves has to reach
-    all three consumers: the rendered brief, the launched CLI, and the normalizer that reads what
-    that CLI wrote. The third is the one that hides, because the digest's key set is identical
-    whether the backend took effect or not, so this asserts on the calls rather than the digest."""
+    """Backends KTD2. The caller provides one backend value and it reaches all three consumers:
+    the rendered brief, the launched CLI, and the normalizer that reads what that CLI wrote. The
+    third is the one that hides, because the digest's key set is identical whether the backend
+    took effect or not, so this asserts on the calls rather than the digest."""
 
-    def go_spied(self, backend=None):
+    def go_spied(self, backend):
         seen = {}
 
         def fake_launch(manifest, task, text, log_path, timeout_seconds, **kwargs):
@@ -348,28 +350,80 @@ class OneBackendValueReachesEveryConsumer(CloseoutCase):
             return {"findings": [], "last_message_tail": contracts.COMPOUND_SKIPPED_LINE,
                     "last_message": contracts.COMPOUND_SKIPPED_LINE}
 
-        kwargs = {} if backend is None else {"backend": backend}
         with mock.patch.object(closeout.launch, "launch", fake_launch), \
              mock.patch.object(closeout.classify, "classify", fake_classify):
             closeout.run(self.manifest, CARD, "landed", digest_from("success.jsonl"), [],
                          self.adapter, self.store(), self.allowed_paths(),
-                         landing_ref=MERGE_SHA, branch="relay/T-1", timeout_seconds=30, **kwargs)
+                         backend=backend, landing_ref=MERGE_SHA, branch="relay/T-1",
+                         timeout_seconds=30)
         return seen
 
     def store(self):
         return state.StateStore(self.manifest.path, self.repo, home=self.home)
 
-    def test_the_backend_run_resolves_reaches_the_task_the_brief_and_the_classifier(self):
-        seen = self.go_spied("codex")
-        self.assertEqual(seen["task_backend"], "codex")
-        self.assertEqual(seen["classify_backend"], "codex")
-        self.assertIn(COMPOUND_FORMS["codex"], seen["brief"])
+    def test_each_backend_reaches_the_task_the_brief_and_the_classifier(self):
+        for backend, skill_form in COMPOUND_FORMS.items():
+            seen = self.go_spied(backend)
+            self.assertEqual(seen["task_backend"], backend)
+            self.assertEqual(seen["classify_backend"], backend)
+            self.assertIn(skill_form, seen["brief"])
 
-    def test_the_default_is_still_claude_so_the_run_loop_is_unchanged(self):
-        seen = self.go_spied()
+    def test_an_explicit_claude_backend_reaches_every_consumer(self):
+        seen = self.go_spied(mf.DEFAULT_BACKEND)
         self.assertEqual(seen["task_backend"], mf.DEFAULT_BACKEND)
         self.assertEqual(seen["classify_backend"], mf.DEFAULT_BACKEND)
         self.assertIn(COMPOUND_FORMS["claude"], seen["brief"])
+
+    def test_run_requires_the_callers_backend(self):
+        with self.assertRaises(TypeError):
+            closeout.run(self.manifest, CARD, "landed", digest_from("success.jsonl"), [],
+                         self.adapter, self.store(), self.allowed_paths())
+
+
+class RunLoopPassesTheTasksBackend(CloseoutCase):
+    """U9: the run loop owns the Task and must not let Closeout choose Claude by default."""
+
+    def context(self, backend):
+        environment = dict(os.environ, HOME=self.home)
+        return SimpleNamespace(
+            manifest=self.manifest,
+            card=CARD,
+            task=SimpleNamespace(id="T-1", backend=backend),
+            digest={"envelope": {}},
+            adapter=self.adapter,
+            store=mock.Mock(),
+            allowed_paths=self.allowed_paths(),
+            branch="relay/T-1",
+            launched=SimpleNamespace(wall_seconds=0, active_seconds=0),
+            overrides={},
+            home=self.home,
+            base_env=environment,
+            stream=lambda line: None,
+            launch_kwargs={},
+            repo=self.repo,
+            env=environment,
+            findings=[],
+        )
+
+    def test_each_tasks_backend_reaches_the_closeout_boundary(self):
+        for backend in COMPOUND_FORMS:
+            ctx = self.context(backend)
+            seen = {}
+
+            def fake_run(*args, **kwargs):
+                seen["backend"] = kwargs.get("backend")
+                return closeout.CloseoutResult(
+                    closeout.RESULT_SKIPPED,
+                    launch_result=SimpleNamespace(lease_lost=False),
+                )
+
+            with mock.patch.object(runner.gitread, "rev_parse", return_value="same"), \
+                 mock.patch.object(runner.closeout, "run", side_effect=fake_run), \
+                 mock.patch.object(runner.gitwrite, "closeout_scope_check",
+                                   return_value=SimpleNamespace(ok=True)):
+                runner._run_closeout(ctx, closeout.OUTCOME_LANDED, landing_ref=MERGE_SHA)
+
+            self.assertEqual(seen["backend"], backend)
 
 
 class BlockedCommentConfirmation(CloseoutCase):
