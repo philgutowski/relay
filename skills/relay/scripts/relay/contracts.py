@@ -352,6 +352,12 @@ UNENFORCED_DISALLOWED = "unenforced_disallowed"
 # Runner's PID in a kill/pkill/killall command (classify.scan_self_kill). Finding only: the
 # record's own halt_class stays runner_crashed (KTD6's closed set), this just says why.
 RUNNER_SELF_KILL = "runner_self_kill"
+# Round six #49: a task whose last message reads as waiting on background work that will not
+# resume headless ("standing by", "will resume", "once the run finishes"). Finding only: the
+# record's own halt_class stays whatever classify or the git-tree check already assigned (often
+# no_envelope or unclean_exit), this just says the mechanism instead of leaving the Cause line
+# to read only the downstream symptom.
+WAITING_LAST_MESSAGE = "waiting_last_message"
 
 # The .claude/ backstop's operator sentence. HALT_LINES[path_gate] is {detail}; this
 # raiser and classify's path_gate promotion fill it so the Cause line stays true.
@@ -402,12 +408,14 @@ FINDING_CLASSES = (
     BLOCKED_UNRECORDED,
     UNENFORCED_DISALLOWED,
     RUNNER_SELF_KILL,
+    WAITING_LAST_MESSAGE,
 )
 
 # Every class that can reach a summary line: the closed halt class set of KTD6, plus the
 # findings that are never a record's own class but still have to print.
 LINE_CLASSES = HALT_CLASSES + (
     CLOSEOUT_UNFINISHED, BLOCKED_UNRECORDED, UNENFORCED_DISALLOWED, RUNNER_SELF_KILL,
+    WAITING_LAST_MESSAGE,
 )
 
 HALT_LINES = {
@@ -435,6 +443,7 @@ HALT_LINES = {
     BLOCKED_UNRECORDED: "blocked and the card carries no new comment; check {task} by hand",
     UNENFORCED_DISALLOWED: "{tool} ran {argument} at line {line} matching {pattern}",
     RUNNER_SELF_KILL: "self-kill: {command} named the runner's own pid {victim_pid} among {pids}",
+    WAITING_LAST_MESSAGE: "ended the turn waiting on background work that does not resume headless: {last_message}",
 }
 
 # The digest classify.classify() (U7) guarantees, read by run.py and closeout.py via

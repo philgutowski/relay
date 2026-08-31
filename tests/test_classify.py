@@ -68,6 +68,58 @@ class Fixtures(unittest.TestCase):
         self.assertTrue(r["last_message"].startswith("Round two applied."))
         self.assertIn(contracts.HALT_NO_ENVELOPE, classes(r))
 
+    def test_waiting_last_message_is_flagged_alongside_no_envelope(self):
+        """Round six #35: the task backgrounded the gate and ended its turn standing by for a
+        notification headless claude -p never delivers."""
+        r = run("waiting_last_message.jsonl")
+        self.assertEqual(r["halt_class"], contracts.HALT_NO_ENVELOPE)
+        self.assertIn(contracts.WAITING_LAST_MESSAGE, classes(r))
+        waiting = [f for f in r["findings"] if f["class"] == contracts.WAITING_LAST_MESSAGE][0]
+        self.assertIn("Standing by", waiting["last_message"])
+
+    def test_waiting_last_message_finding_carries_the_phrase_past_the_head_truncation(self):
+        """`result["last_message"]` is head-truncated to 200 characters; a finding that reused
+        it could fire while showing text with no trace of the phrase that triggered it."""
+        r = run("waiting_last_message_past_the_head_truncation.jsonl")
+        waiting = [f for f in r["findings"] if f["class"] == contracts.WAITING_LAST_MESSAGE][0]
+        self.assertIn("Standing by", waiting["last_message"])
+
+    def test_outstanding_by_does_not_match_standing_by(self):
+        r = run("outstanding_by.jsonl")
+        self.assertNotIn(contracts.WAITING_LAST_MESSAGE, classes(r))
+
+    def test_will_resume_matches_the_regexs_second_alternative(self):
+        r = run("will_resume.jsonl")
+        self.assertIn(contracts.WAITING_LAST_MESSAGE, classes(r))
+
+    def test_will_check_back_matches_the_regexs_second_alternative(self):
+        r = run("will_check_back.jsonl")
+        self.assertIn(contracts.WAITING_LAST_MESSAGE, classes(r))
+
+    def test_once_it_finishes_matches_the_brief_s_own_quoted_phrase(self):
+        """The brief quotes this exact phrase as a forbidden ending; the detection regex must
+        actually catch it, not just a noun-qualified variant like "once the run finishes"."""
+        r = run("once_it_finishes.jsonl")
+        self.assertIn(contracts.WAITING_LAST_MESSAGE, classes(r))
+
+    def test_a_blocked_envelope_after_waiting_language_still_carries_the_finding(self):
+        """R4 gates on `not complete`, not `absent`: a blocked envelope did not deliver a
+        finished turn either, so the finding still applies."""
+        r = run("waiting_then_blocked.jsonl")
+        self.assertEqual(r["halt_class"], contracts.HALT_BLOCKED_ENVELOPE)
+        self.assertIn(contracts.WAITING_LAST_MESSAGE, classes(r))
+
+    def test_no_envelope_without_waiting_language_carries_no_waiting_finding(self):
+        r = run("no_envelope.jsonl")
+        self.assertNotIn(contracts.WAITING_LAST_MESSAGE, classes(r))
+
+    def test_a_complete_envelope_after_waiting_language_carries_no_waiting_finding(self):
+        """R4: `standing by` text that precedes a complete envelope did not exhibit the
+        failure. The task delivered a finished turn, not a promise to resume."""
+        r = run("waiting_then_complete.jsonl")
+        self.assertTrue(r["routable"])
+        self.assertNotIn(contracts.WAITING_LAST_MESSAGE, classes(r))
+
     def test_path_gate_finding_names_the_path_and_the_tool(self):
         r = run("path_gate.jsonl")
         gates = [f for f in r["findings"] if f["class"] == contracts.HALT_PATH_GATE]

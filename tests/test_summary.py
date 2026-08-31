@@ -142,6 +142,10 @@ FINDING_ROWS = {
         {"last_message": "I have stopped rather than working around the denial."},
         "classify.classify, kept as a finding when the envelope is absent",
     ),
+    contracts.WAITING_LAST_MESSAGE: (
+        {"last_message": "Standing by for the test suite's completion notification."},
+        "classify.classify, a last message that reads as waiting on work that will not resume",
+    ),
     contracts.CLOSEOUT_UNFINISHED: (
         {"task": "T-1", "last_message": "(no final message)"},
         "closeout.run, when the closeout printed no terminal line",
