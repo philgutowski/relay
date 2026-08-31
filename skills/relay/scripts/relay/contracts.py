@@ -257,6 +257,29 @@ DISALLOWED_TOOLS = (
     "Bash(rm -R *)",
 )
 
+
+def disallow_inner(pattern):
+    """The glob inside a `Bash(...)` rule, or the pattern unchanged."""
+    if pattern.startswith("Bash(") and pattern.endswith(")"):
+        return pattern[5:-1]
+    return pattern
+
+
+# Named subset of DISALLOWED_TOOLS. A match on an unenforced backend refuses the landing
+# rather than only annotating it. Force push, hard reset, and recursive delete. git clean
+# and git checkout -- .* stay in the parent tuple and land with a finding.
+DESTRUCTIVE_TOOLS = (
+    "Bash(git push --force*)",
+    "Bash(git push -f*)",
+    "Bash(git push --force-with-lease*)",
+    "Bash(git push * +*)",
+    "Bash(git reset --hard*)",
+    "Bash(rm -rf*)",
+    "Bash(rm -fr*)",
+    "Bash(rm -r *)",
+    "Bash(rm -R *)",
+)
+
 # The closeout commits and the runner pushes for it (KTD15). A push from inside the closeout
 # would put a commit on the remote before the runner's scope check could bound it, and a local
 # reset cannot undo that, so the closeout's disallow list refuses every push spelling. The task
@@ -311,6 +334,16 @@ HALT_UNEXPECTED_ERROR = "unexpected_error"
 # landing, and a card that went uncommented is a checklist line for the operator, not a stop.
 CLOSEOUT_UNFINISHED = "closeout_unfinished"
 BLOCKED_UNRECORDED = "blocked_unrecorded"
+# A disallowed call that ran on a backend that does not enforce at launch. Finding only:
+# landing refusal for the destructive subset is unexpected_error on the record.
+UNENFORCED_DISALLOWED = "unenforced_disallowed"
+
+# The .claude/ backstop's operator sentence. HALT_LINES[path_gate] is {detail}; this
+# raiser and classify's path_gate promotion fill it so the Cause line stays true.
+PATH_GATE_CLAUDE_DIR = (
+    "edit under .claude/ denied by the task's permission posture; "
+    "apply attended, see solutions doc"
+)
 
 HALT_CLASSES = (
     HALT_LANDED,
@@ -352,19 +385,19 @@ FINDING_CLASSES = (
     HALT_NO_ENVELOPE,
     CLOSEOUT_UNFINISHED,
     BLOCKED_UNRECORDED,
+    UNENFORCED_DISALLOWED,
 )
 
-# Every class that can reach a summary line: the closed halt class set of KTD6, plus the two
-# closeout findings, which are never a record's own class but still have to print.
-LINE_CLASSES = HALT_CLASSES + (CLOSEOUT_UNFINISHED, BLOCKED_UNRECORDED)
+# Every class that can reach a summary line: the closed halt class set of KTD6, plus the
+# findings that are never a record's own class but still have to print.
+LINE_CLASSES = HALT_CLASSES + (CLOSEOUT_UNFINISHED, BLOCKED_UNRECORDED, UNENFORCED_DISALLOWED)
 
 HALT_LINES = {
     HALT_LANDED: "landed at {ref}",
     HALT_BLOCKED_ENVELOPE: "blocked: {blocker}",
     HALT_NO_ENVELOPE: "exited without a return envelope; last message: {last_message}",
     HALT_DENIED_TOOL: "{tool} denied by the task's permission posture on {target}",
-    HALT_PATH_GATE: "edit under .claude/ denied by the task's permission posture; "
-                    "apply attended, see solutions doc",
+    HALT_PATH_GATE: "{detail}",
     HALT_TRACKER_WRITE_DENIED: "code landed, card unmoved: {tool} denied",
     HALT_REMOTE_ADVANCED: "remote moved during the task; merge aborted at {sha}",
     HALT_CLOSEOUT_OUT_OF_SCOPE: "closeout changed {path} outside {allowed}",
@@ -382,6 +415,7 @@ HALT_LINES = {
     HALT_UNEXPECTED_ERROR: "the runner hit an unexpected {error_type} on {task}: {error}",
     CLOSEOUT_UNFINISHED: "the closeout ended without a terminal line; last message: {last_message}",
     BLOCKED_UNRECORDED: "blocked and the card carries no new comment; check {task} by hand",
+    UNENFORCED_DISALLOWED: "{tool} ran {argument} at line {line} matching {pattern}",
 }
 
 # The digest classify.classify() (U7) guarantees, read by run.py and closeout.py via

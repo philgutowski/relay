@@ -91,6 +91,12 @@ query its plugin, its credential prefixes and nesting markers, and whether the s
 runner chosen. The launch seam, the readiness probe, and the Brief inserts all read this record
 rather than a second per backend table.
 
+### Task path bound
+The commit-scope prefix list a Manifest names for Task branches. On a backend that cannot refuse
+tools at launch, the Runner diffs the Task branch against this list before it merges, and refuses
+the merge when the commit falls outside it, leaving the branch intact. It is a different set from
+the Closeout's own path allowance, and it does not observe which tools the Task invoked.
+
 ### Brief
 The instruction text a Runner hands a process it launches, rendered for that process alone from a
 template plus the Task's own facts. There is one shape per Shipping mode for a Task process, and one

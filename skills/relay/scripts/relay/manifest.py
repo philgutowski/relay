@@ -76,6 +76,9 @@ class Permissions:
     # list as "allow nothing". This is not [closeout] allowed_paths, which bounds what the
     # Closeout process may commit; the two are different sets over different processes.
     task_allowed_paths: tuple = ()
+    # Parent R19. Required when any Task names a backend that does not enforce at launch.
+    # Presence after strip is the only check; the authoring skill writes the operator's words.
+    unenforced_acceptance: str = ""
 
 
 @dataclass(frozen=True)
@@ -232,6 +235,7 @@ def load(path):
         allowed=_tuple(perms.get("allowed", [])),
         disallowed=_tuple(perms.get("disallowed", [])),
         task_allowed_paths=_tuple(perms.get("task_allowed_paths", [])),
+        unenforced_acceptance=str(perms.get("unenforced_acceptance", "")),
     )
     timeouts_obj = Timeouts(
         task_minutes=pick(timeouts, "timeouts", "task_minutes", contracts.DEFAULT_TASK_TIMEOUT_MINUTES),
@@ -490,6 +494,18 @@ def validate(manifest, check_repo=True, check_environment=False, env=None):
             err("%s (%s) is excluded but carries no reason (R5)" % (label, task.id or "?"))
     if not manifest.tasks:
         err("tasks is empty")
+
+    # Parent R19. Any Task on a backend that cannot refuse tools at launch, including an
+    # excluded one, requires the operator's sentence and a set Task path bound. Schema only.
+    if any(task.backend in BACKENDS
+           and not backends.build(task.backend).CAPABILITY.enforces_at_launch
+           for task in manifest.tasks):
+        if not (manifest.permissions.unenforced_acceptance or "").strip():
+            err("permissions.unenforced_acceptance has no sentence; a backend that cannot "
+                "refuse tools at launch needs the operator's own words accepting that")
+        if not manifest.permissions.task_allowed_paths:
+            err("permissions.task_allowed_paths must be set when a Task names a backend that "
+                "cannot refuse tools at launch")
 
     # Timeouts: positive integers, and the lease TTL must stay below the task timeout (R47).
     for key in ("task_minutes", "closeout_minutes", "ci_poll_minutes"):

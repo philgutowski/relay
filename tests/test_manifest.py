@@ -246,8 +246,16 @@ class Backends(ManifestCase):
         result = mf.validate(self.load())
         self.assertIn("defaults.backend = 'claude'", result.defaults_applied)
 
+    def _with_unenforced_gate(self, text):
+        return text.replace("[permissions]",
+                            '[permissions]\n'
+                            'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+                            'task_allowed_paths = ["src/"]',
+                            1)
+
     def test_a_defaults_table_value_is_inherited_by_a_task_that_names_none(self):
         text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
+        text = self._with_unenforced_gate(text)
         m = self.load(text)
         for task in m.tasks:
             self.assertEqual(task.backend, "codex")
@@ -259,13 +267,15 @@ class Backends(ManifestCase):
     def test_a_per_task_backend_overrides_the_default(self):
         text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
         text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "grok"', 1)
+        text = self._with_unenforced_gate(text)
         m = self.load(text)
         self.assertEqual(m.tasks[0].backend, "grok")
         self.assertEqual(m.tasks[1].backend, "codex")
         self.assertTrue(mf.validate(m).ok)
 
     def test_a_mixed_manifest_validates(self):
-        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        text = self._with_unenforced_gate(
+            self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1))
         m = self.load(text)
         self.assertEqual([t.backend for t in m.tasks], ["codex", "claude"])
         self.assertTrue(mf.validate(m).ok)
@@ -387,6 +397,11 @@ class BackendReadiness(ManifestCase):
         text = self.base.replace('adapter = "markdown"\nfile = "tracker.md"',
                                  'adapter = "jira"\nsite = "example.atlassian.net"\nproject_key = "XX"')
         text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        text = text.replace("[permissions]",
+                            '[permissions]\n'
+                            'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+                            'task_allowed_paths = ["src/"]',
+                            1)
         result = mf.validate(self.load(text))
         self.assertFalse(result.ok)
         self.assertTrue(any("jira" in error and "codex" in error for error in result.errors))
@@ -430,6 +445,61 @@ class TaskAllowedPaths(ManifestCase):
     def test_an_empty_entry_is_refused(self):
         text = self.edit(r"^\[permissions\]$", '[permissions]\ntask_allowed_paths = ["", "toolkit/"]')
         self.assertFalse(mf.validate(self.load(text)).ok)
+
+
+class UnenforcedAcceptance(ManifestCase):
+    """Parent R19. A Codex Task cannot validate without the sentence and a set bound."""
+
+    def _codex_task(self, extra_permissions=""):
+        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        if extra_permissions:
+            text = text.replace("[permissions]", "[permissions]\n" + extra_permissions, 1)
+        return text
+
+    def test_a_codex_task_without_the_sentence_is_refused(self):
+        text = self._codex_task('task_allowed_paths = ["src/"]')
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("unenforced_acceptance" in error for error in result.errors))
+
+    def test_a_codex_task_without_the_bound_is_refused(self):
+        text = self._codex_task('unenforced_acceptance = "fixture: operator accepts unenforced Codex"')
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("task_allowed_paths must be set" in error for error in result.errors))
+
+    def test_adding_both_lets_it_validate(self):
+        text = self._codex_task(
+            'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+            'task_allowed_paths = ["src/"]')
+        self.assertTrue(mf.validate(self.load(text)).ok)
+
+    def test_a_claude_only_manifest_needs_neither_field(self):
+        self.assertTrue(mf.validate(self.load()).ok)
+
+    def test_an_excluded_codex_task_still_requires_both_fields(self):
+        text = self.base.replace('id = "T-2"', 'id = "T-2"\nbackend = "codex"', 1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        joined = " ".join(result.errors)
+        self.assertIn("unenforced_acceptance", joined)
+        self.assertIn("task_allowed_paths must be set", joined)
+
+    def test_an_empty_bound_list_is_refused_for_codex(self):
+        text = self._codex_task(
+            'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+            'task_allowed_paths = []')
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("task_allowed_paths must be set" in error for error in result.errors))
+
+    def test_whitespace_only_sentence_is_refused(self):
+        text = self._codex_task(
+            'unenforced_acceptance = "   "\n'
+            'task_allowed_paths = ["src/"]')
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("unenforced_acceptance" in error for error in result.errors))
 
 
 if __name__ == "__main__":

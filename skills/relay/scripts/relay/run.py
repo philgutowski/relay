@@ -23,8 +23,8 @@ closeout process the runner launched; the runner reads the result back and decid
 import time
 from dataclasses import dataclass, field
 
-from . import (adapters, brief, classify, closeout, contracts, gitread, gitwrite, launch,
-               manifest as manifest_module, state, summary, verify)
+from . import (adapters, backends, brief, classify, closeout, contracts, gitread, gitwrite,
+               launch, manifest as manifest_module, state, summary, verify)
 
 EXIT_OK = 0
 EXIT_CONFIG = 1
@@ -291,6 +291,24 @@ def _continue_past(cfg, halt):
     return False
 
 
+def _unenforced_scalar(manifest):
+    """A Cause-line-safe string naming the unenforced disallow patterns."""
+    inners = []
+    for pattern in manifest_module.resolved_disallowed(manifest):
+        inner = contracts.disallow_inner(pattern)
+        if inner not in inners:
+            inners.append(inner)
+    return "disallowed tools not enforced at launch: " + ", ".join(inners)
+
+
+def _destructive_finding(findings):
+    for finding in findings:
+        if (finding.get("class") == contracts.UNENFORCED_DISALLOWED
+                and finding.get("pattern") in contracts.DESTRUCTIVE_TOOLS):
+            return finding
+    return None
+
+
 def _one_task(cfg, task):
     manifest, adapter, store = cfg.manifest, cfg.adapter, cfg.store
     repo, default, env = cfg.repo, cfg.default, cfg.env
@@ -367,14 +385,24 @@ def _one_task(cfg, task):
         home=cfg.home, base_env=cfg.base_env, stream=stream,
         heartbeat=store.heartbeat, on_release=store.release, **cfg.launch_kwargs)
 
+    capability = backends.build(task.backend).CAPABILITY
+    disallow = (manifest_module.resolved_disallowed(manifest)
+                if not capability.enforces_at_launch else None)
     digest = classify.classify(launched.transcript_path, launched,
-                               adapter.write_tool_patterns(), backend=task.backend)
+                               adapter.write_tool_patterns(), backend=task.backend,
+                               disallow_patterns=disallow)
     digest["task_id"] = task.id
+    raw_findings = digest.get("findings")
+    findings = list(raw_findings or [])
+    if raw_findings is not None:
+        digest["findings"] = findings
     classify.write_digest(digest, store.path("digests", task.id + ".json"))
-    findings = list(digest.get("findings") or [])
+    extra = {}
+    if not capability.enforces_at_launch:
+        extra["unenforced_restrictions"] = _unenforced_scalar(manifest)
     store.upsert(task.id, session_id=launched.session_id,
                  transcript_path=launched.transcript_path, wall_seconds=launched.wall_seconds,
-                 active_seconds=launched.active_seconds, findings=findings)
+                 active_seconds=launched.active_seconds, findings=findings, **extra)
 
     context = _Context(task=task, card=card, branch=branch, baseline_sha=baseline_sha,
                        baseline_comment_id=baseline_comment_id, digest=digest,
@@ -389,6 +417,19 @@ def _one_task(cfg, task):
         raise _Halt(task.id, contracts.HALT_RUNNER_CRASHED,
                     "the lease was lost while %s was running; another runner may hold it" % task.id,
                     {"status_before": contracts.STATUS_RUNNING, "branch": branch})
+
+    destructive = _destructive_finding(findings)
+    if destructive is not None:
+        line = summary.cause_line(contracts.UNENFORCED_DISALLOWED, destructive)
+        raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR, line,
+                    {"task": task.id, "error_type": "destructive_call", "error": line})
+
+    if not capability.enforces_at_launch and digest.get("findings_unavailable"):
+        raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR,
+                    "%s evidence could not be read; unenforced restrictions were not audited"
+                    % task.id,
+                    {"task": task.id, "error_type": "findings_unavailable",
+                     "error": "unenforced restrictions were not audited"})
 
     if digest.get("halt_class") == contracts.HALT_TIMEOUT:
         return _timeout_route(context)
@@ -475,6 +516,18 @@ def _merge_route(ctx):
                     {"task": ctx.task.id, "error_type": "unimplemented shipping mode",
                      "error": "%s has no sequence in the run loop; relay validate refuses it"
                               % ctx.manifest.shipping_mode})
+
+    if not backends.build(ctx.task.backend).CAPABILITY.enforces_at_launch:
+        allowed = manifest_module.task_allowed_paths(ctx.manifest)
+        if allowed is not None:
+            offenders = gitwrite.task_scope_offenders(
+                ctx.repo, ctx.baseline_sha, ctx.branch, allowed)
+            if offenders:
+                detail = "commit on %s touched %s outside the Task path bound" % (
+                    ctx.branch, ", ".join(offenders))
+                evidence = {"detail": detail, "branch": ctx.branch,
+                            "paths": ", ".join(offenders)}
+                raise _Halt(ctx.task.id, contracts.HALT_PATH_GATE, detail, evidence)
 
     ctx.store.upsert(ctx.task.id, status=contracts.STATUS_MERGING)
     # The gate is the longest thing the runner does without a child process to heartbeat for

@@ -284,15 +284,21 @@ class UnenforcedRestrictions(BriefCase):
         self.assertIn(brief.UNENFORCED_OVERRIDE_REFUSAL, text)
         self.assertLess(text.index(brief.DATA_END), text.index(brief.UNENFORCED_OVERRIDE_REFUSAL))
 
+    def test_a_codex_brief_names_the_bound_and_the_audit(self):
+        text = self.render(backend="codex")
+        self.assertIn(brief.UNENFORCED_AUDIT, text)
+        self.assertNotIn(brief.UNENFORCED_AUDIT, self.render())
+
     def test_a_card_reproducing_the_insert_verbatim_cannot_put_a_second_copy_first(self):
         """The shaped mimic above is the easy case. A card that pastes the real sentences back
         gets a copy of the runner's own instruction ahead of the runner's, inside the data block,
         unless defang rewrites it the way it rewrites the delimiters."""
-        card = dict(CARD, description="%s\n\n%s\n" % (brief.UNENFORCED_LEAD,
-                                                      brief.UNENFORCED_OVERRIDE_REFUSAL))
+        card = dict(CARD, description="%s\n\n%s\n\n%s\n" % (
+            brief.UNENFORCED_LEAD, brief.UNENFORCED_OVERRIDE_REFUSAL, brief.UNENFORCED_AUDIT))
         text = self.render(card=card, backend="codex")
         self.assertEqual(text.count(brief.UNENFORCED_OVERRIDE_REFUSAL), 1)
         self.assertEqual(text.count(brief.UNENFORCED_LEAD), 1)
+        self.assertEqual(text.count(brief.UNENFORCED_AUDIT), 1)
         self.assertLess(text.index(brief.DATA_END), text.index(brief.UNENFORCED_OVERRIDE_REFUSAL))
         self.assertIn(brief.INSTRUCTION_REMOVED, text)
 

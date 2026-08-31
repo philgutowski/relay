@@ -346,7 +346,8 @@ def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, 
     hits = claude_dir_backstop(repo, baseline_sha, branch)
     if hits:
         return TailResult(False, contracts.HALT_PATH_GATE, "backstop",
-                          evidence={"paths": hits, "branch": branch})
+                          evidence={"paths": hits, "branch": branch,
+                                    "detail": contracts.PATH_GATE_CLAUDE_DIR})
 
     gate = run_gate(repo, gate_command, gate_log_path, gate_timeout_seconds, env=env)
     if not gate.ok:
@@ -449,6 +450,16 @@ def path_allowed(path, allowed_paths):
         elif path == entry:
             return True
     return False
+
+
+def task_scope_offenders(repo, baseline_sha, branch, allowed_paths):
+    """Paths any Task commit touched that fall outside the Task path bound.
+
+    Returns the list and mutates nothing. Do not call closeout_scope_check for this:
+    its failure path calls reset_hard, which would destroy the Task branch.
+    """
+    paths = gitread.paths_touched_in_range(repo, baseline_sha, branch)
+    return [path for path in paths if not path_allowed(path, allowed_paths)]
 
 
 def closeout_scope_check(repo, pre_closeout_head, allowed_paths, ops=None, task_id=None, env=None):

@@ -120,6 +120,22 @@ def diff_name_only(repo, base, head):
     return [line for line in text.splitlines() if line]
 
 
+def paths_touched_in_range(repo, base, head):
+    """Every path any commit in base..head touched, including files later deleted.
+
+    `diff_name_only` compares tip trees, so a file added after base and removed before
+    head is invisible there. A merge still publishes that commit, so the Task path bound
+    has to see it.
+    """
+    text = run(repo, ["log", "--name-only", "-m", "--pretty=format:",
+                      "%s..%s" % (base, head)]).stdout
+    seen = []
+    for line in text.splitlines():
+        if line and line not in seen:
+            seen.append(line)
+    return seen
+
+
 def config_get(repo, key, env=None):
     """A git config value as seen from inside the repo, or None when unset."""
     proc = run(repo, ["config", "--get", key], check=False, env=env)

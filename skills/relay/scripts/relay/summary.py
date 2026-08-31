@@ -133,8 +133,9 @@ def _pending_checks(entries, run_status, halt_task, halt_class, state_dir):
                                        "tracker write may be incomplete." % task_id})
             elif finding["class"] == contracts.HALT_PATH_GATE:
                 checks.append({"kind": "path_gate", "task": task_id,
-                               "text": "%s needs an edit under .claude/ that dontAsk refuses. "
-                                       "Apply it attended." % task_id})
+                               "text": "%s: %s" % (
+                                   task_id,
+                                   finding.get("detail") or contracts.PATH_GATE_CLAUDE_DIR)})
     if run_status == contracts.RUN_HALTED:
         checks.append({"kind": "halted", "task": halt_task,
                        "text": "the run halted on %s with class %s. Repair by hand, then run "

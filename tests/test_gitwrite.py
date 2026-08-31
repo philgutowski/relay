@@ -131,8 +131,47 @@ class PathGateBackstop(TailBase):
         self.assertFalse(result.ok)
         self.assertEqual(result.halt_class, contracts.HALT_PATH_GATE)
         self.assertIn(".claude/settings.json", result.evidence["paths"])
+        self.assertEqual(result.evidence["detail"], contracts.PATH_GATE_CLAUDE_DIR)
         self.assertFalse(os.path.exists(self.gate_log), "the gate ran despite the backstop")
         self.assertTrue(gitread.branch_exists(self.repo, self.branch))
+
+
+class TaskScopeOffenders(TailBase):
+    """The Task path bound helper. It names out-of-scope paths and never resets."""
+
+    def test_a_commit_outside_the_bound_is_named_and_the_branch_survives(self):
+        head = self.make_task_commit(files={"src/x.py": "x = 1\n"})
+        origin = gitread.rev_parse(self.repo, "origin/main")
+        default = gitread.rev_parse(self.repo, "main")
+        offenders = gitwrite.task_scope_offenders(
+            self.repo, self.baseline, self.branch, ["docs/"])
+        self.assertEqual(offenders, ["src/x.py"])
+        self.assertEqual(gitread.rev_parse(self.repo, self.branch), head)
+        self.assertEqual(gitread.rev_parse(self.repo, "origin/main"), origin)
+        self.assertEqual(gitread.rev_parse(self.repo, "main"), default)
+        self.assertEqual(self.ops.entries, [])
+
+    def test_a_file_deleted_before_the_tip_is_still_named(self):
+        self.make_task_commit(files={"secret.txt": "token\n", "src/ok.py": "ok = 1\n"})
+        _repo.git(self.repo, "rm", "-q", "secret.txt")
+        _repo.git(self.repo, "commit", "-q", "-m", "drop the secret")
+        offenders = gitwrite.task_scope_offenders(
+            self.repo, self.baseline, self.branch, ["src/"])
+        self.assertIn("secret.txt", offenders)
+        self.assertNotIn("src/ok.py", offenders)
+        self.assertTrue(gitread.branch_exists(self.repo, self.branch))
+
+    def test_a_directory_prefix_allows_paths_inside_it(self):
+        self.make_task_commit(files={"toolkit/x.py": "x = 1\n"})
+        self.assertEqual(
+            gitwrite.task_scope_offenders(self.repo, self.baseline, self.branch, ["toolkit/"]),
+            [])
+
+    def test_an_exact_file_bound_refuses_a_sibling(self):
+        self.make_task_commit(files={"README.md": "hi\n", "NOTES.md": "no\n"})
+        offenders = gitwrite.task_scope_offenders(
+            self.repo, self.baseline, self.branch, ["README.md"])
+        self.assertEqual(offenders, ["NOTES.md"])
 
 
 class RemoteMoved(TailBase):
