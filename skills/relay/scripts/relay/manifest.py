@@ -478,6 +478,11 @@ def validate(manifest, check_repo=True, check_environment=False, env=None):
                     "are available only on claude" % task.backend)
 
     # R2, R5: every task has id, model, effort; an excluded task has a reason.
+    # Parent KTD12: a Task whose resolved backend differs from the resolved default carries a
+    # reason, same presence check as exclusion. The default is the [defaults] backend when that
+    # key is present, else claude.
+    dflt = manifest.raw.get("defaults") or {}
+    default_backend = str(dflt["backend"]) if "backend" in dflt else DEFAULT_BACKEND
     seen = set()
     for index, task in enumerate(manifest.tasks):
         label = "tasks[%d]" % index
@@ -492,6 +497,11 @@ def validate(manifest, check_repo=True, check_environment=False, env=None):
         seen.add(task.id)
         if task.excluded and not (task.reason or "").strip():
             err("%s (%s) is excluded but carries no reason (R5)" % (label, task.id or "?"))
+        if (task.backend in BACKENDS and default_backend in BACKENDS
+                and task.backend != default_backend
+                and not (task.reason or "").strip()):
+            err("%s (%s) names backend %s, which differs from the default %s, but carries no reason"
+                % (label, task.id or "?", task.backend, default_backend))
     if not manifest.tasks:
         err("tasks is empty")
 

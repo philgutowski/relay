@@ -266,7 +266,8 @@ class Backends(ManifestCase):
 
     def test_a_per_task_backend_overrides_the_default(self):
         text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
-        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "grok"', 1)
+        text = text.replace('id = "T-1"',
+                            'id = "T-1"\nbackend = "grok"\nreason = "fixture: grok for this Task"', 1)
         text = self._with_unenforced_gate(text)
         m = self.load(text)
         self.assertEqual(m.tasks[0].backend, "grok")
@@ -275,7 +276,8 @@ class Backends(ManifestCase):
 
     def test_a_mixed_manifest_validates(self):
         text = self._with_unenforced_gate(
-            self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1))
+            self.base.replace('id = "T-1"',
+                              'id = "T-1"\nbackend = "codex"\nreason = "fixture: mixed Codex Task"', 1))
         m = self.load(text)
         self.assertEqual([t.backend for t in m.tasks], ["codex", "claude"])
         self.assertTrue(mf.validate(m).ok)
@@ -300,6 +302,67 @@ class Backends(ManifestCase):
         result = mf.validate(self.load(text))
         self.assertFalse(result.ok)
         self.assertEqual(sum("backend" in e for e in result.errors), len(self.load(text).tasks))
+
+
+class BackendReason(ManifestCase):
+    """U13: a Task whose backend differs from the resolved default needs a reason string."""
+
+    def _mixed_codex(self, extra_task="", extra_permissions=None):
+        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"' + extra_task, 1)
+        perms = extra_permissions if extra_permissions is not None else (
+            'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+            'task_allowed_paths = ["src/"]')
+        if perms:
+            text = text.replace("[permissions]", "[permissions]\n" + perms, 1)
+        return text
+
+    def test_a_task_that_differs_from_the_default_without_a_reason_is_refused(self):
+        result = mf.validate(self.load(self._mixed_codex()))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("no reason" in error for error in result.errors))
+
+    def test_a_non_empty_reason_lets_a_differing_backend_validate(self):
+        text = self._mixed_codex('\nreason = "fixture: spend Codex budget on mechanical work"')
+        self.assertTrue(mf.validate(self.load(text)).ok)
+
+    def test_a_task_that_inherits_the_default_needs_no_reason(self):
+        self.assertTrue(mf.validate(self.load()).ok)
+        self.assertIsNone(self.load().tasks[0].reason)
+
+    def test_a_task_that_names_the_default_explicitly_needs_no_reason(self):
+        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "claude"', 1)
+        result = mf.validate(self.load(text))
+        self.assertTrue(result.ok, result.errors)
+
+    def test_whitespace_only_reason_is_refused_when_the_backend_differs(self):
+        text = self._mixed_codex('\nreason = "   "')
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("no reason" in error for error in result.errors))
+
+    def test_an_excluded_task_on_the_default_still_fails_only_the_excluded_check(self):
+        text = self.edit(r'^reason = .*$', 'reason = ""')
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        joined = " ".join(result.errors)
+        self.assertIn("excluded but carries no reason", joined)
+        self.assertFalse(any("differs from the default" in error for error in result.errors))
+
+    def test_one_reason_covers_exclusion_and_a_differing_backend(self):
+        text = self.base.replace('id = "T-2"', 'id = "T-2"\nbackend = "codex"', 1)
+        text = text.replace("[permissions]",
+                            '[permissions]\n'
+                            'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+                            'task_allowed_paths = ["src/"]',
+                            1)
+        self.assertTrue(mf.validate(self.load(text)).ok)
+        text_missing = text.replace('reason = "brief says stop and ask on the schema question"',
+                                    'reason = ""')
+        result = mf.validate(self.load(text_missing))
+        self.assertFalse(result.ok)
+        joined = " ".join(result.errors)
+        self.assertIn("excluded but carries no reason", joined)
+        self.assertTrue(any("no reason" in error for error in result.errors))
 
 
 class BackendReadiness(ManifestCase):
@@ -396,7 +459,8 @@ class BackendReadiness(ManifestCase):
     def test_jira_codex_pair_is_refused_without_environment_probes(self):
         text = self.base.replace('adapter = "markdown"\nfile = "tracker.md"',
                                  'adapter = "jira"\nsite = "example.atlassian.net"\nproject_key = "XX"')
-        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        text = text.replace('id = "T-1"',
+                            'id = "T-1"\nbackend = "codex"\nreason = "fixture: mixed Codex Task"', 1)
         text = text.replace("[permissions]",
                             '[permissions]\n'
                             'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
@@ -451,7 +515,9 @@ class UnenforcedAcceptance(ManifestCase):
     """Parent R19. A Codex Task cannot validate without the sentence and a set bound."""
 
     def _codex_task(self, extra_permissions=""):
-        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        text = self.base.replace(
+            'id = "T-1"',
+            'id = "T-1"\nbackend = "codex"\nreason = "fixture: mixed Codex Task"', 1)
         if extra_permissions:
             text = text.replace("[permissions]", "[permissions]\n" + extra_permissions, 1)
         return text

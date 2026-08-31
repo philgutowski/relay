@@ -79,3 +79,6 @@ id = "413"
 model = "sonnet"
 effort = "medium"
 backend = "codex"
+# Required because this Task leaves the default backend. The sentence below is a fixture, not
+# an operator's words. Replace it before a real run.
+reason = "example fixture: this Task spends Codex budget on mechanical work"
