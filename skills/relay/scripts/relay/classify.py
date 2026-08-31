@@ -109,13 +109,21 @@ def _unwrap_command(command):
     return inner
 
 
+_SHELL_SEPARATOR_RE = re.compile(r"\s*(?:&&|\|\||\||;|\n)\s*")
+
+
+def _shell_parts(command):
+    """The single-command segments of a possibly `&&`/`||`/`;`/newline-joined shell line."""
+    return [p for p in _SHELL_SEPARATOR_RE.split(command) if p]
+
+
 def _command_candidates(command):
     unwrapped = _unwrap_command(command)
     git_inner = unwrapped
     match = _GIT_C.match(unwrapped)
     if match:
         git_inner = "git " + match.group(1).strip()
-    parts = [p for p in re.split(r"\s*(?:&&|\|\||\||;|\n)\s*", unwrapped) if p]
+    parts = _shell_parts(unwrapped)
     seen = []
     for candidate in (command, unwrapped, git_inner) + tuple(parts):
         if candidate and candidate not in seen:
@@ -138,6 +146,18 @@ def matches_disallow_pattern(command, pattern):
 # Two or more digits, so a bare signal flag (`-9`, `-15`) is never read as a PID on its own.
 _PID_TOKEN_RE = re.compile(r"\b\d{2,}\b")
 
+# The three KILL_LIKE_TOOLS command names, anchored to the start of a single command segment and
+# requiring a following space or end of string. A code-review pass on this feature found that the
+# DISALLOWED_TOOLS glob form ("kill*") is right for its own job -- catching every flag spelling
+# for the real `--deny`/`--disallowedTools` CLI flag -- but wrong for scanning arbitrary log text:
+# "kill*" matches "killing worker 4821" too, since fnmatch has no word-boundary concept. This
+# regex is scan_self_kill's own, stricter reading of the same three command names.
+_KILL_COMMAND_RE = re.compile(
+    r"^(?:%s)(?:\s|$)" % "|".join(
+        re.escape(contracts.disallow_inner(p).rstrip("*")) for p in contracts.KILL_LIKE_TOOLS
+    )
+)
+
 
 def _string_leaves(value):
     """Every string value nested inside a parsed JSON object, list, or string, depth-first.
@@ -159,31 +179,34 @@ def scan_self_kill(log_path, victim_pid):
     its deterministic path instead (`logs/<task_id>.stdout.log`, always present once the task's
     subprocess starts writing). Best-effort forensic scan, not a gate: a false match only adds a
     finding to an already-halted record. Returns a finding dict naming the matched command and
-    its full PID list, or None when no kill-family command named `victim_pid`."""
+    its full PID list, or None when no kill-family command named `victim_pid`.
+
+    Matches against `_shell_parts`, the same single-command segments `_command_candidates` splits
+    a compound line into, never the whole (possibly compound) leaf. A leaf like
+    `"kill -9 100 && echo pid 61799 done"` is two segments, `"kill -9 100"` and
+    `"echo pid 61799 done"`; matching the whole string would read 61799 as a PID `kill` named,
+    when the kill command only ever named 100."""
     lines, _malformed, opened = backends.read_jsonl(log_path)
     if not opened:
         return None
     victim = str(victim_pid)
     for _number, obj in lines:
         for leaf in _string_leaves(obj):
-            # Cheap prefilter: every KILL_LIKE_TOOLS glob (kill*, pkill*, killall*) requires the
-            # literal substring "kill", and unwrapping/splitting a command never invents one, so
-            # a leaf without it cannot match any of the three patterns. Skips the regex/split
-            # work in matches_disallow_pattern on every non-command string in the log (assistant
-            # prose, thinking traces, unrelated tool output).
+            # Cheap prefilter: every kill-family command name contains "kill", and unwrapping or
+            # splitting a leaf never invents that substring, so a leaf without it cannot match.
             if "kill" not in leaf:
                 continue
-            for pattern in contracts.KILL_LIKE_TOOLS:
-                if matches_disallow_pattern(leaf, pattern):
-                    pids = _PID_TOKEN_RE.findall(leaf)
-                    if victim in pids:
-                        return {
-                            "class": contracts.RUNNER_SELF_KILL,
-                            "command": leaf,
-                            "pids": " ".join(pids),
-                            "victim_pid": victim,
-                        }
-                    break
+            for candidate in _shell_parts(_unwrap_command(leaf)):
+                if not _KILL_COMMAND_RE.match(candidate):
+                    continue
+                pids = _PID_TOKEN_RE.findall(candidate)
+                if victim in pids:
+                    return {
+                        "class": contracts.RUNNER_SELF_KILL,
+                        "command": candidate,
+                        "pids": " ".join(pids),
+                        "victim_pid": victim,
+                    }
     return None
 
 

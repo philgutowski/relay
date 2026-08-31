@@ -298,8 +298,17 @@ class StateStore:
                 record["status"] = contracts.STATUS_HALTED
                 record["halt_class"] = contracts.HALT_RUNNER_CRASHED
                 if victim_pid is not None:
-                    finding = classify.scan_self_kill(
-                        self.path("logs", task_id + ".stdout.log"), victim_pid)
+                    # This runs inside _mutate's flock (acquire() -> _mutate -> here). A crashed
+                    # task's log is untrusted input the runner never validated, so scan_self_kill
+                    # must fail closed rather than raise: an uncaught exception here would skip
+                    # _write_locked and leave the same stale lease behind for every future
+                    # acquire() to hit again, though the flock itself still releases via
+                    # _mutate's `finally: os.close(fd)`.
+                    try:
+                        finding = classify.scan_self_kill(
+                            self.path("logs", task_id + ".stdout.log"), victim_pid)
+                    except Exception:
+                        finding = None
                     if finding is not None:
                         record.setdefault("findings", []).append(finding)
                 ids.append(task_id)

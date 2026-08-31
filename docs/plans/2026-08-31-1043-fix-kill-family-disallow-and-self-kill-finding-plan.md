@@ -120,46 +120,54 @@ Runner-ending crash, which is worse.
 **KTD2. Scan the crashed task's raw stdout log for a self-targeting kill, not its transcript.**
 `run.py` only writes `session_id` and `transcript_path` onto a task's record *after*
 `launch.launch()` returns (`run.py` around the post-launch `store.upsert`). A task that kills the
-Runner mid-run never reaches that line — the process implementing the upsert is dead. So a
+Runner mid-run never reaches that line. The process implementing the upsert is dead. So a
 record reclaimed as `runner_crashed` can have `transcript_path: null`. The one thing that *does*
 exist on disk regardless is the raw stdout log at the deterministic path
 `<state_dir>/logs/<task_id>.stdout.log` (`store.path("logs", task_id + ".stdout.log")`,
 `launch.py`'s `log_path` argument), which is opened and flushed line-by-line as the task's own
-subprocess writes to it — this is the exact `logs/40.stdout.log` the task's own incident report
+subprocess writes to it. This is the exact `logs/40.stdout.log` the task's own incident report
 names as evidence.
 
 Approach: add `classify.scan_self_kill(log_path, victim_pid)`. It parses the log with the
-existing `backends._read_jsonl` (already backend-agnostic: one JSON object per line, malformed
-lines skipped), then recursively walks every string leaf in each parsed object — not a
+existing `backends.read_jsonl` (already backend-agnostic: one JSON object per line, malformed
+lines skipped), then recursively walks every string leaf in each parsed object, not a
 backend-specific `message.content[].input.command` path, so the same function works regardless
-of which backend produced the line. For each leaf, it reuses `classify.matches_disallow_pattern`
-against `contracts.KILL_LIKE_TOOLS` (the same three globs added in KTD1, so the two mechanisms
-never drift). On a match, it extracts PID-shaped tokens (two or more digits, to skip signal
-flags like `-9`) and checks whether the previous lease holder's PID is among them. `state.py`
-calls this from `_mark_crashed`, which already has `self.path(...)` and the previous holder's
-`holder_pid`.
+of which backend produced the line. For each leaf, it splits the leaf into single-command
+segments (the same split `classify._command_candidates` uses for `&&`/`||`/`;`/newline-joined
+shell lines) and matches each segment against the three kill-family command names from
+`contracts.KILL_LIKE_TOOLS`, anchored to the start of the segment with a required trailing space
+or end of string. A code-review pass on this feature found that the disallow-list's own glob form
+(`kill*`) is right for its job but wrong for scanning arbitrary log text, since `fnmatch` has no
+word-boundary concept and "kill*" also matches "killing"; the anchored match fixes that, and
+matching per segment rather than the whole leaf also stops a PID named later in a compound
+command from being misread as one `kill` itself named. On a match, it extracts PID-shaped tokens
+(two or more digits, to skip signal flags like `-9`) from that segment and checks whether the
+previous lease holder's PID is among them. `state.py` calls this from `_mark_crashed`, which
+already has `self.path(...)` and the previous holder's `holder_pid`, wrapped in a broad
+`except Exception` so a pathological log (deeply nested JSON, for one) can never raise out of the
+flock-held critical section `_mark_crashed` runs inside.
 
 This is a best-effort forensic scan, not a gate: a false match (an assistant's prose text that
-happens to start with the literal string `kill -9 <pid>`) only adds a finding to an
-already-halted record, never blocks or changes a decision. `caffeinate`'s own PID is not checked
-because state never records it (only the Runner's own `os.getpid()` becomes `holder_pid`).
+happens to echo the literal string `kill -9 <pid>`) only adds a finding to an already-halted
+record, never blocks or changes a decision. `caffeinate`'s own PID is not checked because state
+never records it (only the Runner's own `os.getpid()` becomes `holder_pid`).
 
-This scan is not a backup behind KTD1 for every backend. `classify.classify()` — the only code
+This scan is not a backup behind KTD1 for every backend. `classify.classify()`, the only code
 path that can turn a matched `DISALLOWED_TOOLS` entry into an `unenforced_disallowed` finding on
-a backend where `enforces_at_launch` is false (Codex, today's one such backend) — runs in
+a backend where `enforces_at_launch` is false (Codex, today's one such backend), runs in
 `run.py` only after `launch.launch()` returns, in the same runner process a self-kill just
 ended. If the kill succeeds, that process never reaches `classify.classify()` for the task that
 killed it. On Codex, KTD1 provides no protection against a self-kill, preventive or same-run
 forensic, so `scan_self_kill` at the next reclaim is the *only* place a Codex self-kill is ever
 recorded, not a second layer behind one that already worked. For Claude and Grok
-(`enforces_at_launch` true), KTD1's `--deny`/`--disallowedTools` flag is the real defense — it
-stops the call before it runs — and `scan_self_kill` there is genuine defense in depth, catching
+(`enforces_at_launch` true), KTD1's `--deny`/`--disallowedTools` flag is the real defense. It
+stops the call before it runs. `scan_self_kill` there is genuine defense in depth, catching
 only a call phrased to slip past the glob.
 
 **KTD3. Do not run the Runner in a process group the task cannot address.**
 Considered and rejected. On the same host and the same Unix user, `kill -9 <pid>` targets an
 arbitrary PID directly; it does not go through the process group at all, so wrapping the Runner
-in a group the task's shell cannot signal would not have stopped incident #40 — task #40 read
+in a group the task's shell cannot signal would not have stopped incident #40. Task #40 read
 the Runner's PID straight out of `ps aux` and killed it by number. Process-group isolation only
 defends against a *group-wide* signal (`kill -- -<pgid>`), a different attack shape than the one
 observed. The only mechanism that would truly stop a same-user `kill -9 <pid>` is running the
@@ -169,7 +177,7 @@ incident and not pursued here.
 **KTD4. Kill-family entries stay out of `DESTRUCTIVE_TOOLS`.**
 `DESTRUCTIVE_TOOLS` is the named subset of `DISALLOWED_TOOLS` whose match on an unenforced
 backend refuses the *landing* outright rather than only recording a finding (force push, hard
-reset, `rm -rf`, and spelling variants — irreversible damage to repo content or history). A kill
+reset, `rm -rf`, and spelling variants, irreversible damage to repo content or history). A kill
 command does not touch repo content, and a self-kill of the Runner already ends the run before
 any landing decision is reachable, so there is nothing left for `DESTRUCTIVE_TOOLS`'s "refuse
 the landing" behavior to act on. `git clean` and `git checkout -- .*` already establish the
@@ -180,7 +188,7 @@ the kill family follows it.
 
 - The incident's task ran on a backend where `enforces_at_launch` is true (most likely Claude,
   Relay's default). KTD1's disallow-list fix is the primary, preventive defense for that path.
-  On Codex (`enforces_at_launch` false), KTD1 gives no protection at all — KTD2's scan is the
+  On Codex (`enforces_at_launch` false), KTD1 gives no protection at all. KTD2's scan is the
   sole detector of a Codex self-kill, not a backup. KTD2 is genuine defense in depth only on the
   two enforcing backends, where it catches a call phrased to slip past the deny glob.
 - `previous["holder_pid"]` is always present on a reclaimed lease's previous-holder dict, because
@@ -191,8 +199,8 @@ the kill family follows it.
 
 - **Deferred, non-blocking.** `scan_self_kill` is a best-effort log scan, and on Codex it is the
   sole detector of a self-kill (KTD2), not a backup behind a preventive layer. Whether that
-  single detector needs a stronger guarantee than log scanning — e.g. a synchronous flush
-  contract on the disallowed-call path — is a real question this plan does not resolve. It is
+  single detector needs a stronger guarantee than log scanning, e.g. a synchronous flush
+  contract on the disallowed-call path, is a real question this plan does not resolve. It is
   deferred because "at least detect" is the task's own stated bar and best-effort scanning meets
   it; a stronger guarantee is follow-up work, not a blocker to this fix.
 
@@ -245,7 +253,7 @@ launch-time enforcement path and the post-hoc audit path, per R1.
 1. Add a `KILL_LIKE_TOOLS` tuple above `DISALLOWED_TOOLS`: `("Bash(kill*)", "Bash(pkill*)",
    "Bash(killall*)")`, with a comment naming the round six #40 incident as the source.
 2. Extend `DISALLOWED_TOOLS` to include `KILL_LIKE_TOOLS` (`DISALLOWED_TOOLS = (... existing
-   entries ...) + KILL_LIKE_TOOLS`) so both stay one source of truth — U2's scanner reuses
+   entries ...) + KILL_LIKE_TOOLS`) so both stay one source of truth. U2's scanner reuses
    `KILL_LIKE_TOOLS` directly rather than re-deriving the same three globs.
 3. Do not add the new entries to `DESTRUCTIVE_TOOLS` (KTD4).
 
@@ -281,43 +289,62 @@ command in it named a given victim PID, per R2 and R3.
    `-9` signal flag is not read as a PID).
 2. Add a small recursive helper that yields every string leaf from a parsed JSON value (dict,
    list, or string), for walking a decoded log line without assuming a backend-specific shape.
-3. Add `scan_self_kill(log_path, victim_pid)`:
-   - Read the log with `backends._read_jsonl(log_path)`; return `None` immediately if it did not
+3. Factor the shell-separator split `_command_candidates` already does (`&&`/`||`/`;`/newline)
+   into a small `_shell_parts(command)` helper, reused by both `_command_candidates` and
+   `scan_self_kill`.
+4. Add a module-level `_KILL_COMMAND_RE`, anchoring the three `contracts.KILL_LIKE_TOOLS` command
+   names to the start of a string with a required trailing space or end of string. A plain glob
+   match (`kill*`) is right for `DISALLOWED_TOOLS`'s own job but too loose for scanning arbitrary
+   log text, since it also matches "killing" or "killed".
+5. Add `scan_self_kill(log_path, victim_pid)`:
+   - Read the log with `backends.read_jsonl(log_path)`; return `None` immediately if it did not
      open.
-   - For each decoded line, for each string leaf, for each pattern in `contracts.KILL_LIKE_TOOLS`,
-     call the existing `matches_disallow_pattern(leaf, pattern)`.
-   - On the first match, extract PID tokens from that leaf with `_PID_TOKEN_RE`; if
-     `str(victim_pid)` is among them, return a finding dict: `{"class":
-     contracts.RUNNER_SELF_KILL, "command": leaf, "pids": " ".join(tokens), "victim_pid":
+   - For each decoded line, for each string leaf containing the substring `"kill"` (a cheap
+     prefilter), split the leaf into single-command segments with `_shell_parts` and test each
+     segment against `_KILL_COMMAND_RE`.
+   - On a match, extract PID tokens from that segment (not the whole leaf) with `_PID_TOKEN_RE`;
+     if `str(victim_pid)` is among them, return a finding dict: `{"class":
+     contracts.RUNNER_SELF_KILL, "command": segment, "pids": " ".join(tokens), "victim_pid":
      str(victim_pid)}`. `pids` is a joined string, not a list, because `summary.line_fields`
-     drops list/dict values when filling a cause-line template.
+     drops list/dict values when filling a cause-line template. Matching per segment, not the
+     whole leaf, keeps a PID named later in a compound command (`kill -9 100 && echo pid 61799`)
+     from being misread as one the kill itself named.
    - No match anywhere: return `None`.
 
 **Technical design:**
 ```text
 scan_self_kill(log_path, victim_pid):
-    lines, _malformed, opened = backends._read_jsonl(log_path)
+    lines, _malformed, opened = backends.read_jsonl(log_path)
     if not opened: return None
     for _n, obj in lines:
         for leaf in _string_leaves(obj):
-            for pattern in contracts.KILL_LIKE_TOOLS:
-                if matches_disallow_pattern(leaf, pattern):
-                    pids = _PID_TOKEN_RE.findall(leaf)
+            if "kill" not in leaf: continue
+            for segment in _shell_parts(_unwrap_command(leaf)):
+                if _KILL_COMMAND_RE.match(segment):
+                    pids = _PID_TOKEN_RE.findall(segment)
                     if str(victim_pid) in pids:
                         return {finding dict}
     return None
 ```
-Directional only — exact loop shape and early-return points are the implementer's call.
+Directional only. Exact loop shape and early-return points are the implementer's call.
 
 **Test scenarios:**
 - Happy path: a log file with one JSONL line shaped like a Claude tool_use block
   (`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"kill
   -9 57246 61799 61800"}}]}}`) and `victim_pid=61799` returns a finding whose `pids` contains
   `"61799"` and whose `command` is the literal kill command.
-- Edge case: the same log, but `victim_pid` is a PID not present in the command (e.g. `99999`) —
-  returns `None`.
-- Edge case: a log whose only Bash command is unrelated (e.g. `git status`) — returns `None`
+- Edge case: the same log, but `victim_pid` is a PID not present in the command (e.g. `99999`).
+  Returns `None`.
+- Edge case: a log whose only Bash command is unrelated (e.g. `git status`). Returns `None`
   even when `victim_pid` happens to appear elsewhere in the line as an unrelated number.
+- Edge case: prose text that merely starts with the word "killing" (not a command) does not
+  match, because `_KILL_COMMAND_RE` requires a space or end of string right after the command
+  name.
+- Edge case: a compound command (`kill -9 100 && echo pid 61799 done`) returns `None` for a
+  victim PID that only appears in the trailing `echo`, and returns a finding whose `pids` is
+  `"100"` (not including 61799) for the PID the `kill` segment actually named.
+- Edge case: a `killall` command with no literal PID in it never matches, since `killall` kills
+  by process name. Documented as a structural limit of a PID-token scan, not asserted as a defect.
 - Edge case: a signal-only numeric token (`-9`) never registers as a false PID match on its own
   (i.e., a victim PID of `9` is not the scenario under test; instead assert the token filter:
   `_PID_TOKEN_RE` does not extract single-digit tokens).
@@ -356,12 +383,17 @@ from U2 when one exists, and that finding renders a real sentence, per R2 and R4
 3. Add a `HALT_LINES[RUNNER_SELF_KILL]` template, e.g. `"self-kill: {command} named the
    runner's own pid {victim_pid} among {pids}"`.
 4. In `state.py`, import `classify` (`from . import classify` alongside the existing `from .
-   import contracts`; safe — `classify.py` does not import `state.py`).
+   import contracts`; safe, `classify.py` does not import `state.py`).
 5. In `_mark_crashed`, after setting `record["halt_class"] = contracts.HALT_RUNNER_CRASHED` for
    an in-flight record, look up `previous.get("holder_pid")`; when it is not `None`, call
-   `classify.scan_self_kill(self.path("logs", task_id + ".stdout.log"), victim_pid)`. When it
-   returns a finding, append it to `record["findings"]` (the record's list, already `[]` from
-   `new_record`/the running-status upsert).
+   `classify.scan_self_kill(self.path("logs", task_id + ".stdout.log"), victim_pid)` inside a
+   broad `try/except Exception`, treating any exception as no finding. `_mark_crashed` runs
+   inside `_mutate`'s `fcntl.flock`-held critical section, and a crashed task's log is untrusted
+   input the runner never validated (a code-review pass found a deeply nested JSON value in the
+   log raises an uncaught `RecursionError` on this path otherwise), so the scan must fail closed
+   rather than let an exception skip the state write and strand the same stale lease. When the
+   scan returns a finding, append it to `record["findings"]` (the record's list, already `[]`
+   from `new_record`/the running-status upsert).
 
 **Test scenarios:**
 - Happy path (integration, `test_state.py`): acquire a lease as `pid=100`, upsert a task to
@@ -369,12 +401,15 @@ from U2 when one exists, and that finding renders a real sentence, per R2 and R4
   containing a Bash command that kills pid `100`, advance the clock past the TTL, acquire again
   as a new pid, and assert the reclaimed record's `findings` contains a `runner_self_kill` entry
   whose `victim_pid == "100"`.
-- Edge case (integration): same setup, but the log's kill command does not name pid `100` —
-  assert `findings` stays empty and `halt_class` is still `runner_crashed` (existing behavior
+- Edge case (integration): same setup, but the log's kill command does not name pid `100`.
+  Assert `findings` stays empty and `halt_class` is still `runner_crashed` (existing behavior
   from `test_stale_lease_with_merging_record_marks_runner_crashed` must keep passing unchanged).
 - Edge case (integration): no log file exists at all for the reclaimed task (crash happened
-  before any output was flushed) — assert reclaim still succeeds and `findings` stays empty,
+  before any output was flushed). Assert reclaim still succeeds and `findings` stays empty,
   no exception.
+- Edge case (integration): `classify.scan_self_kill` itself raises (force it, e.g. with a
+  monkeypatched `side_effect`, rather than trusting the guard by inspection). Assert the reclaim
+  still completes, `halt_class` is still `runner_crashed`, and `findings` stays empty.
 - Happy path (`test_contracts.py`): `contracts.RUNNER_SELF_KILL` is in both `FINDING_CLASSES`
   and `LINE_CLASSES`, and `summary.cause_line(contracts.RUNNER_SELF_KILL, {"command": "kill -9
   100", "pids": "100", "victim_pid": "100"})` renders a sentence with no literal `{` braces left
@@ -399,7 +434,7 @@ is required for this unit).
 - No live task run is required for this change: it touches no envelope grammar, closeout
   terminal line, brief template, or halt record shape the
   `docs/solutions/logic-errors/stubbed-seams-agree-by-construction-first-live-run-found-five-contract-defects.md`
-  warning covers — the disallow-list addition is data (a new glob string) and the scan is new,
+  warning covers. The disallow-list addition is data (a new glob string) and the scan is new,
   additive, and exercised entirely by the stub-based suite.
 
 ## Definition of Done

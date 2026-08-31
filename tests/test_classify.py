@@ -584,6 +584,16 @@ class UnenforcedAudit(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["pattern"], "Bash(git reset --hard*)")
 
+    def test_a_wrapped_kill_is_a_finding_on_the_unenforced_audit_path(self):
+        """Round six #40's fix (kill/pkill/killall in DISALLOWED_TOOLS) reaches Codex the same
+        way every other entry does: through this audit, not only through scan_self_kill."""
+        r = self._classify("/bin/zsh -lc 'ps aux | grep python && kill -9 61799'")
+        hits = [f for f in r["findings"] if f["class"] == contracts.UNENFORCED_DISALLOWED]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["pattern"], "Bash(kill*)")
+        self.assertIsNone(r["halt_class"])
+        self.assertTrue(r["routable"])
+
     def test_a_claude_denial_does_not_also_raise_the_unenforced_class(self):
         r = classify.classify(
             os.path.join(FIXTURES, "path_gate.jsonl"), EXITED,
@@ -754,6 +764,37 @@ class SelfKillScan(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("not json\n{also not json\n")
             self.assertIsNone(classify.scan_self_kill(path, 61799))
+
+    def test_prose_that_merely_starts_with_kill_is_not_a_finding(self):
+        """Code review: `fnmatch("killing worker 4821", "kill*")` is true, since fnmatch has no
+        word-boundary concept. `_KILL_COMMAND_RE` requires a space or end of string right after
+        the command name, so ordinary prose that happens to start with "kill" never matches."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [{"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "killing worker 4821 now, this is not a runner kill"}]}}])
+            self.assertIsNone(classify.scan_self_kill(log, 4821))
+
+    def test_a_pid_named_only_in_a_trailing_chained_command_is_not_a_finding(self):
+        """Code review: a leaf like `kill -9 100 && echo pid 61799 done` is two shell segments.
+        Matching against the whole leaf would read 61799 as a PID `kill` named; matching against
+        each split segment separately confines the PID list to what the kill command itself named."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [self._claude_line("kill -9 100 && echo pid 61799 done")])
+            self.assertIsNone(classify.scan_self_kill(log, 61799))
+            finding = classify.scan_self_kill(log, 100)
+            self.assertEqual(finding["command"], "kill -9 100")
+            self.assertEqual(finding["pids"], "100")
+
+    def test_killall_names_a_process_not_a_pid_so_it_can_never_match(self):
+        """`killall` kills by process name, so a real killall self-kill never carries the
+        victim's PID as a literal token in the command text. This is a structural limit of a
+        PID-token scan, not a bug: document it instead of leaving it silently unproven."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [self._claude_line("killall -9 python")])
+            self.assertIsNone(classify.scan_self_kill(log, 61799))
 
 
 if __name__ == "__main__":
