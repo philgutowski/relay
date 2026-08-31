@@ -164,6 +164,13 @@ The Runner's classification of one Task process exit, drawn from a closed set an
 session transcript plus git and Tracker evidence. Every class carries the evidence its Cause line
 needs, so an operator learns why a Task did not land without reading a transcript.
 
+Because a class is decided from what the exit left behind, the set can only name causes the
+evidence records. A cause lying outside the Task process, such as the account's model allowance
+running out mid run, leaves the same absence as a crash and is classified as one, so the Cause
+line reads as though the Task misbehaved. The set is closed deliberately, so the answer to such a
+cause is a finding attached to the record, or a check made before the run starts, rather than a
+new class.
+
 Three classes are run scoped and always stop the run, named in `contracts.RUN_SCOPED_HALT_CLASSES`:
 each puts something outside the failing Task in question, the remote, the Lease, or the Runner
 itself. Any other halt can be continued past when the Manifest opts in with
