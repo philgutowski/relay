@@ -160,6 +160,11 @@ FINDING_ROWS = {
          "pattern": "Bash(git clean*)"},
         "classify.classify, an unenforced disallowed tool_use",
     ),
+    contracts.RUNNER_SELF_KILL: (
+        {"command": "kill -9 57246 61799 61800", "pids": "57246 61799 61800",
+         "victim_pid": "61799"},
+        "classify.scan_self_kill, via state._mark_crashed on a stale-lease reclaim",
+    ),
 }
 
 

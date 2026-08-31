@@ -108,6 +108,54 @@ class Acquire(StateCase):
         self.assertEqual(record["halt_evidence"]["last_git_op"]["op"], "merge")
         self.assertEqual(self.store(pid=200).get("T-1")["status"], contracts.STATUS_LANDED)
 
+    def test_stale_lease_reclaim_finds_the_task_s_own_kill_of_the_previous_holder(self):
+        """Round six #40: task #40 killed the Runner (pid 100 here) with a Bash `kill -9`
+        naming its own pid. The next runner's reclaim should surface that as a finding, not a
+        bare crash."""
+        store = self.store(pid=100)
+        store.acquire()
+        store.upsert("T-2", status=contracts.STATUS_RUNNING)
+        log_path = store.path("logs", "T-2.stdout.log")
+        with open(log_path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash",
+                 "input": {"command": "kill -9 57246 100 61800"}}]}}) + "\n")
+        self.clock.advance(601)
+        result = self.store(pid=200).acquire()
+        self.assertEqual(result.reclaimed_ids, ("T-2",))
+        record = self.store(pid=200).get("T-2")
+        self.assertEqual(record["halt_class"], contracts.HALT_RUNNER_CRASHED)
+        self.assertEqual(len(record["findings"]), 1)
+        finding = record["findings"][0]
+        self.assertEqual(finding["class"], contracts.RUNNER_SELF_KILL)
+        self.assertEqual(finding["victim_pid"], "100")
+
+    def test_stale_lease_reclaim_stays_a_bare_crash_when_the_log_does_not_name_the_holder(self):
+        store = self.store(pid=100)
+        store.acquire()
+        store.upsert("T-2", status=contracts.STATUS_RUNNING)
+        log_path = store.path("logs", "T-2.stdout.log")
+        with open(log_path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "git status"}}]}}) + "\n")
+        self.clock.advance(601)
+        self.store(pid=200).acquire()
+        record = self.store(pid=200).get("T-2")
+        self.assertEqual(record["halt_class"], contracts.HALT_RUNNER_CRASHED)
+        self.assertEqual(record["findings"], [])
+
+    def test_stale_lease_reclaim_with_no_log_file_at_all_still_succeeds(self):
+        """The crash may happen before the task's subprocess ever wrote a line."""
+        store = self.store(pid=100)
+        store.acquire()
+        store.upsert("T-2", status=contracts.STATUS_RUNNING)
+        self.clock.advance(601)
+        result = self.store(pid=200).acquire()
+        self.assertEqual(result.reclaimed_ids, ("T-2",))
+        record = self.store(pid=200).get("T-2")
+        self.assertEqual(record["halt_class"], contracts.HALT_RUNNER_CRASHED)
+        self.assertEqual(record["findings"], [])
+
     def test_unparseable_heartbeat_counts_as_live(self):
         store = self.store(pid=100)
         store.acquire()

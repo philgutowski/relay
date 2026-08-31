@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from . import contracts
+from . import classify, contracts
 
 OK = "OK"
 LOCKED = "LOCKED"
@@ -281,8 +281,13 @@ class StateStore:
 
     def _mark_crashed(self, state, previous):
         """R55: a reclaimed lease turns every running or merging record into halted with class
-        runner_crashed, and records the old holder in the terminal record as crashed."""
+        runner_crashed, and records the old holder in the terminal record as crashed.
+
+        Round six #40: when the crashed task's own stdout log shows it killed the previous
+        holder's pid, that self-kill is attached to the record as a runner_self_kill finding
+        instead of leaving the halt bare (classify.scan_self_kill)."""
         ids = []
+        victim_pid = previous.get("holder_pid")
         for task_id, record in state.get("tasks", {}).items():
             if record.get("status") in contracts.IN_FLIGHT_STATUSES:
                 record["halt_evidence"] = {
@@ -292,6 +297,11 @@ class StateStore:
                 }
                 record["status"] = contracts.STATUS_HALTED
                 record["halt_class"] = contracts.HALT_RUNNER_CRASHED
+                if victim_pid is not None:
+                    finding = classify.scan_self_kill(
+                        self.path("logs", task_id + ".stdout.log"), victim_pid)
+                    if finding is not None:
+                        record.setdefault("findings", []).append(finding)
                 ids.append(task_id)
         terminal = state.get("terminal")
         lease_started = _epoch(previous.get("acquired_at")) or 0
