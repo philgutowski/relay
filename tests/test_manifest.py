@@ -485,6 +485,14 @@ class UnenforcedAcceptance(ManifestCase):
         self.assertIn("unenforced_acceptance", joined)
         self.assertIn("task_allowed_paths must be set", joined)
 
+    def test_an_empty_bound_list_is_refused_for_codex(self):
+        text = self._codex_task(
+            'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+            'task_allowed_paths = []')
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any("task_allowed_paths must be set" in error for error in result.errors))
+
     def test_whitespace_only_sentence_is_refused(self):
         text = self._codex_task(
             'unenforced_acceptance = "   "\n'

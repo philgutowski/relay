@@ -1094,6 +1094,26 @@ class UnenforcedRun(RunCase):
         self.queue_entry(CODEX_LAST_MESSAGE, git_sh or TASK_BRANCH_SH % ("T-1", "t_1", "T-1"),
                          stream=self.stream(command))
 
+    def test_a_claude_task_is_unaffected_by_the_bound_and_the_audit(self):
+        text = MANIFEST.replace("__REPO__", self.repo)
+        text = text.replace("[permissions]",
+                            "[permissions]\n"
+                            "unenforced_acceptance = \"fixture: operator accepts unenforced Codex\"\n"
+                            "task_allowed_paths = [\"docs/\"]", 1)
+        text = text.split("[[tasks]]")[0] + "[[tasks]]" + text.split("[[tasks]]")[1]
+        with open(self.manifest_path, "w") as handle:
+            handle.write(text)
+        self.manifest = mf.load(self.manifest_path)
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        record = self.store().get("T-1")
+        self.assertEqual(record["status"], contracts.STATUS_LANDED)
+        self.assertNotIn("unenforced_restrictions", record)
+        self.assertNotIn(contracts.UNENFORCED_DISALLOWED,
+                         [f["class"] for f in record.get("findings") or []])
+
     def test_a_commit_outside_the_bound_halts_and_the_branch_survives(self):
         self.load_codex(bound=["docs/"])
         self.queue_codex()

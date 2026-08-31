@@ -127,7 +127,8 @@ def paths_touched_in_range(repo, base, head):
     head is invisible there. A merge still publishes that commit, so the Task path bound
     has to see it.
     """
-    text = run(repo, ["log", "--name-only", "--pretty=format:", "%s..%s" % (base, head)]).stdout
+    text = run(repo, ["log", "--name-only", "-m", "--pretty=format:",
+                      "%s..%s" % (base, head)]).stdout
     seen = []
     for line in text.splitlines():
         if line and line not in seen:

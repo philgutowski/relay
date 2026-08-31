@@ -28,9 +28,10 @@ from . import backends, contracts, summary
 # Codex wraps the real command in `/bin/zsh -lc '...'`. The inner script, and each
 # `&&` / `||` / `;` / newline segment of it, is what DISALLOWED_TOOLS globs against.
 _SHELL_WRAP = re.compile(
-    r"^(?:/(?:usr/)?bin/)?(?:[\w.+-]+/)*(?:ba)?sh(?:\s+-l)?\s+-[lc]\s+(.*)\Z",
+    r"^(?:/(?:usr/)?bin/)?(?:[\w.+-]+/)*(?:zsh|bash|sh)(?:\s+-l)?(?:\s+-[lc]+)\s+(.*)\Z",
     re.DOTALL | re.IGNORECASE,
 )
+_GIT_C = re.compile(r"^git(?:\s+-C\s+\S+|\s+--git-dir=\S+|\s+--work-tree=\S+)+\s+(.*)\Z")
 
 LAST_MESSAGE_CHARS = 200
 ARGUMENT_CHARS = 120
@@ -110,9 +111,13 @@ def _unwrap_command(command):
 
 def _command_candidates(command):
     unwrapped = _unwrap_command(command)
-    parts = [p for p in re.split(r"\s*(?:&&|\|\||;|\n)\s*", unwrapped) if p]
+    git_inner = unwrapped
+    match = _GIT_C.match(unwrapped)
+    if match:
+        git_inner = "git " + match.group(1).strip()
+    parts = [p for p in re.split(r"\s*(?:&&|\|\||\||;|\n)\s*", unwrapped) if p]
     seen = []
-    for candidate in (command, unwrapped) + tuple(parts):
+    for candidate in (command, unwrapped, git_inner) + tuple(parts):
         if candidate and candidate not in seen:
             seen.append(candidate)
     return seen

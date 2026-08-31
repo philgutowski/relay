@@ -572,6 +572,18 @@ class UnenforcedAudit(unittest.TestCase):
         self.assertIsNone(r["halt_class"])
         self.assertTrue(r["routable"])
 
+    def test_a_zsh_lc_rm_rf_without_and_still_matches(self):
+        r = self._classify("/bin/zsh -lc 'rm -rf /tmp/x'")
+        hits = [f for f in r["findings"] if f["class"] == contracts.UNENFORCED_DISALLOWED]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["pattern"], "Bash(rm -rf*)")
+
+    def test_git_c_reset_hard_matches_the_destructive_glob(self):
+        r = self._classify("/bin/zsh -lc 'git -C . reset --hard HEAD'")
+        hits = [f for f in r["findings"] if f["class"] == contracts.UNENFORCED_DISALLOWED]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["pattern"], "Bash(git reset --hard*)")
+
     def test_a_claude_denial_does_not_also_raise_the_unenforced_class(self):
         r = classify.classify(
             os.path.join(FIXTURES, "path_gate.jsonl"), EXITED,

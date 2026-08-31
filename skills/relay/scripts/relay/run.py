@@ -424,6 +424,13 @@ def _one_task(cfg, task):
         raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR, line,
                     {"task": task.id, "error_type": "destructive_call", "error": line})
 
+    if not capability.enforces_at_launch and digest.get("findings_unavailable"):
+        raise _Halt(task.id, contracts.HALT_UNEXPECTED_ERROR,
+                    "%s evidence could not be read; unenforced restrictions were not audited"
+                    % task.id,
+                    {"task": task.id, "error_type": "findings_unavailable",
+                     "error": "unenforced restrictions were not audited"})
+
     if digest.get("halt_class") == contracts.HALT_TIMEOUT:
         return _timeout_route(context)
 
