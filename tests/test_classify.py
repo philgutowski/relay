@@ -584,6 +584,16 @@ class UnenforcedAudit(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["pattern"], "Bash(git reset --hard*)")
 
+    def test_a_wrapped_kill_is_a_finding_on_the_unenforced_audit_path(self):
+        """Round six #40's fix (kill/pkill/killall in DISALLOWED_TOOLS) reaches Codex the same
+        way every other entry does: through this audit, not only through scan_self_kill."""
+        r = self._classify("/bin/zsh -lc 'ps aux | grep python && kill -9 61799'")
+        hits = [f for f in r["findings"] if f["class"] == contracts.UNENFORCED_DISALLOWED]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["pattern"], "Bash(kill*)")
+        self.assertIsNone(r["halt_class"])
+        self.assertTrue(r["routable"])
+
     def test_a_claude_denial_does_not_also_raise_the_unenforced_class(self):
         r = classify.classify(
             os.path.join(FIXTURES, "path_gate.jsonl"), EXITED,
@@ -679,6 +689,112 @@ class GrokEvidence(unittest.TestCase):
                               backend="grok")
         os.unlink(handle.name)
         self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
+
+
+class SelfKillScan(unittest.TestCase):
+    """Round six #40: a task killed its own Runner with `kill -9 <pids...>` before the record's
+    `transcript_path` was ever written back to state (run.py writes it only after `launch.launch`
+    returns). `classify.scan_self_kill` reads the deterministic raw stdout log instead, so it
+    works even on a record state never got to finish describing."""
+
+    def _log(self, tmp_dir, lines):
+        import json
+        path = os.path.join(tmp_dir, "self-kill.stdout.log")
+        with open(path, "w", encoding="utf-8") as handle:
+            for obj in lines:
+                handle.write(json.dumps(obj) + "\n")
+        return path
+
+    def _claude_line(self, command):
+        return {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": command}}]}}
+
+    def test_a_kill_naming_the_victim_pid_is_a_finding(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [self._claude_line("kill -9 57246 61799 61800")])
+            finding = classify.scan_self_kill(log, 61799)
+            self.assertIsNotNone(finding)
+            self.assertEqual(finding["class"], contracts.RUNNER_SELF_KILL)
+            self.assertIn("61799", finding["pids"].split())
+            self.assertEqual(finding["command"], "kill -9 57246 61799 61800")
+            self.assertEqual(finding["victim_pid"], "61799")
+
+    def test_a_kill_not_naming_the_victim_pid_is_not_a_finding(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [self._claude_line("kill -9 57246 61799 61800")])
+            self.assertIsNone(classify.scan_self_kill(log, 99999))
+
+    def test_an_unrelated_command_naming_the_victim_pid_is_not_a_finding(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [self._claude_line("git status"),
+                                   {"type": "assistant", "message": {"content": [
+                                       {"type": "text", "text": "pid 61799 looked fine"}]}}])
+            self.assertIsNone(classify.scan_self_kill(log, 61799))
+
+    def test_a_bare_signal_flag_is_never_extracted_as_a_pid(self):
+        """`_PID_TOKEN_RE` requires 2+ digits, so the `-9` signal flag in `kill -9 <pid>` is
+        never itself extracted as a PID token alongside the real one."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [self._claude_line("kill -9 61799")])
+            finding = classify.scan_self_kill(log, 61799)
+            self.assertNotIn("9", finding["pids"].split())
+
+    def test_a_command_nested_deeper_than_the_claude_shape_still_matches(self):
+        """The scan walks every string leaf rather than one backend's known field path, so a
+        differently-nested JSON shape (e.g. another backend's event) still matches."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = {"type": "item.completed", "item": {"id": "x", "type": "command_execution",
+                      "detail": {"argv": {"raw": "pkill -9 -f 61799"}}}}
+            log = self._log(tmp, [nested])
+            finding = classify.scan_self_kill(log, 61799)
+            self.assertIsNotNone(finding)
+
+    def test_a_missing_log_file_returns_none(self):
+        self.assertIsNone(classify.scan_self_kill("/nonexistent/path.stdout.log", 61799))
+
+    def test_a_log_file_of_only_malformed_json_returns_none(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "malformed.stdout.log")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("not json\n{also not json\n")
+            self.assertIsNone(classify.scan_self_kill(path, 61799))
+
+    def test_prose_that_merely_starts_with_kill_is_not_a_finding(self):
+        """Code review: `fnmatch("killing worker 4821", "kill*")` is true, since fnmatch has no
+        word-boundary concept. `_KILL_COMMAND_RE` requires a space or end of string right after
+        the command name, so ordinary prose that happens to start with "kill" never matches."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [{"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "killing worker 4821 now, this is not a runner kill"}]}}])
+            self.assertIsNone(classify.scan_self_kill(log, 4821))
+
+    def test_a_pid_named_only_in_a_trailing_chained_command_is_not_a_finding(self):
+        """Code review: a leaf like `kill -9 100 && echo pid 61799 done` is two shell segments.
+        Matching against the whole leaf would read 61799 as a PID `kill` named; matching against
+        each split segment separately confines the PID list to what the kill command itself named."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [self._claude_line("kill -9 100 && echo pid 61799 done")])
+            self.assertIsNone(classify.scan_self_kill(log, 61799))
+            finding = classify.scan_self_kill(log, 100)
+            self.assertEqual(finding["command"], "kill -9 100")
+            self.assertEqual(finding["pids"], "100")
+
+    def test_killall_names_a_process_not_a_pid_so_it_can_never_match(self):
+        """`killall` kills by process name, so a real killall self-kill never carries the
+        victim's PID as a literal token in the command text. This is a structural limit of a
+        PID-token scan, not a bug: document it instead of leaving it silently unproven."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._log(tmp, [self._claude_line("killall -9 python")])
+            self.assertIsNone(classify.scan_self_kill(log, 61799))
 
 
 if __name__ == "__main__":

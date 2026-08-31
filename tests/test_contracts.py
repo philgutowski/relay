@@ -98,6 +98,14 @@ class OwnVocabulary(unittest.TestCase):
         self.assertEqual(contracts.disallow_inner("Bash(git clean*)"), "git clean*")
         self.assertEqual(contracts.disallow_inner("Edit"), "Edit")
 
+    def test_kill_family_is_disallowed_by_default_but_not_destructive(self):
+        """Round six #40: a task killed its own Runner with `kill -9 <pids...>`; the disallow
+        list had no entry for kill/pkill/killall."""
+        self.assertTrue(set(contracts.KILL_LIKE_TOOLS).issubset(contracts.DISALLOWED_TOOLS))
+        for pattern in ("Bash(kill*)", "Bash(pkill*)", "Bash(killall*)"):
+            self.assertIn(pattern, contracts.KILL_LIKE_TOOLS)
+            self.assertNotIn(pattern, contracts.DESTRUCTIVE_TOOLS)
+
     def test_denial_regex_matches_the_observed_text(self):
         text = "Permission to use Edit has been denied because Claude Code is running in don't ask mode."
         self.assertEqual(contracts.DENIAL_REGEX.match(text).group(1), "Edit")
