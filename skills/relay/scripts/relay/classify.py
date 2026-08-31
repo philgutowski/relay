@@ -135,6 +135,51 @@ def matches_disallow_pattern(command, pattern):
     return False
 
 
+# Two or more digits, so a bare signal flag (`-9`, `-15`) is never read as a PID on its own.
+_PID_TOKEN_RE = re.compile(r"\b\d{2,}\b")
+
+
+def _string_leaves(value):
+    """Every string value nested inside a parsed JSON object, list, or string, depth-first.
+    Backend-agnostic on purpose: scan_self_kill does not know which field a given backend's
+    stdout log carries a Bash command in."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _string_leaves(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _string_leaves(item)
+
+
+def scan_self_kill(log_path, victim_pid):
+    """Round six #40: a task killed its own Runner with `kill -9 <pids...>` before the record's
+    `transcript_path` was ever written back to state, so this reads the task's raw stdout log at
+    its deterministic path instead (`logs/<task_id>.stdout.log`, always present once the task's
+    subprocess starts writing). Best-effort forensic scan, not a gate: a false match only adds a
+    finding to an already-halted record. Returns a finding dict naming the matched command and
+    its full PID list, or None when no kill-family command named `victim_pid`."""
+    lines, _malformed, opened = backends._read_jsonl(log_path)
+    if not opened:
+        return None
+    victim = str(victim_pid)
+    for _number, obj in lines:
+        for leaf in _string_leaves(obj):
+            for pattern in contracts.KILL_LIKE_TOOLS:
+                if matches_disallow_pattern(leaf, pattern):
+                    pids = _PID_TOKEN_RE.findall(leaf)
+                    if victim in pids:
+                        return {
+                            "class": contracts.RUNNER_SELF_KILL,
+                            "command": leaf,
+                            "pids": " ".join(pids),
+                            "victim_pid": victim,
+                        }
+                    break
+    return None
+
+
 def required_skill_for(skill_name, backend="claude"):
     """The qualified skill a Skill call should have been in this backend's own form, or None when
     it was already qualified or names nothing the brief pins. `code-review` maps to

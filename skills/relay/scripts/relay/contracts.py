@@ -348,6 +348,10 @@ BLOCKED_UNRECORDED = "blocked_unrecorded"
 # A disallowed call that ran on a backend that does not enforce at launch. Finding only:
 # landing refusal for the destructive subset is unexpected_error on the record.
 UNENFORCED_DISALLOWED = "unenforced_disallowed"
+# Round six #40: a stale-lease reclaim whose crashed task's own stdout log named the previous
+# Runner's PID in a kill/pkill/killall command (classify.scan_self_kill). Finding only: the
+# record's own halt_class stays runner_crashed (KTD6's closed set), this just says why.
+RUNNER_SELF_KILL = "runner_self_kill"
 
 # The .claude/ backstop's operator sentence. HALT_LINES[path_gate] is {detail}; this
 # raiser and classify's path_gate promotion fill it so the Cause line stays true.
@@ -397,11 +401,14 @@ FINDING_CLASSES = (
     CLOSEOUT_UNFINISHED,
     BLOCKED_UNRECORDED,
     UNENFORCED_DISALLOWED,
+    RUNNER_SELF_KILL,
 )
 
 # Every class that can reach a summary line: the closed halt class set of KTD6, plus the
 # findings that are never a record's own class but still have to print.
-LINE_CLASSES = HALT_CLASSES + (CLOSEOUT_UNFINISHED, BLOCKED_UNRECORDED, UNENFORCED_DISALLOWED)
+LINE_CLASSES = HALT_CLASSES + (
+    CLOSEOUT_UNFINISHED, BLOCKED_UNRECORDED, UNENFORCED_DISALLOWED, RUNNER_SELF_KILL,
+)
 
 HALT_LINES = {
     HALT_LANDED: "landed at {ref}",
@@ -427,6 +434,7 @@ HALT_LINES = {
     CLOSEOUT_UNFINISHED: "the closeout ended without a terminal line; last message: {last_message}",
     BLOCKED_UNRECORDED: "blocked and the card carries no new comment; check {task} by hand",
     UNENFORCED_DISALLOWED: "{tool} ran {argument} at line {line} matching {pattern}",
+    RUNNER_SELF_KILL: "self-kill: {command} named the runner's own pid {victim_pid} among {pids}",
 }
 
 # The digest classify.classify() (U7) guarantees, read by run.py and closeout.py via
