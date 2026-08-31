@@ -241,6 +241,17 @@ BACKEND_PINS = {
     },
 }
 
+# Round six #40: a task chasing a hung unittest child ran `kill -9 <pids...>` and swept in the
+# Runner's own PID and its caffeinate wrapper. kill/pkill/killall had no disallow entry, so
+# nothing at the permission layer stopped it on an enforcing backend. Named separately so
+# classify.scan_self_kill (KTD2) can check a matched command against exactly these globs without
+# re-deriving them.
+KILL_LIKE_TOOLS = (
+    "Bash(kill*)",
+    "Bash(pkill*)",
+    "Bash(killall*)",
+)
+
 # R10 disallow list with every variant spelling. Defence in depth; landing safety rests on the
 # runner owning merge and push.
 DISALLOWED_TOOLS = (
@@ -255,7 +266,7 @@ DISALLOWED_TOOLS = (
     "Bash(rm -fr*)",
     "Bash(rm -r *)",
     "Bash(rm -R *)",
-)
+) + KILL_LIKE_TOOLS
 
 
 def disallow_inner(pattern):
