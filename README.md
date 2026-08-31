@@ -1,7 +1,9 @@
 # Relay
 
 Working name. Run a list of pre-defined tasks through a full engineering pipeline, one fresh
-headless Claude Code process per task, serially and unattended.
+headless process per task, serially and unattended. `/relay` itself runs in Claude Code. Each
+Task process and its Closeout process run on the backend that Task names, `claude`, `codex`, or
+`grok`.
 
 Each task gets its own context window. Nothing carries between tasks except what landed in git
 and on the tracker. The runner verifies that landed state itself before it starts the next task,
@@ -26,17 +28,22 @@ next one. Relay is that outer loop and nothing more.
 
 ## Shape
 
-- **Runner:** a small script. Reads a manifest, pops the next task, launches `claude -p` with
-  the task's model, effort, and permission allowlist, waits, verifies the landed state, runs the
-  compound judgment as a separate short process, advances or halts.
+- **Runner:** a small script. Reads a manifest, pops the next task, launches that Task's backend
+  with the task's model, effort, and permission allowlist, waits, verifies the landed state, runs
+  the compound judgment as a separate short process on the same backend, advances or halts.
 - **Manifest:** one file per project. Names the tracker adapter, the task list, the shipping
-  mode, any mirror rule, and the disallow patterns. Everything project-specific is data here,
+  mode, any mirror rule, and the disallow patterns. A `[defaults]` table may set `backend`. A
+  Task may name its own `backend`. When that value differs from the default, the Task carries a
+  `reason`. `permissions.task_allowed_paths` is the commit-scope bound for an unenforced backend.
+  `permissions.unenforced_acceptance` is the operator's own sentence accepting that condition.
+  A Jira adapter cannot pair with `codex` or `grok`. Everything project-specific is data here,
   never code in the runner. One shipping mode runs today, `local_merge`, where the runner runs
   the gate and owns the merge. `pr_terminal`, where each task ends at a pull request whose checks
   have decided, is named in the schema and refused by `validate` until its run loop sequence
   exists.
-- **Skill:** `/relay`. Writes the manifest from a conversation, checks the three properties
-  above, launches the runner.
+- **Skill:** `/relay`. Writes the manifest from a conversation, proposes a backend per Task from
+  the rubric, checks the three properties above, launches the runner. The skill itself runs in
+  Claude Code. Only the launched processes vary.
 
 ## Install
 
@@ -94,8 +101,8 @@ summary still lists that task as a check-by-hand item, and the same repair-and-r
 
 ## Where things are
 
-- `CONCEPTS.md`: the vocabulary. Runner, Manifest, Lease, Task process, Closeout process, Halt
-  class, Cause line, Verify-landed. Read this first.
+- `CONCEPTS.md`: the vocabulary. Runner, Manifest, Lease, Task process, Closeout process,
+  Backend, Halt class, Cause line, Verify-landed. Read this first.
 - `docs/plans/2026-08-25-1346-feat-relay-outer-loop-plan.md`: the implementation plan, including
   the requirements, the key technical decisions, and the halt class table.
 - `docs/examples/`: one manifest per adapter.
