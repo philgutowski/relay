@@ -26,6 +26,10 @@ mode = "local_merge"
 [permissions]
 allowed = ["Bash", "Read", "Edit", "Write", "Grep", "Glob", "Skill", "Agent", "TodoWrite"]
 disallowed = []
+# Required because Task 413 names codex, which cannot refuse tools at launch. The sentence
+# below is a fixture, not an operator's words. Replace it before a real run.
+unenforced_acceptance = "example fixture: this mixed manifest accepts that Codex cannot refuse tools at launch"
+task_allowed_paths = ["src/", "docs/"]
 
 [timeouts]
 task_minutes = 150
