@@ -248,8 +248,11 @@ BACKEND_PINS = {
     },
     "grok": {
         "binary": "grok",
-        "version_tested": "1.0.5",
-        "version_output_sample": "grok 1.0.5 (5115b46bc909) [stable]",
+        # Bumped 2026-09-01 (issue #57 live verification): the dontAsk and denial-refusal
+        # findings above were pinned against 1.0.5; the cancellation finding below was
+        # confirmed against 1.0.13, the version installed and exercised in that session.
+        "version_tested": "1.0.13",
+        "version_output_sample": "grok 1.0.13 (5e9a58528b76) [stable]",
         "plugin_version": "3.23.4",
         "plugin_query": ("grok", "plugin", "list", "--json"),
         # `grok plugin list --json` carries only a `"status": "installed"` field, unchanged by
@@ -266,18 +269,23 @@ BACKEND_PINS = {
         # partway through planning, and three single-command probes. `auto` is the mode that
         # runs the task AND still refuses a denied call, so it is the non-bypass posture here.
         #
-        # Issue #57, observed round eight 2026-09-01 on tasks 45 and 56. Under `auto` mode a
-        # `run_terminal_command` whose argument uses command substitution or a heredoc -- the
-        # `git commit -m "$(cat <<'EOF' ... EOF)"` form the compound-engineering pipeline
-        # teaches -- is cancelled outright rather than executed or refused: the same "User
-        # cancelled the execution for tool `run_terminal_command`" phrasing above, with
-        # `stopReason: cancelled` on the stdout log. This is session-fatal, not a retryable
-        # denial: no retry, no return envelope, whatever the task had in flight is stranded.
-        # `classify.py` surfaces it as a `CANCELLED_TOOL_CALL` finding read off the stdout log;
-        # `commit_message_constraint` below tells the task to avoid the construct, since
-        # instruction is the only enforcement layer this backend has for it -- the demonstrated
-        # `--deny` refusal above never engages, because the matcher does not refuse a shape it
-        # cannot analyze, it cancels the call instead.
+        # Issue #57, observed round eight 2026-09-01 on tasks 45 and 56, confirmed live against
+        # grok 1.0.13 the same day. Under `auto` mode a `run_terminal_command` whose argument
+        # uses command substitution or a heredoc -- the `git commit -m "$(cat <<'EOF' ...
+        # EOF)"` form the compound-engineering pipeline teaches -- is cancelled outright rather
+        # than executed or refused: `updates.jsonl` carries the exact same shape as the
+        # demonstrated `--deny` refusal above, a `tool_call_update` with `status: "failed"`, but
+        # the body reads "User cancelled the execution for tool `run_terminal_command`" instead
+        # of a permission-policy denial. This is session-fatal, not a retryable denial: no
+        # retry, no return envelope, whatever the task had in flight is stranded.
+        # `classify.py` surfaces it as a `CANCELLED_TOOL_CALL` finding, a sibling check beside
+        # the denial scan on the same file; `commit_message_constraint` below tells the task to
+        # avoid the construct, since instruction is the only enforcement layer this backend has
+        # for it -- the demonstrated `--deny` refusal above never engages, because the matcher
+        # does not refuse a shape it cannot analyze, it cancels the call instead. Not reliably
+        # reproducible from a single trivial `-p` probe outside a real multi-turn task; the
+        # live probe that confirmed the marker text and `status` value used the real capture
+        # from task 45's own session file rather than a fresh reproduction attempt.
         "permission_mode": "auto",
         "forbidden_permission_modes": ("bypassPermissions", "dontAsk"),
         "output_format": ("--output-format", "streaming-json"),
@@ -292,8 +300,7 @@ BACKEND_PINS = {
         # U1 finding, resolving the plan's open question. Grok registers plugin skills under
         # bare names, with no plugin namespace, so the Claude prefix would not resolve.
         "skill_form": "/%s",
-        "evidence": "~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl; classify "
-                    "also reads the stdout log for a terminal cancelled tool call (issue #57)",
+        "evidence": "~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl",
         "credential_prefixes": ("GROK_", "XAI_"),
         "credential_file": "~/.grok/auth.json",
         "nesting_markers": ("GROK_SANDBOX",),

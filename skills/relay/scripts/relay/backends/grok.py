@@ -54,46 +54,10 @@ def _update_text(update):
     return "\n".join(parts)
 
 
-def _terminal_cancellation(log_path):
-    """Issue #57. The one shape this stdout log is read for: a stream whose last event is
-    `{"type":"end","stopReason":"cancelled"}`, immediately preceded by a cancelled
-    `tool_call_update` for a `run_terminal_command` call. Returns a synthesized (`tool_use`,
-    `tool_result`) block pair naming the cancelled command, or `None` when the log does not open,
-    is empty, or does not end in exactly this shape. `updates.jsonl` (`transcript_path`) is read
-    for every other signal (KTD4 of the backends plan); this is the one narrow exception, because
-    `stopReason` and this phrasing exist only on the raw stream, never on the ACP session file."""
-    if not log_path:
-        return None
-    raw_lines, _malformed, _opened = _read_jsonl(log_path)
-    if len(raw_lines) < 2:
-        return None
-    (_, last), (_, prior) = raw_lines[-1], raw_lines[-2]
-    if last.get("type") != "end" or last.get("stopReason") != "cancelled":
-        return None
-    if prior.get("type") != "tool_call_update" or prior.get("status") != "cancelled":
-        return None
-    call_id = prior.get("toolCallId")
-    call = next((obj for _, obj in raw_lines
-                 if obj.get("type") == "tool_call" and obj.get("toolCallId") == call_id), None)
-    if call is None:
-        return None
-    name = _tool_name_of(call)
-    raw_input = call.get("rawInput") or {}
-    if name == "run_terminal_command":
-        use = {"type": "tool_use", "id": call_id, "name": "Bash",
-               "input": {"command": raw_input.get("command", "")}}
-    else:
-        use = {"type": "tool_use", "id": call_id, "name": name, "input": raw_input}
-    body = _update_text(prior) or ("User cancelled the execution for tool `%s`" % name)
-    result = {"type": "tool_result", "tool_use_id": call_id, "is_error": True, "content": body}
-    return use, result
-
-
 def normalize_transcript(transcript_path, log_path=None):
     """`transcript_path` is `updates.jsonl`. `agent_message_chunk` events are already complete
     per-turn text, so `last_text` needs no token reassembly (KTD4). That reassembly is tail's
-    job, on a different file, the raw stdout stream, not this one -- except for `_terminal_
-    cancellation` above, a deliberate, narrow amendment to that boundary (issue #57)."""
+    job, on a different file, the raw stdout stream, not this one."""
     raw_lines, malformed, opened = _read_jsonl(transcript_path)
 
     lines = []
@@ -129,29 +93,27 @@ def normalize_transcript(transcript_path, log_path=None):
             if update.get("status") != "failed":
                 continue
             body = _update_text(update)
-            if _DENIAL_MARKER not in body:
-                continue
             call = tool_calls.get(update.get("toolCallId")) or {}
             tool = call.get("name") or "tool"
+            if _DENIAL_MARKER in body:
+                content = "Permission to use %s has been denied" % tool
+            elif contracts.CANCELLED_TOOL_REGEX.search(body):
+                # Issue #57. Grok's own permission layer cancelled the call outright rather
+                # than refusing it (no user present in a headless run): "User cancelled the
+                # execution for tool `run_terminal_command`", captured verbatim in `body` and
+                # already the shape `contracts.CANCELLED_TOOL_REGEX` expects, so it is passed
+                # through rather than reconstructed the way the denial sentence above is.
+                content = body
+            else:
+                continue
             lines.append((number, {
                 "type": contracts.TRANSCRIPT_TYPE_USER,
                 "message": {"content": [{
                     "type": "tool_result", "tool_use_id": update.get("toolCallId"),
                     "is_error": True,
-                    "content": "Permission to use %s has been denied" % tool,
+                    "content": content,
                 }]},
             }))
-
-    cancellation = _terminal_cancellation(log_path)
-    if cancellation is not None:
-        use, result = cancellation
-        next_line = (lines[-1][0] + 1) if lines else 1
-        lines.append((next_line, {
-            "type": contracts.TRANSCRIPT_TYPE_ASSISTANT, "message": {"content": [use]},
-        }))
-        lines.append((next_line + 1, {
-            "type": contracts.TRANSCRIPT_TYPE_USER, "message": {"content": [result]},
-        }))
 
     return _Evidence(lines=lines, malformed_lines=malformed, decoded_events=len(raw_lines),
                       undetectable=_UNDETECTABLE, opened=opened)
