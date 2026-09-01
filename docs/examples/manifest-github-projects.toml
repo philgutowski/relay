@@ -79,7 +79,9 @@ effort = "high"
 
 [[tasks]]
 id = "413"
-model = "sonnet"
+# A codex model, because the backend below is codex. Validate refuses a task whose model is a
+# name another backend is known to accept, so the model moves with the backend (issue #58).
+model = "gpt-5-codex"
 effort = "medium"
 backend = "codex"
 # Required because this Task leaves the default backend. The sentence below is a fixture, not

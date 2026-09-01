@@ -6,7 +6,9 @@ from . import (Evidence as _Evidence, TEXT_CHARS as _TEXT_CHARS, _decode_stream_
                _last_message_path, _parse_after_name_token, _read_jsonl, _record,
                _tool_call_event)
 
-CAPABILITY = _record("codex")
+# Issue #58, KTD11. A short, deliberately partial list of the GPT family names this CLI takes
+# for `--model`. Unlisted names pass, so this going stale is harmless.
+CAPABILITY = _record("codex", known_models=("gpt-5", "gpt-5-codex", "o3"))
 
 parse_version = _parse_after_name_token
 

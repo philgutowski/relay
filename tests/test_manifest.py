@@ -4,6 +4,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -12,6 +13,11 @@ import _repo
 from relay import backends, contracts, manifest as mf
 
 FIXTURE = os.path.join(_paths.FIXTURES_DIR, "manifests", "complete.toml")
+
+# One model name each backend is known to accept, for a fixture that moves a Task off claude.
+# R9 refuses a backend paired with a model another backend claims, so a fixture that reassigns
+# a Task's backend has to reassign its model in the same edit.
+BACKEND_MODELS = {"claude": "opus", "codex": "gpt-5-codex", "grok": "grok-4"}
 
 
 def drop_table(text, name):
@@ -42,6 +48,23 @@ class ManifestCase(unittest.TestCase):
         new, n = re.subn(pattern, replacement, self.base, count=count, flags=re.MULTILINE)
         assert n == count, "edit did not match: %r" % pattern
         return new
+
+    def remodel(self, text, task_id, model):
+        """`text` with one Task's model replaced. Anchored on the Task id because the [closeout]
+        table carries a `model` line of its own."""
+        pattern = r'id = "%s"\nmodel = "[^"]*"' % re.escape(task_id)
+        body = 'id = "%s"\nmodel = "%s"' % (task_id, model)
+        new, n = re.subn(pattern, lambda _match: body, text, count=1)
+        assert n == 1, "remodel did not match task %s" % task_id
+        return new
+
+    def retarget(self, text, task_id, backend, extra=""):
+        """`text` with one Task moved onto `backend`, model and all. The model moves with the
+        backend because R9 refuses a Task whose model belongs to a different CLI, so a fixture
+        that only swapped the backend would be testing that refusal instead of its own rule."""
+        text = self.remodel(text, task_id, BACKEND_MODELS[backend])
+        return text.replace('id = "%s"' % task_id,
+                            'id = "%s"\nbackend = "%s"%s' % (task_id, backend, extra), 1)
 
 
 class CompleteManifest(ManifestCase):
@@ -280,6 +303,10 @@ class Backends(ManifestCase):
 
     def test_a_defaults_table_value_is_inherited_by_a_task_that_names_none(self):
         text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
+        # Both Tasks inherit codex, so both models move with them: R9 refuses a codex Task still
+        # carrying the fixture's claude model.
+        for task_id in ("T-1", "T-2"):
+            text = self.remodel(text, task_id, BACKEND_MODELS["codex"])
         text = self._with_unenforced_gate(text)
         m = self.load(text)
         for task in m.tasks:
@@ -291,8 +318,8 @@ class Backends(ManifestCase):
 
     def test_a_per_task_backend_overrides_the_default(self):
         text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
-        text = text.replace('id = "T-1"',
-                            'id = "T-1"\nbackend = "grok"\nreason = "fixture: grok for this Task"', 1)
+        text = self.retarget(text, "T-1", "grok", '\nreason = "fixture: grok for this Task"')
+        text = self.remodel(text, "T-2", BACKEND_MODELS["codex"])
         text = self._with_unenforced_gate(text)
         m = self.load(text)
         self.assertEqual(m.tasks[0].backend, "grok")
@@ -301,8 +328,7 @@ class Backends(ManifestCase):
 
     def test_a_mixed_manifest_validates(self):
         text = self._with_unenforced_gate(
-            self.base.replace('id = "T-1"',
-                              'id = "T-1"\nbackend = "codex"\nreason = "fixture: mixed Codex Task"', 1))
+            self.retarget(self.base, "T-1", "codex", '\nreason = "fixture: mixed Codex Task"'))
         m = self.load(text)
         self.assertEqual([t.backend for t in m.tasks], ["codex", "claude"])
         self.assertTrue(mf.validate(m).ok)
@@ -335,7 +361,9 @@ class BackendReason(ManifestCase):
     """U13: a Task whose backend differs from the resolved default needs a reason string."""
 
     def _mixed_codex(self, extra_task="", extra_permissions=None):
-        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"' + extra_task, 1)
+        # retarget, not a bare backend swap: R9 refuses a codex Task still carrying the
+        # fixture's claude model, and this class is about the reason rule, not that one.
+        text = self.retarget(self.base, "T-1", "codex", extra_task)
         perms = extra_permissions if extra_permissions is not None else (
             'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
             'task_allowed_paths = ["src/"]')
@@ -363,7 +391,9 @@ class BackendReason(ManifestCase):
 
     def test_a_task_that_repeats_a_non_claude_default_needs_no_reason(self):
         text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
-        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "codex"', 1)
+        text = self.retarget(text, "T-1", "codex")
+        # T-2 inherits the codex default, so its model moves with it too (R9).
+        text = self.remodel(text, "T-2", BACKEND_MODELS["codex"])
         text = text.replace("[permissions]",
                             '[permissions]\n'
                             'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
@@ -373,7 +403,8 @@ class BackendReason(ManifestCase):
 
     def test_a_task_that_leaves_a_non_claude_default_without_a_reason_is_refused(self):
         text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "codex"\n\n[[tasks]]', 1)
-        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "claude"', 1)
+        text = self.retarget(text, "T-1", "claude")
+        text = self.remodel(text, "T-2", BACKEND_MODELS["codex"])
         text = text.replace("[permissions]",
                             '[permissions]\n'
                             'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
@@ -384,7 +415,7 @@ class BackendReason(ManifestCase):
         self.assertTrue(any("differs from the default" in error for error in result.errors))
 
     def test_a_grok_task_without_a_reason_is_refused_without_unenforced_fields(self):
-        text = self.base.replace('id = "T-1"', 'id = "T-1"\nbackend = "grok"', 1)
+        text = self.retarget(self.base, "T-1", "grok")
         result = mf.validate(self.load(text))
         self.assertFalse(result.ok)
         self.assertTrue(any("differs from the default" in error for error in result.errors))
@@ -392,7 +423,7 @@ class BackendReason(ManifestCase):
 
     def test_an_invalid_defaults_backend_does_not_skip_the_reason_check(self):
         text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "CODEX"\n\n[[tasks]]', 1)
-        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "grok"', 1)
+        text = self.retarget(text, "T-1", "grok")
         result = mf.validate(self.load(text))
         self.assertFalse(result.ok)
         joined = " ".join(result.errors)
@@ -414,7 +445,7 @@ class BackendReason(ManifestCase):
         self.assertFalse(any("differs from the default" in error for error in result.errors))
 
     def test_one_reason_covers_exclusion_and_a_differing_backend(self):
-        text = self.base.replace('id = "T-2"', 'id = "T-2"\nbackend = "codex"', 1)
+        text = self.retarget(self.base, "T-2", "codex")
         text = text.replace("[permissions]",
                             '[permissions]\n'
                             'unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
@@ -428,6 +459,72 @@ class BackendReason(ManifestCase):
         joined = " ".join(result.errors)
         self.assertIn("excluded but carries no reason", joined)
         self.assertTrue(any("differs from the default" in error for error in result.errors))
+
+
+class BackendModelCoherence(ManifestCase):
+    """U6: R9, KTD10, KTD11. A resolved backend paired with a model another backend claims is
+    refused at validate, before any Task launches. A model no backend claims passes."""
+
+    CODEX_PERMISSIONS = ('unenforced_acceptance = "fixture: operator accepts unenforced Codex"\n'
+                         'task_allowed_paths = ["src/"]')
+
+    def _all_on(self, backend, model, permissions=""):
+        """The fixture with a [defaults] backend and both Tasks carrying the same model. This is
+        the reported hazard's own shape: one [defaults] edit, every Task's old model string
+        handed to the new CLI."""
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "%s"\n\n[[tasks]]' % backend, 1)
+        for task_id in ("T-1", "T-2"):
+            text = self.remodel(text, task_id, model)
+        if permissions:
+            text = text.replace("[permissions]", "[permissions]\n" + permissions, 1)
+        return text
+
+    def test_a_grok_default_with_a_claude_model_is_refused_naming_the_task(self):
+        # AE7. The fixture's T-2 keeps its claude model, sonnet, while [defaults] sends it to grok.
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "grok"\n\n[[tasks]]', 1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        offending = [error for error in result.errors if "T-2" in error]
+        self.assertTrue(offending, result.errors)
+        self.assertTrue(any("grok" in error and "sonnet" in error for error in offending), offending)
+
+    def test_a_model_no_backend_claims_is_allowed_through(self):
+        # KTD11: the check is negative, so a model name Relay has never heard of is not refused.
+        # A positive allowlist would refuse this the day a provider ships a new model.
+        result = mf.validate(self.load(self._all_on("grok", "mercury-2")))
+        self.assertTrue(result.ok, result.errors)
+
+    def test_a_backend_paired_with_its_own_model_validates(self):
+        for backend, model in BACKEND_MODELS.items():
+            with self.subTest(backend=backend):
+                permissions = self.CODEX_PERMISSIONS if backend == "codex" else ""
+                result = mf.validate(self.load(self._all_on(backend, model, permissions)))
+                self.assertTrue(result.ok, result.errors)
+
+    def test_an_invalid_defaults_backend_does_not_skip_the_mismatch_check(self):
+        # An invalid reference value must not switch off an unrelated per Task rule, the trap
+        # recorded in docs/solutions/logic-errors/
+        # invalid-defaults-backend-silently-turned-off-the-reason-check.md. Both Tasks name grok
+        # themselves and keep their claude models.
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "GROK"\n\n[[tasks]]', 1)
+        text = text.replace('id = "T-1"', 'id = "T-1"\nbackend = "grok"', 1)
+        text = text.replace('id = "T-2"', 'id = "T-2"\nbackend = "grok"', 1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any(error.startswith("defaults.backend") for error in result.errors))
+        mismatches = [error for error in result.errors if "belongs to backend" in error]
+        self.assertEqual(len(mismatches), 2, result.errors)
+
+    def test_a_model_two_backends_both_claim_is_valid_on_both(self):
+        # No two capability records share a name today, so the overlap is staged here rather
+        # than waiting for a provider to ship one.
+        grok = backends.build("grok")
+        shared = replace(grok.CAPABILITY,
+                         known_models=grok.CAPABILITY.known_models + ("opus",))
+        with mock.patch.object(grok, "CAPABILITY", shared):
+            result = mf.validate(self.load(self._all_on("grok", "opus")))
+        self.assertTrue(result.ok, result.errors)
+        self.assertTrue(mf.validate(self.load(self._all_on("claude", "opus"))).ok)
 
 
 class BackendReadiness(ManifestCase):
@@ -580,9 +677,9 @@ class UnenforcedAcceptance(ManifestCase):
     """Parent R19. A Codex Task cannot validate without the sentence and a set bound."""
 
     def _codex_task(self, extra_permissions=""):
-        text = self.base.replace(
-            'id = "T-1"',
-            'id = "T-1"\nbackend = "codex"\nreason = "fixture: mixed Codex Task"', 1)
+        # The model moves to codex with the backend, so R9 is not what refuses these fixtures.
+        text = self.retarget(self.base, "T-1", "codex",
+                             '\nreason = "fixture: mixed Codex Task"')
         if extra_permissions:
             text = text.replace("[permissions]", "[permissions]\n" + extra_permissions, 1)
         return text
@@ -609,7 +706,7 @@ class UnenforcedAcceptance(ManifestCase):
         self.assertTrue(mf.validate(self.load()).ok)
 
     def test_an_excluded_codex_task_still_requires_both_fields(self):
-        text = self.base.replace('id = "T-2"', 'id = "T-2"\nbackend = "codex"', 1)
+        text = self.retarget(self.base, "T-2", "codex")
         result = mf.validate(self.load(text))
         self.assertFalse(result.ok)
         joined = " ".join(result.errors)

@@ -7,7 +7,9 @@ from . import (Evidence as _Evidence, TEXT_CHARS as _TEXT_CHARS, _argument_of,
                _decode_stream_line, _parse_after_name_token, _read_jsonl, _record,
                _tool_call_event)
 
-CAPABILITY = _record("grok")
+# Issue #58, KTD11. A short, deliberately partial list of the grok family names this CLI takes
+# for `--model`. Unlisted names pass, so this going stale is harmless.
+CAPABILITY = _record("grok", known_models=("grok-4", "grok-4-fast", "grok-code-fast-1"))
 
 parse_version = _parse_after_name_token
 
