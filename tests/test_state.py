@@ -339,7 +339,23 @@ class Terminal(StateCase):
         self.assertEqual(store.terminal()["cli_version_observed"], {"claude": "2.1.247"})
         store.set_cursor(1)
         with open(store.state_path, encoding="utf-8") as handle:
-            self.assertEqual(json.load(handle)["schema_version"], contracts.STATE_SCHEMA_VERSION)
+            data = json.load(handle)
+            self.assertEqual(data["schema_version"], contracts.STATE_SCHEMA_VERSION)
+            # The upgrade is the one mutation that makes the backfill durable, because the
+            # read side backfill below stops applying once the version is current.
+            self.assertEqual(data["tasks"]["T-1"]["backend"], "claude")
+        self.assertEqual(store.get("T-1")["backend"], "claude")
+
+    def test_a_current_schema_record_with_no_backend_is_not_backfilled(self):
+        """U14, T-35: a record halted before launch has no backend yet. Backfilling claude onto
+        it made run.py's record wins rule swap a resumed grok task onto claude, which launched
+        claude with grok's model. Only a genuinely legacy file earns the backfill."""
+        store = self.store()
+        store.acquire()
+        store.upsert("T-1", status=contracts.STATUS_HALTED,
+                     halt_class=contracts.HALT_UNCLEAN_EXIT)
+        store.release()
+        self.assertIsNone(store.get("T-1")["backend"])
 
 
 class Layout(StateCase):

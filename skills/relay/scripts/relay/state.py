@@ -147,11 +147,15 @@ class StateStore:
             terminal["cli_version"] = self._version_map(terminal.get("cli_version"))
             terminal["cli_version_observed"] = self._version_map(
                 terminal.get("cli_version_observed"))
-        for record in (state.get("tasks") or {}).values():
-            if isinstance(record, dict) and not record.get("backend"):
-                # Before pluggable backends every task was Claude, so this is evidence, not a
-                # guess. It also keeps a resumed task on the CLI that produced its first run.
-                record["backend"] = "claude"
+        if state.get("schema_version", 0) < contracts.STATE_SCHEMA_VERSION:
+            # Before pluggable backends every task was Claude, so for a genuinely legacy file
+            # this is evidence, not a guess, and it keeps a resumed task on the CLI that
+            # produced its first run. A current schema record with no backend is different: it
+            # halted before anything launched, and backfilling claude onto it made run.py's
+            # record wins rule swap a resumed grok task onto claude (U14, T-35).
+            for record in (state.get("tasks") or {}).values():
+                if isinstance(record, dict) and not record.get("backend"):
+                    record["backend"] = "claude"
         return state
 
     def _write_locked(self, state):
@@ -176,6 +180,11 @@ class StateStore:
             # A legacy file is upgraded only when a normal mutation already makes it durable;
             # opening a state directory remains strictly read-only.
             if state.get("schema_version", 0) < contracts.STATE_SCHEMA_VERSION:
+                # The read side backfill above stops applying once the version is current, so
+                # make it durable here, in the one mutation that upgrades the file.
+                for record in (state.get("tasks") or {}).values():
+                    if isinstance(record, dict) and not record.get("backend"):
+                        record["backend"] = "claude"
                 state["schema_version"] = contracts.STATE_SCHEMA_VERSION
             result = fn(state)
             self._write_locked(state)
