@@ -89,11 +89,13 @@ python3 skills/relay/scripts/relay_cli.py summary <manifest>
 ```
 
 A first launchd or cron launch of the runner sits outside Terminal's privacy grants. Before that
-fire, grant the python binary named in the job's ProgramArguments access to the folders it will
-read (the checkout and the state directory), typically Documents when the checkout lives there, or
-grant Full Disk Access, in System Settings, Privacy and Security. The grant is per binary and holds
-until that executable's identity changes. Without it the process stalls on the prompt with no halt
-class and no log line, because nothing has started yet.
+fire, grant the python binary that job launches access to the folders it will read (the checkout
+and the state directory), typically Documents when the checkout lives there, in System Settings,
+Privacy and Security, Files and Folders, or grant Full Disk Access. For launchd that path is the
+ProgramArguments python. For cron it is the python in the crontab command. The grant is per binary
+and holds until that executable's identity changes. Without it the process stalls on a Files and
+Folders or Full Disk Access prompt on that Mac, with no halt class and no log line, because nothing
+has started yet. Look at the Mac display. This session cannot click it.
 
 `tail` is how you watch a run that is already going. It follows each task's output in order and
 prints it decoded, one line per event, instead of the stream json that lands in `runner.log`. It

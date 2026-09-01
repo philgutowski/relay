@@ -150,11 +150,14 @@ tool call's process group cannot end it, and logs to `runner.log` in the state d
 it wraps the run in `caffeinate -i` so the host stays awake; there is no `setsid` binary on macOS,
 so do not reach for one. Lid close is not supported: the machine must stay open for the whole run.
 A first launchd or cron launch of the runner is not covered by Terminal's Files and Folders grant.
-Before that fire, grant the python binary named in the job's ProgramArguments access to the folders
-it will read (the checkout and the state directory), typically Documents when the checkout lives
-there, or grant Full Disk Access, in System Settings, Privacy and Security. The grant is per binary
-and holds until that executable's identity changes. Without it the process sits on the prompt with
-no halt class and no log line, because the runner has not started.
+Before that fire, grant the python binary that job launches access to the folders it will read
+(the checkout and the state directory), typically Documents when the checkout lives there, or grant
+Full Disk Access, in System Settings, Privacy and Security. For launchd that path is the
+ProgramArguments python. For cron it is the python in the crontab command. The grant is per binary
+and holds until that executable's identity changes. Without it the process sits on a Files and
+Folders or Full Disk Access prompt on that Mac, with no halt class and no log line, because the
+runner has not started. This session cannot click that prompt. Tell the operator to look at the
+Mac display.
 
 `--phases` is what makes this usable in a session. Without it the follower prints every tool call
 every task makes, which is right in a terminal and would consume this session's context in
@@ -197,7 +200,9 @@ python3 <runner> summary <manifest> --json
 Everything you need is in those two outputs. Do not open a session transcript: the runner already
 classified the exit into a halt class with its evidence, and the summary carries the cause line
 and the checks a human still has to make. Explain the class in plain words, name the evidence,
-and say what the operator has to do.
+and say what the operator has to do. If `status` prints `no state for <manifest> yet` and a python
+for this job is live with no `runner.log`, that is a Files and Folders or Full Disk Access prompt
+on a launchd or cron parent, not a halt class and not a backend readiness failure.
 
 The classes and what they mean for the operator:
 
