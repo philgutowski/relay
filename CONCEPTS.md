@@ -118,10 +118,12 @@ the launched processes vary.
 
 Between runs the Manifest's resolution decides again, so editing a Task's backend or model moves
 any Task that has not landed, and the Runner reports the move on its own output and as a finding
-on that Task's record rather than taking it silently. The record still wins for what it names on
-disk, the branch and the baseline, because recomputing those can strand or destroy work while a
-backend names nothing that survives the attempt. A Manifest that pairs a backend with a model
-belonging to another backend is refused before any Task launches.
+on that Task's record rather than taking it silently. What the edit cannot move is the branch a
+blocked Task left behind: the stranded branch refusal is judged against the name and baseline
+that Task's record already carries, because those point at commits on disk that recomputing could
+strand or discard, while a backend points at nothing that survives the attempt. A Manifest that
+pairs a backend with a model another backend is known to accept is refused before any Task
+launches; a model name Relay does not recognise is allowed through.
 
 ### Capability record
 The frozen facts the Runner reads about one backend: whether it enforces tool restrictions at

@@ -515,6 +515,21 @@ class BackendModelCoherence(ManifestCase):
         mismatches = [error for error in result.errors if "belongs to backend" in error]
         self.assertEqual(len(mismatches), 2, result.errors)
 
+    def test_a_task_inheriting_an_invalid_default_is_refused_on_the_default_not_the_pair(self):
+        # The case above names grok on each Task, so neither inherits the bad default and the
+        # trap it is named for is not the one it walks. A Task that inherits an unusable value
+        # has no resolved backend to judge a pair against, so the mismatch check does not fire
+        # and must not: the manifest is already refused for the default itself, and inventing a
+        # second error about a pair no launch could reach would send the operator at the model.
+        text = self.base.replace("[[tasks]]", '[defaults]\nbackend = "GROK"\n\n[[tasks]]', 1)
+        result = mf.validate(self.load(text))
+        self.assertFalse(result.ok)
+        self.assertTrue(any(error.startswith("defaults.backend") for error in result.errors))
+        self.assertEqual([error for error in result.errors if "belongs to backend" in error], [])
+        for index in range(2):
+            self.assertTrue(any("tasks[%d].backend must be one of" % index in error
+                                for error in result.errors), result.errors)
+
     def test_a_model_two_backends_both_claim_is_valid_on_both(self):
         # No two capability records share a name today, so the overlap is staged here rather
         # than waiting for a provider to ship one.

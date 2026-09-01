@@ -566,7 +566,9 @@ HALT_LINES = {
     RUNNER_SELF_KILL: "self-kill: {command} named the runner's own pid {victim_pid} among {pids}",
     WAITING_LAST_MESSAGE: "ended the turn waiting on background work that does not resume headless: {last_message}",
     CANCELLED_TOOL_CALL: "the CLI cancelled its own tool call, no user present: {tool} on {target}",
-    BACKEND_REASSIGNED: ("relaunched on {to_backend} {to_model}, previously "
+    # Tense neutral on purpose: the runner streams this sentence before the launch, where the
+    # move is still intent, and writes it onto the record afterwards, where it is history.
+    BACKEND_REASSIGNED: ("{to_backend} {to_model}, reassigned from "
                          "{from_backend} {from_model}"),
 }
 

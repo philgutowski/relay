@@ -835,10 +835,12 @@ class Reassignment(RunCase):
         self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
         said = []
         self.second_run(stream=said.append)
-        moved = [line for line in said if "codex" in line and "claude" in line]
+        # Matched on the rendered sentence, not on the substring "codex", which the model name
+        # gpt-5-codex satisfies on its own and would leave the backend half unproven.
+        moved = [line for line in said if "reassigned from" in line]
         self.assertEqual(len(moved), 1, said)
-        for value in ("T-2", "sonnet", "gpt-5-codex"):
-            self.assertIn(value, moved[0])
+        self.assertEqual(moved[0],
+                         "T-2 will relaunch on codex gpt-5-codex, reassigned from claude sonnet")
 
     def test_an_unedited_manifest_relaunches_with_no_finding(self):
         self.first_run_blocks_t2()
@@ -867,6 +869,51 @@ class Reassignment(RunCase):
         store.release()
         self.second_run()
         self.assertEqual(self.finding(), [])
+
+    def test_a_record_with_no_model_reports_the_absent_half_rather_than_inventing_one(self):
+        """Every record written before `model` joined the fields has a backend and no model, so
+        this is the shape the first relaunch after this change actually meets. Filling the gap
+        from the manifest would report a previous attempt on a pair validate itself refuses."""
+        self.first_run_blocks_t2()
+        store = self.store()
+        store.acquire()
+        store.upsert("T-2", model=None)
+        store.release()
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        said = []
+        self.second_run(stream=said.append)
+        finding = self.finding()
+        self.assertEqual(finding["from_backend"], "claude")
+        self.assertIsNone(finding["from_model"])
+        self.assertEqual(finding["to_model"], "gpt-5-codex")
+        moved = [line for line in said if "reassigned from" in line]
+        self.assertEqual(moved, ["T-2 will relaunch on codex gpt-5-codex, "
+                                 "reassigned from claude ?"])
+
+    def test_a_stranded_branch_refusal_still_announces_the_move(self):
+        """The stranded branch check is the refusal the operator's own docs send them into, and
+        it raises before the launch, so the move has to be announced ahead of it or a run that
+        never launches says nothing about the edit at all."""
+        self.queue_entry("blocked.jsonl", task_branch_sh("T-2"))
+        self.closeout_blocked("T-2")
+        self.assertEqual(self.go().exit_code, runner.EXIT_OK)
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        said = []
+        outcome = self.go(retry_blocked=True, stream=said.append)
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
+        self.assertIn("relay/T-2", outcome.message)
+        self.assertEqual([line for line in said if "reassigned from" in line],
+                         ["T-2 will relaunch on codex gpt-5-codex, "
+                          "reassigned from claude sonnet"])
+        self.assertEqual(self.store().get("T-2")["backend"], "claude")
+
+    def test_a_blocked_task_left_alone_announces_nothing(self):
+        self.first_run_blocks_t2()
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        said = []
+        self.go(stream=said.append)
+        self.assertEqual([line for line in said if "reassigned from" in line], [])
+        self.assertEqual(self.store().get("T-2")["backend"], "claude")
 
     def test_the_finding_stays_off_the_digest_and_out_of_the_closeout_brief(self):
         """The record's findings list and digest["findings"] were the same object, so the

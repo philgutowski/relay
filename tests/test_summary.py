@@ -296,11 +296,11 @@ class CauseLineTable(unittest.TestCase):
                                      "to_backend": "codex", "to_model": "gpt-5-codex"}])
         data = self.summarise([("T-1", "codex")])
         text = summary.render(data)
-        self.assertIn("finding: relaunched on codex gpt-5-codex, previously grok grok-4", text)
-        self.assertEqual([check for check in data["pending_checks"]
-                          if check["kind"] == contracts.BACKEND_REASSIGNED], [])
-        self.assertNotIn("relaunched on", text.split("check by hand:")[-1]
-                         if "check by hand:" in text else "")
+        self.assertIn("finding: codex gpt-5-codex, reassigned from grok grok-4", text)
+        # Assert the whole list is empty, not that no entry carries a kind no entry could
+        # carry: a `kind` filter would pass whatever `_pending_checks` did with the finding.
+        self.assertEqual(data["pending_checks"], [])
+        self.assertNotIn("check by hand:", text)
 
     def test_the_unenforced_bound_reaches_the_summary_beside_an_empty_findings_list(self):
         """Round eight #54. A landed codex Task with nothing to report is the shape an operator

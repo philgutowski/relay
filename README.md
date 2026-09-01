@@ -120,10 +120,12 @@ summary still lists that task as a check-by-hand item, and the same repair-and-r
 
 Part of that repair can be the manifest itself. Editing a task's `backend` or `model` moves any
 task that has not landed, and the next run launches it where you sent it, naming the move on its
-output and on the task's record. The record still owns the branch name and the baseline, so a
-stranded task branch is refused the same way; a blocked task needs `--retry-blocked` before a
-reassignment reaches it; and a manifest pairing a backend with a model belonging to another
-backend is refused at validate, before any task launches.
+output and on the task's record. A stranded task branch is still refused the same way, judged
+against the name and baseline the record already carries, so the edit does not get a task past
+it; a blocked task needs `--retry-blocked` before a reassignment reaches it; and a manifest
+pairing a backend with a model another backend is known to accept is refused at validate, before
+any task launches. That last check knows only the model names Relay has been told about, so it
+stays silent on one it does not recognise rather than refusing a newly shipped model.
 
 ## Where things are
 
