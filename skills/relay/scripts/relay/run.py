@@ -326,7 +326,7 @@ def _unenforced_scalar(manifest, capability):
     """One plain string naming the unenforced disallow patterns, the bound on what the audit that
     follows them can prove, and any sandbox network grant the backend launches with.
 
-    The network clause is written off the capability's own `config_overrides`, not off
+    The network clause is written off the capability's own `grants_network`, not off
     `enforces_at_launch`, so a backend that enforces nothing and reaches no network never
     inherits a sentence that is false for it. It belongs on the record and not only in
     `SKILL.md`, because the skill speaks when a manifest is authored: an operator running a
@@ -343,7 +343,7 @@ def _unenforced_scalar(manifest, capability):
         if inner not in inners:
             inners.append(inner)
     scalar = "disallowed tools not enforced at launch: " + ", ".join(inners) + UNENFORCED_BOUND
-    if any("network" in token for token in capability.config_overrides):
+    if capability.grants_network:
         scalar += (" This Task also launches with its sandbox network turned on, so it reaches "
                    "every host and not only the tracker, because the sandbox takes no host "
                    "allowlist.")

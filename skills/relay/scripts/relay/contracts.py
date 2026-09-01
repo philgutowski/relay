@@ -163,6 +163,7 @@ BACKEND_PINS = {
         "extra_writable_dirs": (),
         "config_overrides": (),
         "strict_config": False,
+        "grants_network": False,
     },
     "codex": {
         "binary": "codex",
@@ -227,6 +228,12 @@ BACKEND_PINS = {
         # operator's own ~/.codex/config.toml, so a field this codex version rejects there fails
         # every launch, loudly, which is the trade this pin accepts.
         "strict_config": True,
+        # What the override above means, stated as a fact rather than left for another module to
+        # infer from the token text. `run._unenforced_scalar` needs the answer and must not have
+        # to parse a `-c` value to get it: a token pinned as `network_access=false` would read as
+        # a grant to any substring test, and the record would then claim a reach the Task does
+        # not have.
+        "grants_network": True,
     },
     "grok": {
         "binary": "grok",
@@ -269,6 +276,7 @@ BACKEND_PINS = {
         "extra_writable_dirs": (),
         "config_overrides": (),
         "strict_config": False,
+        "grants_network": False,
     },
 }
 

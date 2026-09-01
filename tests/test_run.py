@@ -1622,7 +1622,7 @@ class UnenforcedRun(RunCase):
         self.assertNotIn("\n", scalar)
 
     def test_an_unenforced_backend_without_a_network_grant_gets_no_network_clause(self):
-        """The clause is written off the capability's own `config_overrides`, not off
+        """The clause is written off the capability's own `grants_network`, not off
         `enforces_at_launch`, so a future unenforced backend that reaches no network does not
         inherit a sentence that is false for it."""
         text = MANIFEST.replace("__REPO__", self.repo)
@@ -1633,7 +1633,7 @@ class UnenforcedRun(RunCase):
         with open(self.manifest_path, "w") as handle:
             handle.write(text)
         manifest = mf.load(self.manifest_path)
-        fenced = replace(backends.build("codex").CAPABILITY, config_overrides=())
+        fenced = replace(backends.build("codex").CAPABILITY, grants_network=False)
         scalar = runner._unenforced_scalar(manifest, fenced)
         self.assertIn("disallowed tools not enforced at launch", scalar)
         self.assertNotIn("network", scalar)

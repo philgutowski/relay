@@ -163,6 +163,7 @@ class Capability:
     extra_writable_dirs: tuple
     config_overrides: tuple
     strict_config: bool
+    grants_network: bool
 
 
 def _record(name):

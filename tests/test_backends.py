@@ -97,9 +97,11 @@ class CapabilityRecord(unittest.TestCase):
         self.assertEqual(backends.build("codex").CAPABILITY.config_overrides,
                          ("sandbox_workspace_write.network_access=true",))
         self.assertTrue(backends.build("codex").CAPABILITY.strict_config)
+        self.assertTrue(backends.build("codex").CAPABILITY.grants_network)
         for name in ("claude", "grok"):
             self.assertEqual(backends.build(name).CAPABILITY.config_overrides, (), name)
             self.assertFalse(backends.build(name).CAPABILITY.strict_config, name)
+            self.assertFalse(backends.build(name).CAPABILITY.grants_network, name)
 
     def test_codex_allow_and_deny_flags_may_be_none(self):
         cap = backends.build("codex").CAPABILITY
