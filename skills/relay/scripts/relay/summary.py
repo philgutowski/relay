@@ -89,6 +89,11 @@ def _task_entry(store, record):
         "wall_seconds": record.get("wall_seconds"),
         "active_seconds": record.get("active_seconds"),
         "verify_failed": failed,
+        # Round eight #54: beside `findings`, not as a Cause line. The empty findings list is
+        # what gets misread on a backend that enforces nothing at launch, and an operator who
+        # only reads the summary would otherwise never meet the bound run._unenforced_scalar
+        # records. None on a backend that refuses a denied call itself.
+        "unenforced_restrictions": record.get("unenforced_restrictions"),
         "findings": findings,
         "log_path": store.path("logs", "%s.stdout.log" % task_id) if task_id else None,
     }
@@ -226,6 +231,12 @@ def lines(data):
         for finding_index, finding in enumerate(entry["findings"]):
             out.append(("    finding: %s" % finding["line"],
                         "%s.findings[%d].line" % (source, finding_index)))
+        # Last of the per task lines, directly under the findings, because an empty findings
+        # list is the thing it qualifies. A JSON key with no line here would be invisible on
+        # every default CLI path, which is the R46 direction this module exists to keep.
+        if entry["unenforced_restrictions"]:
+            out.append(("    %s" % entry["unenforced_restrictions"],
+                        source + ".unenforced_restrictions"))
         out.append(("    %s" % _seconds(entry), source + ".active_seconds"))
         out.append(("    output: %s" % entry["log_path"], source + ".log_path"))
         out.append(("", source + ".id"))

@@ -1580,6 +1580,30 @@ class UnenforcedRun(RunCase):
         self.assertEqual(hits[0]["pattern"], "Bash(git clean*)")
         self.assertIn("git clean", record["unenforced_restrictions"])
 
+    def test_a_clean_audit_still_records_the_detection_bound(self):
+        """Round eight #54, from relay proof T-65. The empty findings list is the case the
+        caveat exists for: T-65 ran a disallowed operation by an unmatched spelling and the
+        audit correctly found nothing, which read as a clean run. The scalar is written off
+        `enforces_at_launch`, not off a finding, so it is present here too, and the summary
+        carries it beside the same empty list."""
+        self.load_codex(bound=["src/"])
+        self.queue_codex()
+        self.closeout_landed("T-1")
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        record = self.store().get("T-1")
+        self.assertEqual(record["status"], contracts.STATUS_LANDED)
+        self.assertEqual([f for f in record["findings"]
+                          if f["class"] == contracts.UNENFORCED_DISALLOWED], [])
+        scalar = record["unenforced_restrictions"]
+        self.assertIn("git clean", scalar)
+        # Both halves of the claim, not just the conclusion. Pinning only the conclusion would
+        # let the sentences that say what was actually checked be dropped while the suite stays
+        # green, and those are what an operator acts on.
+        self.assertIn("matches command spellings", scalar)
+        self.assertIn("does not prove the operation was avoided", scalar)
+        self.assertNotIn("\n", scalar)
+
     def test_a_destructive_call_refuses_the_landing(self):
         self.load_codex(bound=["src/"])
         self.queue_codex("/bin/zsh -lc 'ls && rm -rf /tmp/x'")

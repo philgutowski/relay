@@ -20,7 +20,7 @@ import tempfile
 import unittest
 
 import _paths
-from relay import contracts, state, summary
+from relay import contracts, run, state, summary
 from test_run import RunCase
 
 
@@ -258,6 +258,34 @@ class CauseLineTable(unittest.TestCase):
         text = summary.render(data)
         self.assertIn("T-1  landed  [landed]  (codex)", text)
         self.assertIn("T-2  landed  [landed]\n", text)
+
+    def test_the_unenforced_bound_reaches_the_summary_beside_an_empty_findings_list(self):
+        """Round eight #54. A landed codex Task with nothing to report is the shape an operator
+        misreads as proof of compliance, so the bound has to sit on the same entry as the empty
+        findings list. A backend that refuses a denied call itself records no scalar and the key
+        stays None rather than carrying a caveat that does not apply to it."""
+        # The runner's real sentence, not a stand in. Two modules spelling the same key is what
+        # makes the seam work, but a fabricated value here would let the runner's wording and the
+        # summary's expectation drift without a failure.
+        scalar = "disallowed tools not enforced at launch: git clean*" + run.UNENFORCED_BOUND
+        self.store.upsert("T-1", status=contracts.STATUS_LANDED,
+                          halt_class=contracts.HALT_LANDED, backend="codex", findings=[],
+                          unenforced_restrictions=scalar)
+        self.store.upsert("T-2", status=contracts.STATUS_LANDED,
+                          halt_class=contracts.HALT_LANDED, backend="claude", findings=[])
+        data = self.summarise([("T-1", "codex"), ("T-2", "claude")])
+        entries = data["tasks"]
+        self.assertEqual(entries[0]["findings"], [])
+        self.assertEqual(entries[0]["unenforced_restrictions"], scalar)
+        self.assertIsNone(entries[1]["unenforced_restrictions"])
+        # R46's one direction: a JSON key the text never prints is invisible on every default
+        # CLI path, so the operator this caveat is for would still never meet it.
+        sources = [source for _, source in summary.lines(data)]
+        self.assertIn(scalar, summary.render(data))
+        self.assertIn("tasks[0].unenforced_restrictions", sources)
+        # The falsy side. Without it, dropping the condition prints a bare "None" under every
+        # enforcing backend's task and the suite stays green.
+        self.assertNotIn("tasks[1].unenforced_restrictions", sources)
 
     def test_cause_line_keeps_a_backend_scalar_when_other_record_values_are_structured(self):
         original = contracts.HALT_LINES[contracts.HALT_UNEXPECTED_ERROR]

@@ -287,14 +287,55 @@ def _continue_past(cfg, halt):
     return False
 
 
+# Round eight #54, from relay proof T-65. The Brief forbids these operations "however this CLI
+# spells it", and the audit after exit matches command spellings. T-65 ran a disallowed operation
+# by a spelling the pattern does not match, and the record said only that the operations went
+# unenforced, next to an empty findings list. Read together those two read as a clean run.
+#
+# Every clause below is load bearing, and a code review earned each one.
+#
+# Present tense, because the scalar is written off `enforces_at_launch` alone, before the launch
+# error and timeout branches. A past tense sentence would claim an audit ran for a Task whose
+# binary was missing or that was killed at the timeout with no readable evidence.
+#
+# "the Task process's own log recorded", because the audit walks only completed calls the log
+# decoded. The Closeout is a second contributor to the same findings list and `closeout.run`
+# passes no disallow patterns at all, so the sentence names the process it actually describes.
+#
+# "a restriction naming a tool other than a command", because `classify` reads `input.command`
+# and skips a tool_use without one. A manifest may disallow an `Edit(...)` or `Write(...)`
+# pattern, and for that entry the honest word is unaudited rather than bounded by spelling.
+#
+# The destructive clause, because `_destructive_finding` filters the findings
+# `classify.matches_disallow_pattern` produced. The refusal an operator trusts most rests on the
+# same match this sentence has just called evadable, so it cannot be left implied.
+#
+# Positive form, because "no finding is not proof" inverts on a fast read, and defeating a fast
+# misread is the whole job.
+UNENFORCED_BOUND = (
+    ". The Brief carries these to the Task process as instructions naming operations, and the "
+    "audit after exit matches command spellings against the commands that process's own log "
+    "recorded. An absent finding therefore does not prove the operation was avoided. Another "
+    "spelling, a restriction naming a tool other than a command, and a call the log never "
+    "recorded all reach the same empty result, and the refusal of a destructive landing rests "
+    "on that same match."
+)
+
+
 def _unenforced_scalar(manifest):
-    """A Cause-line-safe string naming the unenforced disallow patterns."""
+    """One plain string naming the unenforced disallow patterns and the bound on what the audit
+    that follows them can prove.
+
+    Single line, and the newline ban is not a style preference: `summary.line_fields` hoists
+    every non-container record field into the namespace `cause_line` formats halt templates
+    against, so this value has to stay Cause-line-safe even though no template names it today.
+    """
     inners = []
     for pattern in manifest_module.resolved_disallowed(manifest):
         inner = contracts.disallow_inner(pattern)
         if inner not in inners:
             inners.append(inner)
-    return "disallowed tools not enforced at launch: " + ", ".join(inners)
+    return "disallowed tools not enforced at launch: " + ", ".join(inners) + UNENFORCED_BOUND
 
 
 def _destructive_finding(findings):

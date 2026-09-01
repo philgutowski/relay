@@ -12,6 +12,8 @@ The closed set is `claude`, `codex`, and `grok`. Every backend runs the same pip
 
 The audit detects rather than prevents. A matched call has already run. A match in the named destructive set (force push, hard reset, recursive delete) refuses the landing. Other matches land with a finding.
 
+The audit matches command spellings, so what it can match bounds both of those. A disallowed operation reached by another spelling, a restriction naming a tool other than a command, and a call the process's log never recorded all produce no finding, and the destructive refusal rests on the same match. The Task path bound is the one control here that no command spelling evades, because it reads the paths the commit touched. Weigh `codex` on that basis rather than on the audit alone. Relay proof T-65 is the observed case: a Task ran a disallowed operation under a different spelling and the audit correctly reported nothing.
+
 **Residual exposure, every backend.** All three CLIs share the operator's home and keep credentials in files there. Environment scrubbing does not reach those files. Codex's sandbox bounds writes, not reads. The acceptance sentence is where the operator accepts that residual on an unenforced backend.
 
 **Adapter pairing.** Jira Closeout tools exist only on Claude. A Jira manifest with a Codex or Grok Task is refused at validate. GitHub and markdown pair with every backend.
