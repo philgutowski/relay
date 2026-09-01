@@ -30,7 +30,10 @@ then never recorded the landing. Tasks 35 and 40 on 2026-08-30, tasks 24 and 26 
 causes differed but the shape was identical: the code on `relay/<id>` was complete and green, and
 only the tail of the pipeline failed. Observed causes: the task process was killed along with  the
 Runner; a task backgrounded the test suite and exited before it returned; codex's workspace write
-sandbox blocks network, so `gh` cannot reach api.github.com and the card move fails (issue #51). In
+sandbox blocked network, so `gh` could not reach api.github.com and the card move failed (issue
+#51, fixed 2026-09-01 by
+`docs/plans/2026-09-01-1130-fix-codex-sandbox-network-access-plan.md`, which grants the sandbox
+network at launch). In
 every case the instinctive repair, delete the branch and rerun the task, was the expensive and
 wrong one. The cheap repair is to land the branch by hand and let `verify` recognize it.
 
@@ -115,8 +118,8 @@ Non numeric ids (`T-1`, `PROJ-12`) match as a whole word without the `#`, per th
 ## Why This Matters
 
 Rerunning a completed task costs 25 or more minutes and real dollars per task, and when  the
-failure was external (the sandboxed `gh` of issue #51, a killed runner) the rerun can hit  the
-exact same wall and burn the same money for the same halt. The hand landing takes minutes, and
+failure was external (a killed runner, or the sandboxed `gh` of issue #51 before 2026-09-01) the
+rerun can hit  the exact same wall and burn the same money for the same halt. The hand landing takes minutes, and
 because `verify` derives the landing from the commit graph rather than trusting the operator,  the
 record stays honest: promotion happens only after the same checks a normal landing passes, plus a
 commit that provably names the task.
@@ -161,4 +164,8 @@ on `main`.
   the earlier one shape repair (move the card, run again) this procedure generalizes.
 - `docs/solutions/workflow-issues/headless-dontask-blocks-claude-dir-edits.md`, the other operator
   finishes what the runner could not workflow, triggered by a permission gate instead.
-- Issue #51, the codex sandbox network fence, the standing producer of this repair until fixed.
+- Issue #51, the codex sandbox network fence, the standing producer of this repair until it was
+  removed on 2026-09-01 by
+  `docs/plans/2026-09-01-1130-fix-codex-sandbox-network-access-plan.md`. The repair itself stays
+  live: the Context above names three other producers, and issue #60 is the control the fence's
+  removal now needs.
