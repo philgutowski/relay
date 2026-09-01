@@ -91,6 +91,19 @@ REQUIRED_SKILLS = ("ce-plan", "ce-work", "ce-simplify-code", "ce-code-review", "
 # proven against tests/fixtures/backends/claude/denial-refusal.jsonl, a real capture this
 # anchored-immediately form never matched.
 DENIAL_REGEX = re.compile(r"^Permission to use (\w+)\b.*has been denied")
+# Issue #57. Grok's own cancellation phrasing for a tool call its permission layer cancelled
+# outright rather than refusing: "User cancelled the execution for tool `run_terminal_command`",
+# quoted verbatim in the grok BACKEND_PINS comment below. Distinct from DENIAL_REGEX above: no
+# "User" is present to have cancelled anything in a headless run, and the shape carries no
+# `has been denied` clause, so a shared regex would either miss this or misread a real denial.
+# Unanchored, unlike DENIAL_REGEX: DENIAL_REGEX only ever matches text grok.py reconstructs
+# itself at a known position, but this one matches Grok's own body text passed through verbatim,
+# and code review found no evidence the phrase always leads the body. Matched with `.search()`
+# at both call sites (this file's classify.py and backends/grok.py) rather than `.match()`, so a
+# future capture that puts other content first still fires this finding instead of silently
+# reverting to the pre-fix no_envelope/unclean_exit reading, the same way `_DENIAL_MARKER in
+# body` already tolerates surrounding text on the sibling denial path.
+CANCELLED_TOOL_REGEX = re.compile(r"User cancelled the execution for tool `?(\w+)`?")
 # Under dontAsk an Edit or Write on a path under .claude/ is denied regardless of the allowlist.
 CLAUDE_DIR_PATH_REGEX = re.compile(r"(^|/)\.claude/")
 # The pre-flight scan form from the solutions doc: catches the path inside prose, quotes,
@@ -164,6 +177,7 @@ BACKEND_PINS = {
         "config_overrides": (),
         "strict_config": False,
         "grants_network": False,
+        "commit_message_constraint": None,
     },
     "codex": {
         "binary": "codex",
@@ -237,11 +251,15 @@ BACKEND_PINS = {
         # a grant to any substring test, and the record would then claim a reach the Task does
         # not have.
         "grants_network": True,
+        "commit_message_constraint": None,
     },
     "grok": {
         "binary": "grok",
-        "version_tested": "1.0.5",
-        "version_output_sample": "grok 1.0.5 (5115b46bc909) [stable]",
+        # Bumped 2026-09-01 (issue #57 live verification): the dontAsk and denial-refusal
+        # findings above were pinned against 1.0.5; the cancellation finding below was
+        # confirmed against 1.0.13, the version installed and exercised in that session.
+        "version_tested": "1.0.13",
+        "version_output_sample": "grok 1.0.13 (5e9a58528b76) [stable]",
         "plugin_version": "3.23.4",
         "plugin_query": ("grok", "plugin", "list", "--json"),
         # `grok plugin list --json` carries only a `"status": "installed"` field, unchanged by
@@ -257,6 +275,29 @@ BACKEND_PINS = {
         # to have cancelled anything. Reproduced five times: two full pipeline runs that died
         # partway through planning, and three single-command probes. `auto` is the mode that
         # runs the task AND still refuses a denied call, so it is the non-bypass posture here.
+        #
+        # Issue #57, observed round eight 2026-09-01 on tasks 45 and 56, confirmed live against
+        # grok 1.0.13 the same day. Under `auto` mode a `run_terminal_command` whose argument
+        # uses command substitution or a heredoc, the `git commit -m "$(cat <<'EOF' ...
+        # EOF)"` form the compound-engineering pipeline teaches, is cancelled outright rather
+        # than executed or refused: `updates.jsonl` carries the exact same shape as the
+        # demonstrated `--deny` refusal above, a `tool_call_update` with `status: "failed"`, but
+        # the body reads "User cancelled the execution for tool `run_terminal_command`" instead
+        # of a permission-policy denial. This is session-fatal, not a retryable denial. No
+        # retry, no return envelope, whatever the task had in flight is stranded.
+        # `classify.py` surfaces it as a `CANCELLED_TOOL_CALL` finding, a sibling check beside
+        # the denial scan on the same file; `commit_message_constraint` below tells the task to
+        # avoid the construct, since instruction is the only enforcement layer this backend has
+        # for it. The demonstrated `--deny` refusal above never engages here, because the
+        # matcher does not refuse a shape it cannot analyze, it cancels the call instead. Not
+        # reliably reproducible from a single trivial `-p` probe outside a real multi-turn task;
+        # the live probe that confirmed the marker text and `status` value used the real
+        # capture from task 45's own session file rather than a fresh reproduction attempt.
+        # Code review found the compound-engineering plugin's own `ce-commit-push-pr` skill
+        # (outside this repo) shows a worked commit example using this exact heredoc form. That
+        # path is unreachable under this manifest's `local_merge` shipping mode (`ce-work`'s
+        # return-to-caller mode never loads it), but would defeat this brief instruction outright
+        # if `pr_terminal` mode is ever enabled for a grok task; re-check before that switch.
         "permission_mode": "auto",
         "forbidden_permission_modes": ("bypassPermissions", "dontAsk"),
         "output_format": ("--output-format", "streaming-json"),
@@ -280,6 +321,15 @@ BACKEND_PINS = {
         "config_overrides": (),
         "strict_config": False,
         "grants_network": False,
+        # Issue #57. Instruction is the only enforcement layer this backend has for the
+        # cancellation R4 and the BACKEND_PINS caveat below both describe.
+        "commit_message_constraint": (
+            "This CLI cancels a git commit whose message uses command substitution or a "
+            "heredoc, such as `git commit -m \"$(cat <<'EOF' ... EOF)\"`, instead of refusing "
+            "it: the tool call is cancelled outright, no envelope is written, and whatever the "
+            "task had in flight is stranded. Use plain `git commit` forms only. For a subject "
+            "plus body, repeat `-m`: `git commit -m \"Subject\" -m \"Body paragraph.\"`."
+        ),
     },
 }
 
@@ -404,6 +454,13 @@ RUNNER_SELF_KILL = "runner_self_kill"
 # no_envelope or unclean_exit), this just says the mechanism instead of leaving the Cause line
 # to read only the downstream symptom.
 WAITING_LAST_MESSAGE = "waiting_last_message"
+# Issue #57. Grok's own permission layer cancelled a tool call outright (no user present in a
+# headless run) rather than refusing it in a way the task could react to, most often a commit
+# whose argument used command substitution or a heredoc. Finding only: the record's own
+# halt_class stays whatever classify or the git-tree check already assigned (usually no_envelope
+# or unclean_exit), this names the mechanism instead of leaving the Cause line to read only the
+# downstream symptom, the same shape WAITING_LAST_MESSAGE above already established.
+CANCELLED_TOOL_CALL = "cancelled_tool_call"
 
 # The .claude/ backstop's operator sentence. HALT_LINES[path_gate] is {detail}; this
 # raiser and classify's path_gate promotion fill it so the Cause line stays true.
@@ -465,13 +522,14 @@ FINDING_CLASSES = (
     UNENFORCED_DISALLOWED,
     RUNNER_SELF_KILL,
     WAITING_LAST_MESSAGE,
+    CANCELLED_TOOL_CALL,
 )
 
 # Every class that can reach a summary line: the closed halt class set of KTD6, plus the
 # findings that are never a record's own class but still have to print.
 LINE_CLASSES = HALT_CLASSES + (
     CLOSEOUT_UNFINISHED, BLOCKED_UNRECORDED, UNENFORCED_DISALLOWED, RUNNER_SELF_KILL,
-    WAITING_LAST_MESSAGE,
+    WAITING_LAST_MESSAGE, CANCELLED_TOOL_CALL,
 )
 
 HALT_LINES = {
@@ -500,6 +558,7 @@ HALT_LINES = {
     UNENFORCED_DISALLOWED: "{tool} ran {argument} at line {line} matching {pattern}",
     RUNNER_SELF_KILL: "self-kill: {command} named the runner's own pid {victim_pid} among {pids}",
     WAITING_LAST_MESSAGE: "ended the turn waiting on background work that does not resume headless: {last_message}",
+    CANCELLED_TOOL_CALL: "the CLI cancelled its own tool call, no user present: {tool} on {target}",
 }
 
 # The digest classify.classify() (U7) guarantees, read by run.py and closeout.py via

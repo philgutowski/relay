@@ -806,6 +806,43 @@ def run_grok(name):
                              backend="grok")
 
 
+def run_grok_updates(update_lines):
+    """A grok run whose `updates.jsonl` is a hand-built tempfile rather than a captured
+    fixture. Per `tests/fixtures/backends/README.md`, only a real CLI capture may be committed
+    under `tests/fixtures/backends/grok/`, so a synthetic shape used for TDD stays out of that
+    directory and is built here instead, mirroring `SelfKillScan._log()`'s precedent."""
+    import json
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+        for update in update_lines:
+            handle.write(json.dumps({"timestamp": 0, "method": "session/update",
+                                     "params": {"sessionId": "s", "update": update}}) + "\n")
+        transcript_path = handle.name
+    try:
+        return classify.classify(transcript_path,
+                                 SimpleNamespace(timed_out=False, exit_code=0, log_path=None),
+                                 backend="grok")
+    finally:
+        os.unlink(transcript_path)
+
+
+_CANCELLED_COMMAND = "git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\""
+
+
+def _grok_tool_call(call_id, command):
+    return {"sessionUpdate": "tool_call", "toolCallId": call_id, "title": "run_terminal_command",
+            "rawInput": {"command": command}}
+
+
+def _grok_cancelled_update(call_id):
+    """The real shape, verbatim from task 45's own `updates.jsonl` (issue #57): `status` is
+    `"failed"`, identical to a permission denial, distinguished only by the body text."""
+    return {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "failed",
+            "content": [{"type": "content", "content": {
+                "type": "text",
+                "text": "User cancelled the execution for tool `run_terminal_command`"}}]}
+
+
 class GrokEvidence(unittest.TestCase):
     """Backends U6, U3: `updates.jsonl`'s `agent_message_chunk` events are already complete
     per-turn text, and its embedded `tool_call_update` denial is a real, detectable finding."""
@@ -856,21 +893,54 @@ class GrokEvidence(unittest.TestCase):
         """closeout-last-message-skipped-long.txt is real captured prose with no session-file
         companion; wrapped as one agent_message_chunk line, it proves the 200-character head/tail
         split through this normalizer without inventing new content."""
-        import json
-        import tempfile
         with open(os.path.join(GROK_FIXTURES, "closeout-last-message-skipped-long.txt"),
                   encoding="utf-8") as handle:
             text = handle.read()
-        line = {"timestamp": 0, "method": "session/update", "params": {"sessionId": "s",
-                "update": {"sessionUpdate": "agent_message_chunk",
-                           "content": {"type": "text", "text": text}}}}
-        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
-            handle.write(json.dumps(line) + "\n")
-        r = classify.classify(handle.name,
-                              SimpleNamespace(timed_out=False, exit_code=0, log_path=None),
-                              backend="grok")
-        os.unlink(handle.name)
+        r = run_grok_updates([
+            {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}},
+        ])
         self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
+
+    def test_a_cancelled_tool_call_is_a_finding_not_a_silent_no_envelope(self):
+        """Issue #57. `updates.jsonl` carries the cancellation verbatim, the same shape as a
+        denial (`status: "failed"`), distinguished only by the body text. Confirmed against
+        the real capture in task 45's own session file. Names the cancelled command instead of
+        falling through to the generic no-envelope text."""
+        r = run_grok_updates([
+            _grok_tool_call("call-1", _CANCELLED_COMMAND),
+            _grok_cancelled_update("call-1"),
+        ])
+        cancelled = [f for f in r["findings"] if f["class"] == contracts.CANCELLED_TOOL_CALL]
+        self.assertEqual(len(cancelled), 1)
+        self.assertEqual(cancelled[0]["tool"], "Bash", "run_terminal_command maps to Bash")
+        self.assertIn("git commit", cancelled[0]["target"])
+        self.assertEqual(r["halt_class"], contracts.HALT_NO_ENVELOPE,
+                          "the finding rides alongside the existing precedence, R2")
+
+    def test_a_denied_tool_call_is_not_read_as_a_cancellation(self):
+        """R3: the existing `_DENIAL_MARKER` shape must not misfire the new marker check."""
+        r = run_grok_updates([
+            _grok_tool_call("call-1", "rm -rf /tmp/x"),
+            {"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "failed",
+             "content": [{"type": "content", "content": {
+                 "type": "text",
+                 "text": "Tool `run_terminal_command` was not executed: Denied by permission "
+                         "policy: deny rule on bash matching \"rm -rf*\""}}]},
+        ])
+        cancelled = [f for f in r["findings"] if f["class"] == contracts.CANCELLED_TOOL_CALL]
+        self.assertEqual(cancelled, [])
+
+    def test_auto_mode_blocked_phrasing_is_not_read_as_a_cancellation(self):
+        """R3: Grok's own auto-mode refusal phrasing must not misfire the new marker check
+        either, mirroring `test_auto_mode_blocked_this_action_is_not_a_denial` above."""
+        r = run_grok_updates([
+            _grok_tool_call("call-1", "some command"),
+            {"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "failed",
+             "content": [{"type": "content", "content": {
+                 "type": "text", "text": "Auto mode blocked this action for safety reasons."}}]},
+        ])
+        cancelled = [f for f in r["findings"] if f["class"] == contracts.CANCELLED_TOOL_CALL]
+        self.assertEqual(cancelled, [])
 
 
 class SelfKillScan(unittest.TestCase):

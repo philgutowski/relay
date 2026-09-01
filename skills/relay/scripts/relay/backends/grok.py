@@ -93,16 +93,27 @@ def normalize_transcript(transcript_path, log_path=None):
             if update.get("status") != "failed":
                 continue
             body = _update_text(update)
-            if _DENIAL_MARKER not in body:
-                continue
             call = tool_calls.get(update.get("toolCallId")) or {}
             tool = call.get("name") or "tool"
+            if _DENIAL_MARKER in body:
+                content = "Permission to use %s has been denied" % tool
+            elif contracts.CANCELLED_TOOL_REGEX.search(body.strip()):
+                # Issue #57. Grok's own permission layer cancelled the call outright rather
+                # than refusing it (no user present in a headless run): "User cancelled the
+                # execution for tool `run_terminal_command`". Reconstructed with the already-
+                # mapped `tool` (e.g. "Bash"), mirroring the denial sentence above, rather than
+                # passed through verbatim: if classify.py's own tool_uses lookup ever misses
+                # (the originating tool_call line absent from the parsed evidence), its fallback
+                # reads the display name this line already resolved, not grok's raw internal verb.
+                content = "User cancelled the execution for tool `%s`" % tool
+            else:
+                continue
             lines.append((number, {
                 "type": contracts.TRANSCRIPT_TYPE_USER,
                 "message": {"content": [{
                     "type": "tool_result", "tool_use_id": update.get("toolCallId"),
                     "is_error": True,
-                    "content": "Permission to use %s has been denied" % tool,
+                    "content": content,
                 }]},
             }))
 
