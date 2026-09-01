@@ -1,4 +1,5 @@
 """U3: the state file, its lease, the repo lease, atomic writes, and the validate rules."""
+import fcntl
 import json
 import os
 import stat
@@ -36,9 +37,9 @@ class StateCase(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def store(self, manifest=None, pid=100, hostname="host-a", ttl=600):
+    def store(self, manifest=None, pid=100, hostname="host-a", ttl=600, observer=None):
         return st.StateStore(manifest or self.manifest, self.repo, home=self.home, now=self.clock,
-                             pid=pid, hostname=hostname, ttl_seconds=ttl)
+                             pid=pid, hostname=hostname, ttl_seconds=ttl, observer=observer)
 
 
 class Acquire(StateCase):
@@ -291,6 +292,173 @@ class Records(StateCase):
         store.record_git_op("T-1", "push", "result", {"exit": 0})
         ops = store.read()["git_ops"]
         self.assertEqual([o["phase"] for o in ops], ["intent", "result"])
+
+
+class Stamps(StateCase):
+    """R12: `started_at` and `ended_at`, written by the transition rule in `_mutate`."""
+
+    def test_entering_running_stamps_started_at_and_nothing_else(self):
+        store = self.store()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        record = store.get("T-1")
+        self.assertEqual(st._epoch(record["started_at"]), self.clock.t)
+        self.assertIsNone(record["ended_at"])
+
+    def test_reaching_a_terminal_status_stamps_ended_at_and_keeps_started_at(self):
+        store = self.store()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        started = store.get("T-1")["started_at"]
+        self.clock.advance(90)
+        store.upsert("T-1", status=contracts.STATUS_LANDED)
+        record = store.get("T-1")
+        self.assertEqual(record["started_at"], started)
+        self.assertEqual(st._epoch(record["ended_at"]) - st._epoch(started), 90)
+
+    def test_a_second_upsert_at_the_same_status_does_not_restamp(self):
+        store = self.store()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        started = store.get("T-1")["started_at"]
+        self.clock.advance(60)
+        store.upsert("T-1", status=contracts.STATUS_RUNNING, session_id="sid")
+        self.assertEqual(store.get("T-1")["started_at"], started)
+
+    def test_a_retried_record_gets_a_fresh_start_and_drops_the_old_ending(self):
+        """The blocked and halted retry path. A record re-entering `running` still carries the
+        previous attempt's `ended_at`, and an ending older than its start reads as no elapsed
+        at all for the whole window the progress view exists to show."""
+        store = self.store()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        self.clock.advance(30)
+        store.upsert("T-1", status=contracts.STATUS_BLOCKED)
+        first_end = store.get("T-1")["ended_at"]
+        self.assertIsNotNone(first_end)
+        self.clock.advance(300)
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        record = store.get("T-1")
+        self.assertIsNone(record["ended_at"])
+        self.assertEqual(st._epoch(record["started_at"]), self.clock.t)
+
+    def test_a_terminal_to_terminal_move_keeps_the_original_ending(self):
+        """`verify.startup_reverify` promotes a halted record to landed at the next run's
+        startup. Restamping there would report hours of elapsed for work that already ended,
+        and that number feeds the mean the remaining estimate divides by."""
+        store = self.store()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        self.clock.advance(30)
+        store.upsert("T-1", status=contracts.STATUS_HALTED)
+        ended = store.get("T-1")["ended_at"]
+        self.clock.advance(86_400)
+        store.upsert("T-1", status=contracts.STATUS_LANDED)
+        self.assertEqual(store.get("T-1")["ended_at"], ended)
+
+    def test_pending_straight_to_excluded_ends_without_ever_starting(self):
+        store = self.store()
+        store.upsert("T-1", status=contracts.STATUS_EXCLUDED, excluded_reason="asked")
+        record = store.get("T-1")
+        self.assertIsNone(record["started_at"])
+        self.assertIsNotNone(record["ended_at"])
+
+    def test_an_explicit_stamp_from_the_caller_wins(self):
+        store = self.store()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING, started_at="2020-01-01T00:00:00+00:00")
+        self.assertEqual(store.get("T-1")["started_at"], "2020-01-01T00:00:00+00:00")
+
+    def test_a_write_that_moves_no_status_touches_neither_stamp(self):
+        store = self.store()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        started = store.get("T-1")["started_at"]
+        self.clock.advance(60)
+        store.upsert("T-1", baseline_sha="aaa")
+        record = store.get("T-1")
+        self.assertEqual(record["started_at"], started)
+        self.assertIsNone(record["ended_at"])
+
+    def test_terminal_statuses_names_the_four_a_task_does_not_leave(self):
+        self.assertEqual(set(contracts.TERMINAL_STATUSES),
+                         {contracts.STATUS_EXCLUDED, contracts.STATUS_BLOCKED,
+                          contracts.STATUS_HALTED, contracts.STATUS_LANDED})
+        self.assertFalse(set(contracts.TERMINAL_STATUSES) & set(contracts.IN_FLIGHT_STATUSES))
+        self.assertNotIn(contracts.STATUS_PENDING, contracts.TERMINAL_STATUSES)
+
+
+class Observer(StateCase):
+    """R2's seam. Every status move, whichever writer made it, reported once after the lock."""
+
+    def setUp(self):
+        super().setUp()
+        self.seen = []
+
+    def watching(self, **kwargs):
+        return self.store(observer=lambda task_id, before, after:
+                          self.seen.append((task_id, before, after)), **kwargs)
+
+    def test_every_upsert_transition_is_reported_in_order(self):
+        store = self.watching()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        store.upsert("T-1", status=contracts.STATUS_MERGING)
+        store.upsert("T-1", status=contracts.STATUS_LANDED)
+        store.upsert("T-2", status=contracts.STATUS_HALTED)
+        self.assertEqual(self.seen, [
+            ("T-1", None, contracts.STATUS_RUNNING),
+            ("T-1", contracts.STATUS_RUNNING, contracts.STATUS_MERGING),
+            ("T-1", contracts.STATUS_MERGING, contracts.STATUS_LANDED),
+            ("T-2", None, contracts.STATUS_HALTED),
+        ])
+
+    def test_a_write_that_moves_no_status_reports_nothing(self):
+        store = self.watching()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        self.seen.clear()
+        store.upsert("T-1", session_id="sid", baseline_sha="aaa")
+        store.set_cursor(1)
+        store.record_git_op("T-1", "push", "intent")
+        self.assertEqual(self.seen, [])
+
+    def test_a_stale_lease_reclaim_reports_the_records_it_marks_crashed(self):
+        """`_mark_crashed` writes `record["status"]` directly inside `_mutate`, so a seam on
+        `upsert` alone would stay silent on the one event an unattended operator most needs."""
+        first = self.store(pid=100)
+        first.acquire()
+        first.upsert("T-1", status=contracts.STATUS_RUNNING)
+        self.clock.advance(1_200)
+        second = self.watching(pid=200, hostname="host-b")
+        second.acquire()
+        self.assertEqual(self.seen,
+                         [("T-1", contracts.STATUS_RUNNING, contracts.STATUS_HALTED)])
+        self.assertIsNotNone(second.get("T-1")["ended_at"])
+
+    def test_the_r33_downgrade_in_validate_is_reported(self):
+        store = self.watching()
+        store.upsert("T-1", status=contracts.STATUS_LANDED, landing_ref=None, verify={"at": "x"})
+        self.seen.clear()
+        store.validate()
+        self.assertEqual(self.seen,
+                         [("T-1", contracts.STATUS_LANDED, contracts.STATUS_PENDING)])
+
+    def test_the_observer_runs_after_the_lock_is_released(self):
+        """It may fire a subprocess. Holding the flock across that would block every reader,
+        including `status`, for as long as the notifier takes."""
+        store = self.store()
+        locked = []
+        store.observer = lambda task_id, before, after: locked.append(self.lock_is_free(store))
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        self.assertEqual(locked, [True])
+
+    def lock_is_free(self, store):
+        fd = os.open(store.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+        finally:
+            os.close(fd)
+
+    def test_a_store_with_no_observer_is_unchanged(self):
+        store = self.store()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        store.upsert("T-1", status=contracts.STATUS_LANDED)
+        self.assertEqual(store.get("T-1")["status"], contracts.STATUS_LANDED)
 
 
 class Terminal(StateCase):

@@ -435,7 +435,7 @@ def _one_task(cfg, task):
     store.upsert(task.id, status=contracts.STATUS_RUNNING, baseline_sha=baseline_sha,
                  baseline_tracker_status=card_status.get("status"),
                  baseline_comment_id=baseline_comment_id, branch=branch,
-                 brief_sha256=brief_sha, started_at=None, halt_class=None, findings=[],
+                 brief_sha256=brief_sha, halt_class=None, findings=[],
                  continued_past=False, backend=task.backend)
 
     launched = launch.launch(

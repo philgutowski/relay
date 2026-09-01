@@ -84,10 +84,14 @@ def new_record(task_id):
 
 class StateStore:
     def __init__(self, manifest_path, repo_path, home=None, now=time.time, pid=None, hostname=None,
-                 ttl_seconds=contracts.LEASE_TTL_SECONDS):
+                 ttl_seconds=contracts.LEASE_TTL_SECONDS, observer=None):
         self.manifest_path = os.path.realpath(manifest_path)
         self.repo_path = os.path.realpath(repo_path)
         self.now = now
+        # Called with (task_id, previous status, current status) once per status move, after the
+        # lock is released. The Runner hangs its phase events here (R2); a store with none behaves
+        # exactly as it did before.
+        self.observer = observer
         self.pid = pid if pid is not None else os.getpid()
         self.hostname = hostname or socket.gethostname()
         self.ttl_seconds = ttl_seconds
@@ -169,10 +173,45 @@ class StateStore:
             self._abort_after_write()
         os.replace(tmp, self.state_path)
 
-    def _mutate(self, fn):
+    @staticmethod
+    def _statuses(state):
+        return {task_id: record.get("status")
+                for task_id, record in (state.get("tasks") or {}).items()
+                if isinstance(record, dict)}
+
+    def _stamp(self, state, task_id, before, explicit):
+        """R12's transition rule, applied to one record that just moved status.
+
+        Two asymmetries carry the weight. Entering `running` clears `ended_at`, because Relay's
+        normal shape is repair and re-run and a retried record still holds the previous attempt's
+        ending; an ending older than its own start reads as no elapsed at all. And `ended_at` is
+        stamped only on the way in from a non terminal status, so `verify.startup_reverify`
+        promoting a halted record to landed at the next run's startup keeps the stamp from the run
+        that did the work rather than reporting a day of elapsed into the estimate's mean.
+        """
+        record = state["tasks"][task_id]
+        after = record.get("status")
+        if after == contracts.STATUS_RUNNING:
+            if "started_at" not in explicit:
+                record["started_at"] = _iso(self.now())
+            if "ended_at" not in explicit:
+                record["ended_at"] = None
+        elif after in contracts.TERMINAL_STATUSES and before not in contracts.TERMINAL_STATUSES:
+            if "ended_at" not in explicit:
+                record["ended_at"] = _iso(self.now())
+
+    def _mutate(self, fn, explicit=()):
         """Load, apply fn(state), write atomically, all under one flock. Opens the lock file
         fresh each call and releases by closing it, so one process never holds two descriptors
-        on the lock (a second descriptor on the same file would not block the first)."""
+        on the lock (a second descriptor on the same file would not block the first).
+
+        Every status move in the file passes through here, which is what makes this the seam and
+        not `upsert` (KTD2): `_mark_crashed` and `validate` set `record["status"]` directly, and a
+        reclaim announcing nothing is the one event an unattended operator most needs. Snapshotting
+        before `fn` and diffing after catches all three writers by construction.
+
+        `explicit` names the keys this call's caller set itself, which win over the stamp rule.
+        """
         fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -186,11 +225,23 @@ class StateStore:
                     if isinstance(record, dict) and not record.get("backend"):
                         record["backend"] = "claude"
                 state["schema_version"] = contracts.STATE_SCHEMA_VERSION
+            before = self._statuses(state)
             result = fn(state)
+            moved = [(task_id, before.get(task_id), after)
+                     for task_id, after in self._statuses(state).items()
+                     if after != before.get(task_id)]
+            for task_id, was, _now in moved:
+                self._stamp(state, task_id, was, explicit)
             self._write_locked(state)
-            return result
         finally:
             os.close(fd)
+        # Outside the lock deliberately. The Runner's observer fires a notification, and holding
+        # the flock across an `osascript` call would block every reader, `status` included, for as
+        # long as that call took.
+        if self.observer is not None:
+            for task_id, was, now in moved:
+                self.observer(task_id, was, now)
+        return result
 
     # Lease.
     def _holder(self):
@@ -409,9 +460,11 @@ class StateStore:
             record = state["tasks"].get(task_id) or new_record(task_id)
             record.update(fields)
             state["tasks"][task_id] = record
-            out["record"] = dict(record)
 
-        self._mutate(fn)
+        self._mutate(fn, explicit=set(fields))
+        # Read back after the mutation rather than inside it: the transition rule may have
+        # stamped `started_at` or `ended_at` on this record after `fn` returned.
+        out["record"] = self.get(task_id)
         return out["record"]
 
     def get(self, task_id):
