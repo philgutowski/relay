@@ -294,7 +294,7 @@ def _continue_past(cfg, halt):
 # caveat is one fixed sentence because the bound belongs to matching by spelling, not to any one
 # pattern, and it is appended after the list so the existing lead still reads the same.
 UNENFORCED_BOUND = (
-    " The Brief carried these to the process as instructions naming operations; the audit after "
+    ". The Brief carried these to the process as instructions naming operations; the audit after "
     "exit matched command spellings against the process's own tool calls, so no finding is not "
     "proof the operation was avoided."
 )

@@ -270,10 +270,16 @@ class CauseLineTable(unittest.TestCase):
                                                   "git clean*. Bounded by spelling.")
         self.store.upsert("T-2", status=contracts.STATUS_LANDED,
                           halt_class=contracts.HALT_LANDED, backend="claude", findings=[])
-        entries = self.summarise([("T-1", "codex"), ("T-2", "claude")])["tasks"]
+        data = self.summarise([("T-1", "codex"), ("T-2", "claude")])
+        entries = data["tasks"]
         self.assertEqual(entries[0]["findings"], [])
         self.assertIn("Bounded by spelling.", entries[0]["unenforced_restrictions"])
         self.assertIsNone(entries[1]["unenforced_restrictions"])
+        # R46's one direction: a JSON key the text never prints is invisible on every default
+        # CLI path, so the operator this caveat is for would still never meet it.
+        self.assertIn("Bounded by spelling.", summary.render(data))
+        self.assertIn("tasks[0].unenforced_restrictions",
+                      [source for _, source in summary.lines(data)])
 
     def test_cause_line_keeps_a_backend_scalar_when_other_record_values_are_structured(self):
         original = contracts.HALT_LINES[contracts.HALT_UNEXPECTED_ERROR]

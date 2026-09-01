@@ -231,6 +231,12 @@ def lines(data):
         for finding_index, finding in enumerate(entry["findings"]):
             out.append(("    finding: %s" % finding["line"],
                         "%s.findings[%d].line" % (source, finding_index)))
+        # Last of the per task lines, directly under the findings, because an empty findings
+        # list is the thing it qualifies. A JSON key with no line here would be invisible on
+        # every default CLI path, which is the R46 direction this module exists to keep.
+        if entry["unenforced_restrictions"]:
+            out.append(("    %s" % entry["unenforced_restrictions"],
+                        source + ".unenforced_restrictions"))
         out.append(("    %s" % _seconds(entry), source + ".active_seconds"))
         out.append(("    output: %s" % entry["log_path"], source + ".log_path"))
         out.append(("", source + ".id"))
