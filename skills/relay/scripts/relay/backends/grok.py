@@ -97,12 +97,14 @@ def normalize_transcript(transcript_path, log_path=None):
             tool = call.get("name") or "tool"
             if _DENIAL_MARKER in body:
                 content = "Permission to use %s has been denied" % tool
-            elif contracts.CANCELLED_TOOL_REGEX.search(body):
+            elif contracts.CANCELLED_TOOL_REGEX.search(body.strip()):
                 # Issue #57. Grok's own permission layer cancelled the call outright rather
                 # than refusing it (no user present in a headless run): "User cancelled the
                 # execution for tool `run_terminal_command`", captured verbatim in `body` and
                 # already the shape `contracts.CANCELLED_TOOL_REGEX` expects, so it is passed
                 # through rather than reconstructed the way the denial sentence above is.
+                # `.strip()` matches classify.py's own normalization before it re-matches the
+                # same regex, so the two sites agree by construction rather than by accident.
                 content = body
             else:
                 continue

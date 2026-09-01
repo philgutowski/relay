@@ -72,6 +72,19 @@ def _target_of(tool_use):
     return json.dumps(inp, sort_keys=True)[:ARGUMENT_CHARS]
 
 
+def _finding_base(cls, use, tool, number):
+    """The four fields every denial-scan finding shares, denial and cancellation alike. The
+    denial branch promotes `class` further (path_gate, tracker_write_denied); the cancellation
+    branch does not, since a cancelled call was never permitted to touch anything."""
+    return {
+        "class": cls,
+        "tool": tool,
+        "target": _target_of(use) if use else "",
+        "line": number,
+        "tool_use_line": use.get("_line"),
+    }
+
+
 def matches_write_pattern(tool_use, patterns):
     """KTD16: an adapter describes a tracker write as tool name prefixes, Bash command
     prefixes, or file paths (for the markdown adapter's Edit and Write)."""
@@ -397,19 +410,12 @@ def classify(transcript_path, launch_result, write_tool_patterns=None, backend="
             for block in content:
                 if not isinstance(block, dict) or block.get("type") != "tool_result":
                     continue
-                body = _text_of(block.get("content"))
-                match = contracts.DENIAL_REGEX.match(body.strip())
+                body = _text_of(block.get("content")).strip()
+                match = contracts.DENIAL_REGEX.match(body)
                 if block.get("is_error") and match:
                     use = tool_uses.get(block.get("tool_use_id"), {})
-                    tool = use.get("name") or match.group(1)
-                    target = _target_of(use) if use else ""
-                    finding = {
-                        "class": contracts.HALT_DENIED_TOOL,
-                        "tool": tool,
-                        "target": target,
-                        "line": number,
-                        "tool_use_line": use.get("_line"),
-                    }
+                    finding = _finding_base(contracts.HALT_DENIED_TOOL, use,
+                                            use.get("name") or match.group(1), number)
                     file_path = str((use.get("input") or {}).get("file_path") or (use.get("input") or {}).get("notebook_path") or "") if isinstance(use.get("input"), dict) else ""
                     if contracts.CLAUDE_DIR_PATH_REGEX.search(file_path):
                         finding["class"] = contracts.HALT_PATH_GATE
@@ -422,18 +428,13 @@ def classify(transcript_path, launch_result, write_tool_patterns=None, backend="
                 # promotion to HALT_PATH_GATE or HALT_TRACKER_WRITE_DENIED -- a cancelled call
                 # was never permitted to run, so it never touched a path to gate or a tracker
                 # write to flag.
-                cancelled = contracts.CANCELLED_TOOL_REGEX.match(body.strip())
+                cancelled = contracts.CANCELLED_TOOL_REGEX.match(body)
                 if not (block.get("is_error") and cancelled):
                     continue
                 use = tool_uses.get(block.get("tool_use_id"), {})
-                tool = use.get("name") or cancelled.group(1)
-                result["findings"].append({
-                    "class": contracts.CANCELLED_TOOL_CALL,
-                    "tool": tool,
-                    "target": _target_of(use) if use else "",
-                    "line": number,
-                    "tool_use_line": use.get("_line"),
-                })
+                result["findings"].append(_finding_base(
+                    contracts.CANCELLED_TOOL_CALL, use, use.get("name") or cancelled.group(1),
+                    number))
 
     result["last_message"] = (last_text or "")[:LAST_MESSAGE_CHARS] or None
     # The tail is for the closeout's ending contract, whose terminal line is the last line of a

@@ -893,20 +893,12 @@ class GrokEvidence(unittest.TestCase):
         """closeout-last-message-skipped-long.txt is real captured prose with no session-file
         companion; wrapped as one agent_message_chunk line, it proves the 200-character head/tail
         split through this normalizer without inventing new content."""
-        import json
-        import tempfile
         with open(os.path.join(GROK_FIXTURES, "closeout-last-message-skipped-long.txt"),
                   encoding="utf-8") as handle:
             text = handle.read()
-        line = {"timestamp": 0, "method": "session/update", "params": {"sessionId": "s",
-                "update": {"sessionUpdate": "agent_message_chunk",
-                           "content": {"type": "text", "text": text}}}}
-        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
-            handle.write(json.dumps(line) + "\n")
-        r = classify.classify(handle.name,
-                              SimpleNamespace(timed_out=False, exit_code=0, log_path=None),
-                              backend="grok")
-        os.unlink(handle.name)
+        r = run_grok_updates([
+            {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}},
+        ])
         self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
 
     def test_a_cancelled_tool_call_is_a_finding_not_a_silent_no_envelope(self):
