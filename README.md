@@ -88,6 +88,13 @@ python3 skills/relay/scripts/relay_cli.py tail <manifest>
 python3 skills/relay/scripts/relay_cli.py summary <manifest>
 ```
 
+A first launchd or cron launch of the runner sits outside Terminal's privacy grants. Before that
+fire, grant the python binary named in the job's ProgramArguments access to the folders it will
+read (the checkout and the state directory), typically Documents when the checkout lives there, or
+grant Full Disk Access, in System Settings, Privacy and Security. The grant is per binary and holds
+until that executable's identity changes. Without it the process stalls on the prompt with no halt
+class and no log line, because nothing has started yet.
+
 `tail` is how you watch a run that is already going. It follows each task's output in order and
 prints it decoded, one line per event, instead of the stream json that lands in `runner.log`. It
 works before, during, and after a run, takes no lease, and exits when the run reaches a terminal

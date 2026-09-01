@@ -149,6 +149,12 @@ is nine minutes, chosen to end the follow inside that cap rather than be killed 
 tool call's process group cannot end it, and logs to `runner.log` in the state directory. On macOS
 it wraps the run in `caffeinate -i` so the host stays awake; there is no `setsid` binary on macOS,
 so do not reach for one. Lid close is not supported: the machine must stay open for the whole run.
+A first launchd or cron launch of the runner is not covered by Terminal's Files and Folders grant.
+Before that fire, grant the python binary named in the job's ProgramArguments access to the folders
+it will read (the checkout and the state directory), typically Documents when the checkout lives
+there, or grant Full Disk Access, in System Settings, Privacy and Security. The grant is per binary
+and holds until that executable's identity changes. Without it the process sits on the prompt with
+no halt class and no log line, because the runner has not started.
 
 `--phases` is what makes this usable in a session. Without it the follower prints every tool call
 every task makes, which is right in a terminal and would consume this session's context in
@@ -162,7 +168,9 @@ Three endings, and what to say for each:
   where it has got to, then hand the operator the bare `tail` command for their own terminal, and
   say that `Ctrl+C` there stops the follower and leaves the run alive. Do not launch again.
 - **`the runner exited without writing a terminal record`.** The run never started, usually a held
-  lease or an invalid manifest. Read the runner log the line names and say what it was.
+  lease or an invalid manifest. Read the runner log the line names and say what it was. A live
+  python with no `runner.log` and no halt record can also be a Files and Folders or Full Disk
+  Access prompt on a launchd or cron parent.
 
 The state directory, `runner.log` inside it, and the per task output logs are the paths a later
 session needs. The state file is the contract between the runner and any later session, including
