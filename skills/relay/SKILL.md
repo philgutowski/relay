@@ -62,7 +62,10 @@ Start from what the tracker already holds rather than from a blank file. Write t
 path outside the target repo, since Relay adds nothing to a project it runs against.
 
 1. Ask which repo and which tracker (jira, github, or markdown), then write a draft manifest and
-   run `validate <manifest> --list` to read the candidate tasks back.
+   run `validate <manifest> --list` to read the candidate tasks back. Ask whether this repo names
+   Task branches as a prefix plus the Task id. The default is `relay/`. Write
+   `project.branch_prefix` only when the operator names a different prefix. An empty string is
+   the Task id alone.
 2. Confirm with the operator, one question at a time: which tasks to include and in what order;
    the model, effort, and backend for each; any task to exclude and why; and the three degraded path
    answers, `on_blocked.merge_partial`, `on_blocked.open_followup`, and
@@ -233,7 +236,7 @@ that now pass, then resumes at the first task that did not land. A landed task i
 
 Blocked tasks are skipped by default, because blocked is a deliberate outcome rather than a
 failure. Pass `--retry-blocked` only when the operator asks for it, and expect it to refuse when a
-stranded `relay/<task-id>` branch still carries commits; that work is theirs to keep or discard.
+stranded Task branch still carries commits; that work is theirs to keep or discard.
 
 ## What this skill never does
 

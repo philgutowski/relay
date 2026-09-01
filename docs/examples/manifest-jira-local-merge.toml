@@ -8,6 +8,9 @@
 [project]
 repo = "~/code/example-project"
 default_branch = "main"
+# Optional. Task branches are this prefix plus the Task id. Default is "relay/" when the key is
+# absent. Jira keys already look like ABC-12, so an empty prefix is the id alone.
+# branch_prefix = ""
 # A mirror rule is an argument list for git push, run after the closeout so a compound doc never
 # leaves the mirror a commit behind. Empty means no mirror.
 mirror = []
