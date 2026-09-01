@@ -164,6 +164,11 @@ class Capability:
     config_overrides: tuple
     strict_config: bool
     grants_network: bool
+    # Issue #57. A backend fact the brief states as an instruction, since instruction is the
+    # only enforcement layer some backends have for it (R10's shape, mirroring
+    # `enforces_at_launch`). `None` for a backend with no such constraint, matching the
+    # `allow_flag`/`deny_flag` precedent for "this backend has none" rather than `""`.
+    commit_message_constraint: str | None
 
 
 def _record(name):

@@ -30,7 +30,7 @@ $skill_form_rule
 Work on the branch `$branch` and nothing else. Do not merge, do not push, and do not switch
 branches. The runner owns the gate, the merge, and the push once you exit. A branch you leave
 behind can be recovered by hand; a push you make cannot be taken back.
-
+$commit_message_rule
 $blocked_partial
 
 $blocked_followup

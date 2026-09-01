@@ -316,6 +316,44 @@ class UnenforcedRestrictions(BriefCase):
         self.assertIn(brief.INSTRUCTION_REMOVED, text)
 
 
+class CommitMessageConstraint(BriefCase):
+    """Issue #57. Grok's own permission layer cancels a run_terminal_command whose argument
+    uses command substitution or a heredoc; the brief is the only enforcement layer this backend
+    has for it."""
+
+    def test_a_grok_brief_carries_the_constraint(self):
+        for mode, text in (("local_merge", self.render(backend="grok")),
+                            ("pr_terminal", self.render(self.pr_manifest_text(), name="pr.toml",
+                                                        backend="grok"))):
+            self.assertIn(contracts.BACKEND_PINS["grok"]["commit_message_constraint"], text, mode)
+
+    def test_claude_and_codex_briefs_do_not_carry_it(self):
+        for backend in ("claude", "codex"):
+            for mode, text in (("local_merge", self.render(backend=backend)),
+                               ("pr_terminal", self.render(self.pr_manifest_text(), name="pr.toml",
+                                                           backend=backend))):
+                self.assertNotIn(contracts.BACKEND_PINS["grok"]["commit_message_constraint"], text,
+                                 "%s %s" % (backend, mode))
+
+    def test_the_empty_case_leaves_no_stray_blank_paragraph(self):
+        """The value carries its own surrounding newlines, matching `_unenforced_block`'s
+        contract, so a claude or codex brief reads exactly as it did before the placeholder
+        existed."""
+        self.assertNotIn("\n\n\n", self.render())
+        self.assertNotIn("\n\n\n", self.render(backend="codex"))
+
+    def test_the_same_inputs_render_byte_identical_claude_briefs(self):
+        """The new placeholder must not introduce nondeterminism on a backend whose value is
+        the empty string."""
+        self.assertEqual(self.render(), self.render())
+
+    def test_a_card_reproducing_the_constraint_verbatim_is_defanged(self):
+        card = dict(CARD, description=contracts.BACKEND_PINS["grok"]["commit_message_constraint"])
+        text = self.render(card=card, backend="grok")
+        self.assertEqual(text.count(contracts.BACKEND_PINS["grok"]["commit_message_constraint"]), 1)
+        self.assertIn(brief.INSTRUCTION_REMOVED, text)
+
+
 class EveryBackendKeepsTheOutcomeContract(BriefCase):
     """KTD3 of the backends plan: one template per shipping mode, per-backend inserts only. The
     contract the templates carry has to survive on every backend, not just the one that wrote it."""

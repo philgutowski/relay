@@ -170,6 +170,7 @@ BACKEND_PINS = {
         "config_overrides": (),
         "strict_config": False,
         "grants_network": False,
+        "commit_message_constraint": None,
     },
     "codex": {
         "binary": "codex",
@@ -243,6 +244,7 @@ BACKEND_PINS = {
         # a grant to any substring test, and the record would then claim a reach the Task does
         # not have.
         "grants_network": True,
+        "commit_message_constraint": None,
     },
     "grok": {
         "binary": "grok",
@@ -287,6 +289,15 @@ BACKEND_PINS = {
         "config_overrides": (),
         "strict_config": False,
         "grants_network": False,
+        # Issue #57. Instruction is the only enforcement layer this backend has for the
+        # cancellation R4 and the BACKEND_PINS caveat below both describe.
+        "commit_message_constraint": (
+            "This CLI cancels a git commit whose message uses command substitution or a "
+            "heredoc, such as `git commit -m \"$(cat <<'EOF' ... EOF)\"`, instead of refusing "
+            "it: the tool call is cancelled outright, no envelope is written, and whatever the "
+            "task had in flight is stranded. Use plain `git commit` forms only. For a subject "
+            "plus body, repeat `-m`: `git commit -m \"Subject\" -m \"Body paragraph.\"`."
+        ),
     },
 }
 

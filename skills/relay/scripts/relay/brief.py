@@ -148,7 +148,11 @@ def defang(text):
     block would put a second, attacker-written copy in front of the real one."""
     for delimiter in (DATA_BEGIN, DATA_END):
         text = text.replace(delimiter, DELIMITER_REMOVED)
-    for sentence in (UNENFORCED_LEAD, UNENFORCED_OVERRIDE_REFUSAL, UNENFORCED_AUDIT):
+    sentences = (UNENFORCED_LEAD, UNENFORCED_OVERRIDE_REFUSAL, UNENFORCED_AUDIT)
+    grok_constraint = contracts.BACKEND_PINS["grok"]["commit_message_constraint"]
+    if grok_constraint:
+        sentences = sentences + (grok_constraint,)
+    for sentence in sentences:
         text = text.replace(sentence, INSTRUCTION_REMOVED)
     return text
 
@@ -179,6 +183,16 @@ def _unenforced_block(manifest, capability):
     disallowed = "\n".join("- " + pattern
                            for pattern in manifest_module.resolved_disallowed(manifest))
     return "\n" + UNENFORCED_RESTRICTIONS % (allowed, disallowed) + "\n"
+
+
+def _commit_message_block(capability):
+    """Issue #57. Same empty-case whitespace contract as `_unenforced_block` above: the value
+    carries its own surrounding newlines, and the templates place the placeholder with no blank
+    line above or below it, so a backend with no constraint renders exactly as it did before the
+    placeholder existed."""
+    if not capability.commit_message_constraint:
+        return ""
+    return "\n" + capability.commit_message_constraint + "\n"
 
 
 def values(manifest, task, card, branch=None, mode=None):
@@ -217,6 +231,7 @@ def values(manifest, task, card, branch=None, mode=None):
         "lfg_token": contracts.LFG_TERMINAL_TOKEN,
         "skill_form_rule": SKILL_FORM_RULE % lead_skill,
         "unenforced_restrictions": _unenforced_block(manifest, module.CAPABILITY),
+        "commit_message_rule": _commit_message_block(module.CAPABILITY),
         "ce_plan": ce_plan,
         "ce_work": module.qualify_skill("ce-work"),
         "ce_simplify": module.qualify_skill("ce-simplify-code"),
