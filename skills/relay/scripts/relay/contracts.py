@@ -91,6 +91,12 @@ REQUIRED_SKILLS = ("ce-plan", "ce-work", "ce-simplify-code", "ce-code-review", "
 # proven against tests/fixtures/backends/claude/denial-refusal.jsonl, a real capture this
 # anchored-immediately form never matched.
 DENIAL_REGEX = re.compile(r"^Permission to use (\w+)\b.*has been denied")
+# Issue #57. Grok's own cancellation phrasing for a tool call its permission layer cancelled
+# outright rather than refusing: "User cancelled the execution for tool `run_terminal_command`",
+# quoted verbatim in the grok BACKEND_PINS comment below. Distinct from DENIAL_REGEX above: no
+# "User" is present to have cancelled anything in a headless run, and the shape carries no
+# `has been denied` clause, so a shared regex would either miss this or misread a real denial.
+CANCELLED_TOOL_REGEX = re.compile(r"^User cancelled the execution for tool `?(\w+)`?")
 # Under dontAsk an Edit or Write on a path under .claude/ is denied regardless of the allowlist.
 CLAUDE_DIR_PATH_REGEX = re.compile(r"(^|/)\.claude/")
 # The pre-flight scan form from the solutions doc: catches the path inside prose, quotes,
@@ -271,7 +277,8 @@ BACKEND_PINS = {
         # U1 finding, resolving the plan's open question. Grok registers plugin skills under
         # bare names, with no plugin namespace, so the Claude prefix would not resolve.
         "skill_form": "/%s",
-        "evidence": "~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl",
+        "evidence": "~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl; classify "
+                    "also reads the stdout log for a terminal cancelled tool call (issue #57)",
         "credential_prefixes": ("GROK_", "XAI_"),
         "credential_file": "~/.grok/auth.json",
         "nesting_markers": ("GROK_SANDBOX",),
@@ -404,6 +411,13 @@ RUNNER_SELF_KILL = "runner_self_kill"
 # no_envelope or unclean_exit), this just says the mechanism instead of leaving the Cause line
 # to read only the downstream symptom.
 WAITING_LAST_MESSAGE = "waiting_last_message"
+# Issue #57. Grok's own permission layer cancelled a tool call outright (no user present in a
+# headless run) rather than refusing it in a way the task could react to, most often a commit
+# whose argument used command substitution or a heredoc. Finding only: the record's own
+# halt_class stays whatever classify or the git-tree check already assigned (usually no_envelope
+# or unclean_exit), this names the mechanism instead of leaving the Cause line to read only the
+# downstream symptom, the same shape WAITING_LAST_MESSAGE above already established.
+CANCELLED_TOOL_CALL = "cancelled_tool_call"
 
 # The .claude/ backstop's operator sentence. HALT_LINES[path_gate] is {detail}; this
 # raiser and classify's path_gate promotion fill it so the Cause line stays true.
@@ -465,13 +479,14 @@ FINDING_CLASSES = (
     UNENFORCED_DISALLOWED,
     RUNNER_SELF_KILL,
     WAITING_LAST_MESSAGE,
+    CANCELLED_TOOL_CALL,
 )
 
 # Every class that can reach a summary line: the closed halt class set of KTD6, plus the
 # findings that are never a record's own class but still have to print.
 LINE_CLASSES = HALT_CLASSES + (
     CLOSEOUT_UNFINISHED, BLOCKED_UNRECORDED, UNENFORCED_DISALLOWED, RUNNER_SELF_KILL,
-    WAITING_LAST_MESSAGE,
+    WAITING_LAST_MESSAGE, CANCELLED_TOOL_CALL,
 )
 
 HALT_LINES = {
@@ -500,6 +515,7 @@ HALT_LINES = {
     UNENFORCED_DISALLOWED: "{tool} ran {argument} at line {line} matching {pattern}",
     RUNNER_SELF_KILL: "self-kill: {command} named the runner's own pid {victim_pid} among {pids}",
     WAITING_LAST_MESSAGE: "ended the turn waiting on background work that does not resume headless: {last_message}",
+    CANCELLED_TOOL_CALL: "the CLI cancelled its own tool call, no user present: {tool} on {target}",
 }
 
 # The digest classify.classify() (U7) guarantees, read by run.py and closeout.py via

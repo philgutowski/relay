@@ -169,6 +169,11 @@ FINDING_ROWS = {
          "victim_pid": "61799"},
         "classify.scan_self_kill, via state._mark_crashed on a stale-lease reclaim",
     ),
+    contracts.CANCELLED_TOOL_CALL: (
+        {"tool": "Bash", "target": "git commit -m \"$(cat <<'EOF' ... EOF)\"", "line": 91,
+         "tool_use_line": 88},
+        "classify.classify, the cancellation scan sibling to the denial scan",
+    ),
 }
 
 

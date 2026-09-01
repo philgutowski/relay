@@ -399,25 +399,41 @@ def classify(transcript_path, launch_result, write_tool_patterns=None, backend="
                     continue
                 body = _text_of(block.get("content"))
                 match = contracts.DENIAL_REGEX.match(body.strip())
-                if not (block.get("is_error") and match):
+                if block.get("is_error") and match:
+                    use = tool_uses.get(block.get("tool_use_id"), {})
+                    tool = use.get("name") or match.group(1)
+                    target = _target_of(use) if use else ""
+                    finding = {
+                        "class": contracts.HALT_DENIED_TOOL,
+                        "tool": tool,
+                        "target": target,
+                        "line": number,
+                        "tool_use_line": use.get("_line"),
+                    }
+                    file_path = str((use.get("input") or {}).get("file_path") or (use.get("input") or {}).get("notebook_path") or "") if isinstance(use.get("input"), dict) else ""
+                    if contracts.CLAUDE_DIR_PATH_REGEX.search(file_path):
+                        finding["class"] = contracts.HALT_PATH_GATE
+                        finding["detail"] = contracts.PATH_GATE_CLAUDE_DIR
+                    elif use and matches_write_pattern(use, write_tool_patterns):
+                        finding["class"] = contracts.HALT_TRACKER_WRITE_DENIED
+                    result["findings"].append(finding)
+                    continue
+                # Issue #57: a cancelled tool call, sibling to the denial branch above. No
+                # promotion to HALT_PATH_GATE or HALT_TRACKER_WRITE_DENIED -- a cancelled call
+                # was never permitted to run, so it never touched a path to gate or a tracker
+                # write to flag.
+                cancelled = contracts.CANCELLED_TOOL_REGEX.match(body.strip())
+                if not (block.get("is_error") and cancelled):
                     continue
                 use = tool_uses.get(block.get("tool_use_id"), {})
-                tool = use.get("name") or match.group(1)
-                target = _target_of(use) if use else ""
-                finding = {
-                    "class": contracts.HALT_DENIED_TOOL,
+                tool = use.get("name") or cancelled.group(1)
+                result["findings"].append({
+                    "class": contracts.CANCELLED_TOOL_CALL,
                     "tool": tool,
-                    "target": target,
+                    "target": _target_of(use) if use else "",
                     "line": number,
                     "tool_use_line": use.get("_line"),
-                }
-                file_path = str((use.get("input") or {}).get("file_path") or (use.get("input") or {}).get("notebook_path") or "") if isinstance(use.get("input"), dict) else ""
-                if contracts.CLAUDE_DIR_PATH_REGEX.search(file_path):
-                    finding["class"] = contracts.HALT_PATH_GATE
-                    finding["detail"] = contracts.PATH_GATE_CLAUDE_DIR
-                elif use and matches_write_pattern(use, write_tool_patterns):
-                    finding["class"] = contracts.HALT_TRACKER_WRITE_DENIED
-                result["findings"].append(finding)
+                })
 
     result["last_message"] = (last_text or "")[:LAST_MESSAGE_CHARS] or None
     # The tail is for the closeout's ending contract, whose terminal line is the last line of a

@@ -806,6 +806,49 @@ def run_grok(name):
                              backend="grok")
 
 
+def run_grok_with_log(log_lines, transcript_lines=()):
+    """A grok run whose evidence comes from a stdout log (`log_path`) rather than a captured
+    `updates.jsonl` fixture. Both files are hand-built tempfiles: per
+    `tests/fixtures/backends/README.md`, only a real CLI capture may be committed under
+    `tests/fixtures/backends/grok/`, so a synthetic shape used for TDD stays out of that
+    directory and is built here instead, mirroring `SelfKillScan._log()`'s precedent."""
+    import json
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+        for obj in transcript_lines:
+            handle.write(json.dumps(obj) + "\n")
+        transcript_path = handle.name
+    with tempfile.NamedTemporaryFile("w", suffix=".stdout.log", delete=False) as handle:
+        for obj in log_lines:
+            handle.write(json.dumps(obj) + "\n")
+        log_path = handle.name
+    try:
+        return classify.classify(transcript_path,
+                                 SimpleNamespace(timed_out=False, exit_code=0, log_path=log_path),
+                                 backend="grok")
+    finally:
+        os.unlink(transcript_path)
+        os.unlink(log_path)
+
+
+_CANCELLED_COMMAND = "git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\""
+
+
+def _grok_tool_call(call_id, command):
+    """Matches the real captured shape (`tests/fixtures/backends/grok/denial-refusal.jsonl`
+    line 46): both `title` and `toolName` carry the tool name, and `_tool_name_of` reads
+    `title` as its fallback when no `_meta` is present."""
+    return {"type": "tool_call", "toolCallId": call_id, "title": "run_terminal_command",
+            "toolName": "run_terminal_command", "rawInput": {"command": command}}
+
+
+def _grok_cancelled_update(call_id):
+    return {"type": "tool_call_update", "toolCallId": call_id, "status": "cancelled",
+            "content": [{"type": "content", "content": {
+                "type": "text",
+                "text": "User cancelled the execution for tool `run_terminal_command`"}}]}
+
+
 class GrokEvidence(unittest.TestCase):
     """Backends U6, U3: `updates.jsonl`'s `agent_message_chunk` events are already complete
     per-turn text, and its embedded `tool_call_update` denial is a real, detectable finding."""
@@ -871,6 +914,62 @@ class GrokEvidence(unittest.TestCase):
                               backend="grok")
         os.unlink(handle.name)
         self.assertTrue(r["last_message_tail"].rstrip().endswith("Documentation skipped"))
+
+    def test_a_stream_ending_in_a_cancelled_tool_call_is_a_finding_not_a_silent_no_envelope(self):
+        """Issue #57. A grok stream whose last event is `stopReason: cancelled`, immediately
+        preceded by a cancelled `tool_call_update` for `run_terminal_command`, names the
+        cancelled command instead of falling through to the generic no-envelope text."""
+        r = run_grok_with_log([
+            _grok_tool_call("call-1", _CANCELLED_COMMAND),
+            _grok_cancelled_update("call-1"),
+            {"type": "end", "stopReason": "cancelled"},
+        ])
+        cancelled = [f for f in r["findings"] if f["class"] == contracts.CANCELLED_TOOL_CALL]
+        self.assertEqual(len(cancelled), 1)
+        self.assertEqual(cancelled[0]["tool"], "Bash", "run_terminal_command maps to Bash")
+        self.assertIn("git commit", cancelled[0]["target"])
+        self.assertEqual(r["halt_class"], contracts.HALT_NO_ENVELOPE,
+                          "the finding rides alongside the existing precedence, R2")
+
+    def test_a_cancellation_that_is_not_the_terminal_event_is_not_a_finding(self):
+        """R1 requires the cancellation be the stream's last event. A cancelled call the task
+        recovered from and kept working past is not this bug."""
+        r = run_grok_with_log([
+            _grok_tool_call("call-1", _CANCELLED_COMMAND),
+            _grok_cancelled_update("call-1"),
+            _grok_tool_call("call-2", "git commit -m \"message\""),
+            {"type": "tool_call_update", "toolCallId": "call-2", "status": "completed"},
+            {"type": "end", "stopReason": "end_turn"},
+        ])
+        cancelled = [f for f in r["findings"] if f["class"] == contracts.CANCELLED_TOOL_CALL]
+        self.assertEqual(cancelled, [])
+
+    def test_a_denied_tool_call_is_not_read_as_a_cancellation(self):
+        """R3: the existing `_DENIAL_MARKER` shape must not misfire the new marker check."""
+        r = run_grok_with_log([
+            _grok_tool_call("call-1", "rm -rf /tmp/x"),
+            {"type": "tool_call_update", "toolCallId": "call-1", "status": "failed",
+             "content": [{"type": "content", "content": {
+                 "type": "text",
+                 "text": "Tool `run_terminal_command` was not executed: Denied by permission "
+                         "policy: deny rule on bash matching \"rm -rf*\""}}]},
+            {"type": "end", "stopReason": "end_turn"},
+        ])
+        cancelled = [f for f in r["findings"] if f["class"] == contracts.CANCELLED_TOOL_CALL]
+        self.assertEqual(cancelled, [])
+
+    def test_auto_mode_blocked_phrasing_is_not_read_as_a_cancellation(self):
+        """R3: Grok's own auto-mode refusal phrasing must not misfire the new marker check
+        either, mirroring `test_auto_mode_blocked_this_action_is_not_a_denial` above."""
+        r = run_grok_with_log([
+            _grok_tool_call("call-1", "some command"),
+            {"type": "tool_call_update", "toolCallId": "call-1", "status": "failed",
+             "content": [{"type": "content", "content": {
+                 "type": "text", "text": "Auto mode blocked this action for safety reasons."}}]},
+            {"type": "end", "stopReason": "end_turn"},
+        ])
+        cancelled = [f for f in r["findings"] if f["class"] == contracts.CANCELLED_TOOL_CALL]
+        self.assertEqual(cancelled, [])
 
 
 class SelfKillScan(unittest.TestCase):
