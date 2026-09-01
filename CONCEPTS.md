@@ -48,6 +48,12 @@ Reclaiming marks only the Task it inherited; it never records the run's own outc
 the moment of reclaim the reclaiming run has not yet decided whether it halts there or continues
 past the halt. Only the run's own later conclusion may record that the run itself is over.
 
+### Phase event
+One of the small set of moments in a run that are worth telling a person about, as distinct from
+the decoded Task activity that fills a log: a Task's log starting, a Task's status moving, and the
+run reaching its terminal record. It is a report about a run rather than a part of one, so nothing
+that happens to a phase event may change what the run decides.
+
 ### Follower
 A reader attached to a running Manifest, which decodes the Task processes' output and reports the
 run's phase events. It takes no Lease, decides nothing, and writes nothing, so a Follower can be
