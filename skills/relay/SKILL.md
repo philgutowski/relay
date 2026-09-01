@@ -84,7 +84,10 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
    would halt without one being opened or checked.
 3. If any chosen backend does not enforce tool restrictions at launch (today that is `codex`),
    state that condition in plain words: launch-time refusal is gone, the Task path bound covers
-   commit scope only, and the evidence audit detects after the fact. Ask the operator to write
+   commit scope only, and the evidence audit detects after the fact. Say in the same breath that
+   a `codex` Task launches with its sandbox network on, granted so it can write to the tracker at
+   all, and that the sandbox takes no host allowlist, so the reach is every host and not only the
+   tracker, held with the operator's own `gh` login and its account scope. Ask the operator to write
    `permissions.unenforced_acceptance` in their own words, and to set `permissions.task_allowed_paths`.
    Write only what they supply. Never invent either sentence or list, including to make validate
    pass.

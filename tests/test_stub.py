@@ -194,6 +194,36 @@ class StubCodex(_StubTestCase):
                                  timeout=30)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_dropping_either_config_override_token_is_rejected(self):
+        """Issue #51. The allow list alone would accept a shorter argv, so the grammar has to ask
+        the second question too: was every flag build_args always emits actually there. A dropped
+        `-c` pair is the regression that silently re-fences the sandbox, and the blocked halt it
+        produces arrives a whole task later than this test does."""
+        fixture = os.path.join(self.fixtures, "last-message-complete.txt")
+        args = self.build_args(os.path.join(self.tmp.name, "T-5.stdout.log"))
+        override = args.index("-c")
+
+        write_entry(self.queue, 1, fixture)
+        good = subprocess.run(args, cwd=self.repo, env=self.env, capture_output=True, text=True,
+                               timeout=30)
+        self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+
+        # The stub renders the missing set as `sorted(missing)`'s repr, and these assert that
+        # rendered form rather than the bare token. `"-c" in "--strict-config"` is true, so a bare
+        # substring check would pass on an argv that dropped the other flag, which is the one
+        # thing these two cases exist to tell apart.
+        without_override = args[:override] + args[override + 2:]
+        result = subprocess.run(without_override, cwd=self.repo, env=self.env,
+                                 capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("['-c']", result.stderr)
+
+        without_strict = [arg for arg in args if arg != "--strict-config"]
+        result = subprocess.run(without_strict, cwd=self.repo, env=self.env,
+                                 capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("['--strict-config']", result.stderr)
+
     def test_stub_child_env_spawns_a_child_that_holds_the_pipe(self):
         fixture = os.path.join(self.fixtures, "last-message-complete.txt")
         write_entry(self.queue, 1, fixture)

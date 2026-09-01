@@ -161,6 +161,9 @@ class Capability:
     nesting_markers: tuple
     writes_into_worktree: bool
     extra_writable_dirs: tuple
+    config_overrides: tuple
+    strict_config: bool
+    grants_network: bool
 
 
 def _record(name):

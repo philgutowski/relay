@@ -16,8 +16,8 @@ from types import SimpleNamespace
 
 import _paths
 import _repo
-from relay import (classify, closeout, contracts, gitread, gitwrite, launch, manifest as mf,
-                   run as runner, state, verify)
+from relay import (backends, classify, closeout, contracts, gitread, gitwrite, launch,
+                   manifest as mf, run as runner, state, verify)
 
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
 
@@ -1603,6 +1603,43 @@ class UnenforcedRun(RunCase):
         self.assertIn("matches command spellings", scalar)
         self.assertIn("does not prove the operation was avoided", scalar)
         self.assertNotIn("\n", scalar)
+
+    def test_the_scalar_names_the_sandbox_network_grant(self):
+        """Issue #51. SKILL.md discloses the grant when a manifest is authored, which never
+        reaches an operator running a manifest written before the grant existed, and `validate`
+        only checks that the acceptance sentence is non empty. The record is what every run
+        writes, so the condition has to be stated here too."""
+        self.load_codex(bound=["src/"])
+        self.queue_codex()
+        self.closeout_landed("T-1")
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        scalar = self.store().get("T-1")["unenforced_restrictions"]
+        self.assertIn("network", scalar)
+        self.assertIn("not only the tracker", scalar)
+        # Host scope alone understates it. The reach is held with the operator's own account
+        # scoped credential, which is the half an acceptance sentence has to cover.
+        self.assertIn("gh login", scalar)
+        # Still one line: summary.line_fields hoists this into the namespace cause_line formats
+        # halt templates against.
+        self.assertNotIn("\n", scalar)
+
+    def test_an_unenforced_backend_without_a_network_grant_gets_no_network_clause(self):
+        """The clause is written off the capability's own `grants_network`, not off
+        `enforces_at_launch`, so a future unenforced backend that reaches no network does not
+        inherit a sentence that is false for it."""
+        text = MANIFEST.replace("__REPO__", self.repo)
+        text = text.replace("[permissions]",
+                            "[permissions]\n"
+                            "unenforced_acceptance = \"fixture\"\n"
+                            "task_allowed_paths = [\"src/\"]", 1)
+        with open(self.manifest_path, "w") as handle:
+            handle.write(text)
+        manifest = mf.load(self.manifest_path)
+        fenced = replace(backends.build("codex").CAPABILITY, grants_network=False)
+        scalar = runner._unenforced_scalar(manifest, fenced)
+        self.assertIn("disallowed tools not enforced at launch", scalar)
+        self.assertNotIn("network", scalar)
 
     def test_a_destructive_call_refuses_the_landing(self):
         self.load_codex(bound=["src/"])

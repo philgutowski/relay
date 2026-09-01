@@ -131,6 +131,14 @@ def build_args(manifest, task, brief_text, session_id, allowed=None, disallowed=
     args.extend(cap.output_format)
     for token in cap.extra_writable_dirs:
         args.extend(["--add-dir", token.replace("<repo>", repo)])
+    # Issue #51. `--strict-config` goes on whenever an override does: without it a key this CLI
+    # no longer recognizes is accepted and ignored, and the fenced sandbox that follows surfaces
+    # a whole task later as a blocked tracker write. See the codex pin.
+    if cap.strict_config:
+        args.append("--strict-config")
+    for token in cap.config_overrides:
+        args.extend(["-c", token])
+    # The brief stays last. Codex reads it as the positional prompt, so no flag may follow it.
     args.append(brief_text)
     return args
 
