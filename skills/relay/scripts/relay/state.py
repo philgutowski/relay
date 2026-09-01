@@ -308,7 +308,14 @@ class StateStore:
                 reclaimed_ids=reclaimed, previous_holder=previous,
             )
 
-        self._mutate(fn)
+        # `ended_at` is withheld from the stamp rule here. A reclaim moves an in flight record to
+        # halted, which is otherwise exactly the non terminal to terminal move that stamps an
+        # ending, and the value it would stamp is this reclaim's own clock: the moment somebody
+        # noticed the crash, which can be days after the work stopped. That number is not an
+        # ending, and it would become the whole sample the remaining estimate divides by once
+        # `startup_reverify` promotes the record to landed. A crash leaves no ending, and a
+        # record with no ending reports no elapsed, which is the honest answer.
+        self._mutate(fn, explicit={"ended_at"})
         result = outcome["result"]
         if result.code == LOCKED:
             return result

@@ -154,7 +154,14 @@ def _counts_line(store, run_status):
     """
     counts = {}
     for record in store.records().values():
+        # Same guard `state._statuses` applies. This line is built outside `announce`, so a
+        # record shaped unlike the others would escape as a traceback from the run's own last
+        # act rather than costing a notification.
+        if not isinstance(record, dict):
+            continue
         status = record.get("status")
+        if status is None:
+            continue
         counts[status] = counts.get(status, 0) + 1
     tally = progress.format_counts(counts)
     return "run %s: %s" % (run_status, tally) if tally else "run %s" % run_status

@@ -22,10 +22,11 @@ The Runner holds no project knowledge of its own. Everything project-specific re
 Manifest data. It reads the Tracker but does not write to it, so a defect in the Runner can never
 move a card.
 
-A Runner reports two of the three Phase event moments when the operator asked for notifications:
-a Task's status moving, and the run reaching its terminal record, which it announces with the
-run's counts. A Task's log starting stays the Follower's alone, because only a Follower reads
-those files; the Runner's nearest equivalent is the same Task's move into running, which it
+A Runner reports two of the three Phase event moments: a Task's status moving, and the run
+reaching its terminal record, which it announces with the run's counts. It always writes them to
+its own output, so a run's log carries them either way, and it also notifies the desktop when the
+operator asked for that. A Task's log starting stays the Follower's alone, because only a Follower
+reads those files; the Runner's nearest equivalent is the same Task's move into running, which it
 writes immediately before it launches the process. Reporting is not participating, so a
 notification that fails, or one that hangs, may not change what the run decides: the Runner
 swallows what the notifier raises and bounds how long it may take, and the two together are what

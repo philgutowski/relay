@@ -37,12 +37,16 @@ from . import contracts, state
 TODO = "todo"
 
 
-def _elapsed(record, now):
+def _elapsed(record, now, live):
     """One record's elapsed seconds, or None when its stamps cannot support a number.
 
     The finished branch is tried first and the live branch only when there is no ending, which is
     what makes a retried task readable: U1 clears `ended_at` on the way back into `running`
     precisely so this falls through to the live branch rather than differencing two attempts.
+
+    `live` is whether the run itself is still going. The state directory outlives any one run, so
+    a record left reading `running` by a runner that died is not a task in progress, and counting
+    it to now would print the age of the crash as working time beside `status: crashed`.
     """
     started = state._epoch(record.get("started_at"))
     ended = state._epoch(record.get("ended_at"))
@@ -50,31 +54,41 @@ def _elapsed(record, now):
         return None
     if ended is not None:
         return ended - started if ended >= started else None
-    if record.get("status") in contracts.IN_FLIGHT_STATUSES:
+    if live and record.get("status") in contracts.IN_FLIGHT_STATUSES:
         return max(0.0, now - started)
     return None
 
 
-def _entry(task_id, record, now, in_manifest):
+def _entry(task_id, record, now, in_manifest, live):
     """One line's worth of facts. A record the manifest no longer names carries no elapsed: it
     belongs to a different run's list, so a duration beside it would read as this run's."""
     if record is None:
         return {"id": task_id, "status": TODO, "elapsed_seconds": None,
                 "in_manifest": in_manifest}
     status = record.get("status")
+    if status == contracts.STATUS_PENDING:
+        # The R33 downgrade in `state.validate` returns a landed record to pending without
+        # touching its stamps, so a task waiting to be re-run still carries the previous run's
+        # pair. A task that has not started has no duration, whatever the stamps say.
+        return {"id": task_id, "status": TODO, "elapsed_seconds": None,
+                "in_manifest": in_manifest}
     return {
         "id": task_id,
-        "status": TODO if status == contracts.STATUS_PENDING else status,
-        "elapsed_seconds": _elapsed(record, now) if in_manifest else None,
+        "status": status,
+        "elapsed_seconds": _elapsed(record, now, live) if in_manifest else None,
         "in_manifest": in_manifest,
     }
 
 
-def build(manifest, store, now=time.time, raw=None):
+def build(manifest, store, now=time.time, raw=None, live=True):
     """The progress view as data. Reads state only; acquires nothing and changes nothing.
 
-    `raw` lets a caller that has already read `state.json` hand that read in, so `status` does not
-    describe two different moments of a live run in one screen of output.
+    `raw` lets a caller that has already read `state.json` hand that read in, so the counts, the
+    durations, and the per task lines all describe one moment rather than several.
+
+    `live` is whether a runner is actually driving this manifest now. A caller that knows
+    otherwise passes False, and every in flight record then reports no duration instead of
+    counting a dead run's records to the present.
     """
     if raw is None:
         raw = store.read() or {}
@@ -83,10 +97,10 @@ def build(manifest, store, now=time.time, raw=None):
 
     order = [task.id for task in manifest.tasks]
     named = set(order)
-    entries = [_entry(task_id, records.get(task_id), at, True) for task_id in order]
+    entries = [_entry(task_id, records.get(task_id), at, True, live) for task_id in order]
     # Same ordering `summary.build` already uses for the same inputs: the manifest's own list,
     # then whatever the state directory is still holding from a run of some other list.
-    entries += [_entry(task_id, records[task_id], at, False)
+    entries += [_entry(task_id, records[task_id], at, False, live)
                 for task_id in sorted(records) if task_id not in named]
 
     mine = [entry for entry in entries if entry["in_manifest"]]
@@ -112,19 +126,25 @@ def build(manifest, store, now=time.time, raw=None):
     }
 
 
-def _estimate(entries, landed):
-    """Mean landed elapsed times the todo count, plus what the task in flight has left against
-    that mean. Rough by construction and labelled as such where it prints.
+# What a later run will attempt again. Halted is here because the run loop does not skip a
+# halted record: it re-verifies it and relaunches, which is the whole repair and re-run shape
+# Relay is built around. Excluded is not, because nothing will run it. Blocked is not either,
+# because it runs again only under `--retry-blocked`, which is a choice made at the next launch
+# and not a fact this state file carries.
+REMAINING_STATUSES = (TODO, contracts.STATUS_HALTED)
 
-    The task in flight is counted once, in its own term. A halted or excluded task is not counted
-    at all: neither is remaining work this run will do, one needs a hand repair and the other was
-    never going to run.
+
+def _estimate(entries, landed):
+    """Mean landed elapsed times the count of tasks still to run, plus what the task in flight
+    has left against that mean. Rough by construction and labelled as such where it prints.
+
+    The task in flight is counted once, in its own term, never also in the first.
     """
     if not landed:
         return None
     mean = sum(landed) / len(landed)
-    todo = sum(1 for entry in entries if entry["status"] == TODO)
-    remaining = mean * todo
+    remaining = mean * sum(1 for entry in entries
+                           if entry["status"] in REMAINING_STATUSES)
     for entry in entries:
         if entry["status"] in contracts.IN_FLIGHT_STATUSES:
             remaining += max(0.0, mean - (entry["elapsed_seconds"] or 0))

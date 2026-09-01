@@ -234,10 +234,13 @@ def cmd_status(args, env, out):
     if raw is None:
         out.write("no state for %s yet\n" % args.manifest)
         return EXIT_OK
-    # One read, handed to `progress` rather than letting it take its own. Two reads of a live
-    # run's state would put two different moments on one screen.
-    view = progress.build(manifest, store, raw=raw)
-    out.write("status: %s\n" % store.status_word())
+    word = store.status_word()
+    # The progress view is built from the read above rather than taking its own, so the counts,
+    # the durations, and the per task lines below all describe one moment. `live` is what stops a
+    # crashed run's last record from counting to the present: without it the same screen would
+    # print `status: crashed` beside a task that has been "running" for eight hours.
+    view = progress.build(manifest, store, raw=raw, live=(word == "running"))
+    out.write("status: %s\n" % word)
     cursor = raw.get("cursor", 0)
     out.write("cursor: %d of %d task(s)\n" % (cursor, len(manifest.tasks)))
     for line in progress.lines(view):

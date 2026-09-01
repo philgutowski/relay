@@ -425,7 +425,22 @@ class Observer(StateCase):
         second.acquire()
         self.assertEqual(self.seen,
                          [("T-1", contracts.STATUS_RUNNING, contracts.STATUS_HALTED)])
-        self.assertIsNotNone(second.get("T-1")["ended_at"])
+
+    def test_a_reclaim_leaves_no_ending_because_it_does_not_know_when_work_stopped(self):
+        """The reclaim's own clock is the moment somebody noticed the crash, which can be days
+        after the task stopped. Stamping it would make the crash's age look like work, and
+        `startup_reverify` promoting the record to landed would then feed that number to the
+        remaining estimate as its whole sample."""
+        first = self.store(pid=100)
+        first.acquire()
+        first.upsert("T-1", status=contracts.STATUS_RUNNING)
+        self.clock.advance(172_800)
+        second = self.store(pid=200, hostname="host-b")
+        second.acquire()
+        record = second.get("T-1")
+        self.assertEqual(record["status"], contracts.STATUS_HALTED)
+        self.assertIsNone(record["ended_at"])
+        self.assertIsNotNone(record["started_at"])
 
     def test_the_r33_downgrade_in_validate_is_reported(self):
         store = self.watching()
@@ -453,6 +468,25 @@ class Observer(StateCase):
             return False
         finally:
             os.close(fd)
+
+    def test_an_fn_that_raises_announces_nothing_and_still_propagates(self):
+        """The observer fires only on the path that reached `_write_locked`. A mutation that
+        never persisted must not announce a status it did not write, and the exception must
+        still reach the caller with the lock released."""
+        store = self.watching()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING)
+        self.seen.clear()
+
+        def boom():
+            raise RuntimeError("simulated crash")
+
+        store._abort_after_write = boom
+        with self.assertRaises(RuntimeError):
+            store.upsert("T-1", status=contracts.STATUS_LANDED)
+        store._abort_after_write = None
+        self.assertEqual(self.seen, [])
+        self.assertEqual(store.get("T-1")["status"], contracts.STATUS_RUNNING)
+        self.assertTrue(self.lock_is_free(store), "the lock was not released")
 
     def test_a_store_with_no_observer_is_unchanged(self):
         store = self.store()

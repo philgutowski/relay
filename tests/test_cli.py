@@ -431,12 +431,31 @@ class WhoNotifies(CliCase):
         self.assertIn("--notify", self.detach_argv("--follow", "--notify", "--for", "0"))
 
     def test_a_follower_that_launched_its_own_run_does_not_notify(self):
-        """The other half of exactly-once: the child is notifying, so the follower must not."""
-        self.queue_complete_tasks()
-        with self.recording_notify() as seen:
-            self.call("run", self.manifest_path, "--follow", "--notify", "--for", "0")
+        """The other half of exactly-once: the child is notifying, so the follower must not.
+
+        The child is faked. `recording_notify` patches `notify.build` in this process only, and
+        a real detached child would inherit the real PATH, find `osascript`, and fire actual
+        desktop notifications as it landed tasks. That is the one thing the suite must never do.
+        """
+        stub = []
+        original = cli.subprocess.Popen
+
+        def fake(command, **kwargs):
+            argv = list(command)
+            if not any("relay_cli.py" in part for part in argv):
+                return original(command, **kwargs)
+            stub.append(argv)
+            return original([sys.executable, "-c", "pass"], **kwargs)
+
+        cli.subprocess.Popen = fake
+        try:
+            with self.recording_notify() as seen:
+                self.call("run", self.manifest_path, "--follow", "--notify", "--for", "0")
+        finally:
+            cli.subprocess.Popen = original
+        self.assertEqual(len(stub), 1, "the runner child was not faked")
+        self.assertIn("--notify", stub[0])
         self.assertEqual(seen, [False])
-        self.wait_for_terminal()
 
     def test_tail_notifies_because_it_launched_nothing(self):
         self.queue_complete_tasks()
@@ -567,6 +586,18 @@ class StatusProgressView(CliCase):
         self.assertEqual(code, cli.EXIT_OK, out)
         self.assertIn("no state", out)
         self.assertNotIn("progress:", out)
+
+    def test_a_crashed_run_reports_no_live_duration(self):
+        """The state directory outlives the run. A record left reading `running` by a runner
+        that died is not a task in progress, and the same screen saying `crashed` must not also
+        print a duration that grows every time the operator looks."""
+        self.seed_stale_reclaim_on_t1()
+        self.store().break_lease()
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        running = [line for line in out.splitlines() if line.startswith("  T-1 ")]
+        self.assertEqual(len(running), 1)
+        self.assertNotRegex(running[0], r"\d+[smh]")
 
     def test_the_progress_view_takes_no_lease(self):
         self.complete_run()

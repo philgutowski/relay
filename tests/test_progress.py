@@ -195,12 +195,23 @@ class Estimate(unittest.TestCase):
         }, ("T-1", "T-2"))
         self.assertEqual(data["estimate_seconds"], 0)
 
-    def test_a_halted_task_is_not_remaining_work_either(self):
-        """It needs a hand repair, so an estimate that counted it would be answering a
-        different question from the one the operator asked."""
+    def test_a_halted_task_is_remaining_work_because_a_later_run_retries_it(self):
+        """`run._one_task` returns early for landed and excluded, never for halted: a resumed
+        run re-verifies a halted record and relaunches it. Treating it as work that never
+        happens made the estimate report minutes for hours of queued work, on exactly the
+        repair and re-run path Relay is built around."""
         data = self.build({
             "T-1": record(contracts.STATUS_LANDED, NOW - 200, NOW - 100),
             "T-2": record(contracts.STATUS_HALTED, NOW - 90, NOW - 80),
+        }, ("T-1", "T-2"))
+        self.assertEqual(data["estimate_seconds"], 100)
+
+    def test_a_blocked_task_is_not_counted_because_retrying_it_is_a_launch_choice(self):
+        """Blocked runs again only under `--retry-blocked`, which the next launch decides and
+        this state file does not carry."""
+        data = self.build({
+            "T-1": record(contracts.STATUS_LANDED, NOW - 200, NOW - 100),
+            "T-2": record(contracts.STATUS_BLOCKED, NOW - 90, NOW - 80),
         }, ("T-1", "T-2"))
         self.assertEqual(data["estimate_seconds"], 0)
 
@@ -286,20 +297,76 @@ class Lines(unittest.TestCase):
         self.assertIn("across", text)
 
 
+class Liveness(unittest.TestCase):
+    """The state directory outlives any one run, so a record reading `running` is only a task in
+    progress while a runner is actually driving. Without the gate the same screen printed
+    `status: crashed` beside a task that had been running for eight hours."""
+
+    def build(self, tasks, ids, live):
+        return progress.build(manifest(*ids), FakeStore(tasks), now=lambda: NOW, live=live)
+
+    def test_a_dead_runs_in_flight_record_reports_no_duration(self):
+        data = self.build({"T-1": record(contracts.STATUS_RUNNING, NOW - 28_800)},
+                          ("T-1",), live=False)
+        self.assertIsNone(data["tasks"][0]["elapsed_seconds"])
+        self.assertIsNone(data["total_seconds"])
+
+    def test_the_same_record_counts_while_the_run_is_live(self):
+        data = self.build({"T-1": record(contracts.STATUS_RUNNING, NOW - 45)},
+                          ("T-1",), live=True)
+        self.assertEqual(data["tasks"][0]["elapsed_seconds"], 45)
+
+    def test_a_finished_record_is_unaffected_by_liveness(self):
+        for live in (True, False):
+            data = self.build({"T-1": record(contracts.STATUS_LANDED, NOW - 300, NOW - 120)},
+                              ("T-1",), live=live)
+            self.assertEqual(data["tasks"][0]["elapsed_seconds"], 180, live)
+
+
+class DowngradedRecord(unittest.TestCase):
+    """`state.validate`'s R33 downgrade returns a landed record to pending without touching its
+    stamps, so a task waiting to be re-run still carries the previous run's pair."""
+
+    def test_a_downgraded_record_reads_todo_and_reports_no_duration(self):
+        data = progress.build(manifest("T-1"), FakeStore({
+            "T-1": record(contracts.STATUS_PENDING, NOW - 500, NOW - 100),
+        }), now=lambda: NOW)
+        entry = data["tasks"][0]
+        self.assertEqual(entry["status"], "todo")
+        self.assertIsNone(entry["elapsed_seconds"])
+        self.assertIsNone(data["total_seconds"])
+
+    def test_a_downgraded_record_is_remaining_work(self):
+        data = progress.build(manifest("T-1", "T-2"), FakeStore({
+            "T-1": record(contracts.STATUS_LANDED, NOW - 200, NOW - 100),
+            "T-2": record(contracts.STATUS_PENDING, NOW - 500, NOW - 400),
+        }), now=lambda: NOW)
+        self.assertEqual(data["estimate_seconds"], 100)
+
+
 class AgainstARealStore(unittest.TestCase):
-    """One case through the real StateStore, so the field names `build` reads are the ones U1
-    actually writes rather than the ones this module's fake happens to use."""
+    """Cases through the real StateStore, so the record shapes `build` reads are the ones the
+    store actually writes rather than the ones this module's fake happens to use.
+
+    This class exists because of a defect the fake could not have caught. `test_progress` and
+    `test_state` each held a case about what a reclaimed crash leaves behind, they asserted
+    opposite things, and both passed: one against a hand written dict, the other against the
+    store. The store was right and the progress fixture was fiction.
+    """
+
+    def store(self, tmp, clock):
+        home = os.path.join(tmp, "home")
+        repo = os.path.join(tmp, "repo")
+        os.makedirs(home, exist_ok=True)
+        os.makedirs(repo, exist_ok=True)
+        path = os.path.join(tmp, "m.toml")
+        open(path, "w").close()
+        return st.StateStore(path, repo, home=home, now=lambda: clock[0])
 
     def test_a_landed_task_written_by_the_store_reports_its_elapsed(self):
         with tempfile.TemporaryDirectory() as tmp:
-            home = os.path.join(tmp, "home")
-            repo = os.path.join(tmp, "repo")
-            os.makedirs(home)
-            os.makedirs(repo)
-            path = os.path.join(tmp, "m.toml")
-            open(path, "w").close()
             clock = [NOW]
-            store = st.StateStore(path, repo, home=home, now=lambda: clock[0])
+            store = self.store(tmp, clock)
             store.upsert("T-1", status=contracts.STATUS_RUNNING)
             clock[0] += 120
             store.upsert("T-1", status=contracts.STATUS_LANDED)
@@ -307,6 +374,40 @@ class AgainstARealStore(unittest.TestCase):
             data = progress.build(manifest("T-1"), store, now=lambda: clock[0])
             self.assertEqual(data["tasks"][0]["elapsed_seconds"], 120)
             self.assertEqual(data["landed_sample"], 1)
+
+    def test_a_task_the_store_is_still_running_reports_a_live_duration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            clock = [NOW]
+            store = self.store(tmp, clock)
+            store.upsert("T-1", status=contracts.STATUS_RUNNING)
+            clock[0] += 90
+            data = progress.build(manifest("T-1"), store, now=lambda: clock[0])
+            self.assertEqual(data["tasks"][0]["elapsed_seconds"], 90)
+
+    def test_a_real_reclaimed_crash_reports_no_duration_and_no_estimate(self):
+        """The defect three reviewers found. A reclaim marks the record halted, and the ending
+        it would have stamped is the moment somebody noticed the crash. `startup_reverify` then
+        promotes that record to landed, and the estimate divides by it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            clock = [NOW]
+            first = self.store(tmp, clock)
+            first.acquire()
+            first.upsert("T-1", status=contracts.STATUS_RUNNING)
+            clock[0] += 172_800
+            second = st.StateStore(first.manifest_path, first.repo_path,
+                                   home=os.path.join(tmp, "home"), now=lambda: clock[0],
+                                   pid=99_999, hostname="other")
+            second.acquire()
+            record_after = second.get("T-1")
+            self.assertEqual(record_after["status"], contracts.STATUS_HALTED)
+            self.assertIsNone(record_after["ended_at"])
+            data = progress.build(manifest("T-1", "T-2"), second, now=lambda: clock[0])
+            self.assertIsNone(data["tasks"][0]["elapsed_seconds"])
+            # Promoted to landed the way a hand repair plus startup_reverify would.
+            second.upsert("T-1", status=contracts.STATUS_LANDED)
+            data = progress.build(manifest("T-1", "T-2"), second, now=lambda: clock[0])
+            self.assertEqual(data["landed_sample"], 0)
+            self.assertIsNone(data["estimate_seconds"])
 
 
 if __name__ == "__main__":
