@@ -3,10 +3,12 @@
 The summary tests hold R46's one direction: the JSON is the summary and the text is rendered
 from it, so every text line names the JSON field it came from.
 """
+import contextlib
 import io
 import json
 import os
 import re
+import sys
 import time
 import unittest
 from types import SimpleNamespace
@@ -61,6 +63,23 @@ class CliCase(RunCase):
         self.closeout_landed("T-1")
         self.queue_entry("success.jsonl", None)
         return self.call("run", self.manifest_path)
+
+    @contextlib.contextmanager
+    def recording_notify(self):
+        """Records what each `notify.build` call was asked for and hands back a disabled
+        notifier, so a case can prove the wiring without any case being able to fire one."""
+        seen = []
+        original = cli.notify.build
+
+        def record(enabled, **kwargs):
+            seen.append(enabled)
+            return original(False)
+
+        cli.notify.build = record
+        try:
+            yield seen
+        finally:
+            cli.notify.build = original
 
 
 class Validate(CliCase):
@@ -195,6 +214,19 @@ class DetachCommand(CliCase):
         self.assertIn("--retry-blocked", cli.detach_command("/e", "/m", True))
         self.assertNotIn("--retry-blocked", cli.detach_command("/e", "/m", False))
 
+    def test_notify_is_carried_through_only_when_asked(self):
+        """Issue #44: this argv is the whole channel by which a detached runner learns the
+        operator wants notifications. The child is an ordinary `run` with no `--detach`, so it
+        takes the same path a foreground `run --notify` takes."""
+        self.assertIn("--notify", cli.detach_command("/e", "/m", False, notify=True))
+        self.assertNotIn("--notify", cli.detach_command("/e", "/m", False, notify=False))
+
+    def test_the_flags_do_not_displace_each_other_or_the_interpreter(self):
+        argv = cli.detach_command("/x/relay_cli.py", "/x/manifest.toml", True, notify=True)
+        self.assertEqual(argv[1], "-u")
+        self.assertEqual(argv[3:5], ["run", "/x/manifest.toml"])
+        self.assertEqual(sorted(argv[5:]), ["--notify", "--retry-blocked"])
+
 
 class FollowedRun(CliCase):
     """U3: `run --follow` launches the runner, follows it from the launch, and reports."""
@@ -328,21 +360,98 @@ class FollowedRun(CliCase):
 
     def test_notifications_are_off_unless_the_flag_is_given(self):
         """The suite is hermetic by construction: no case passes --notify, so no case can fire
-        one. This pins the default rather than trusting it."""
-        seen = []
-        original = cli.notify.build
+        one. This pins the default rather than trusting it.
 
-        def record(enabled, **kwargs):
-            seen.append(enabled)
-            return original(False)
-
-        cli.notify.build = record
-        try:
+        Two calls, not one: the foreground `run` builds the runner's notifier (issue #44) and
+        the `tail` builds the follower's. Both are off.
+        """
+        with self.recording_notify() as seen:
             self.complete_run()
             self.call("tail", self.manifest_path)
+        self.assertEqual(seen, [False, False])
+
+
+class WhoNotifies(CliCase):
+    """Issue #44, KTD4: exactly one component notifies per phase event, and it is the one that
+    outlives the operator's attention.
+
+    Nothing here executes a notifier. Every case reads what `notify.build` was asked for, which
+    is the same discipline `test_notify` follows for the module itself.
+    """
+
+    def detach_argv(self, *extra):
+        """The runner child's argv, captured as `_detach` launches it.
+
+        `cli` spawns more than one process on this path: the backend readiness probe shells out
+        too. Select on the entry point rather than taking the last call, or the assertion lands
+        on `claude plugin list` and passes or fails for the wrong reason.
+        """
+        calls = []
+        original = cli.subprocess.Popen
+
+        def fake(command, **kwargs):
+            argv = list(command)
+            if not any("relay_cli.py" in part for part in argv):
+                # `subprocess.run` builds a Popen internally, so this patch sees the manifest's
+                # own git and readiness probes too. Substituting for those would fail validation
+                # and return before `_detach` was ever reached.
+                return original(command, **kwargs)
+            calls.append(argv)
+            return original([sys.executable, "-c", "pass"], **kwargs)
+
+        cli.subprocess.Popen = fake
+        try:
+            self.call("run", self.manifest_path, *extra)
         finally:
-            cli.notify.build = original
+            cli.subprocess.Popen = original
+        self.assertEqual(len(calls), 1, "expected exactly one runner launch: %r" % calls)
+        return calls[0]
+
+    def test_a_foreground_run_builds_the_runners_notifier_from_the_flag(self):
+        with self.recording_notify() as seen:
+            self.task_success("T-1")
+            self.closeout_landed("T-1")
+            self.task_blocked("T-2")
+            self.closeout_blocked("T-2")
+            self.task_success("T-3")
+            self.closeout_landed("T-3")
+            self.call("run", self.manifest_path, "--notify")
+        self.assertEqual(seen, [True])
+
+    def test_a_detached_launch_carries_the_flag_to_the_child(self):
+        self.assertIn("--notify", self.detach_argv("--detach", "--notify"))
+
+    def test_a_detached_launch_without_the_flag_carries_nothing(self):
+        self.assertNotIn("--notify", self.detach_argv("--detach"))
+
+    def test_a_followed_launch_carries_the_flag_to_the_child_too(self):
+        """The launch SKILL.md documents is `run --follow --notify --for 540`. Suppressing the
+        child's flag here would leave that launch silent nine minutes into a run measured in
+        hours, because the follower exits at the bound and nothing else notifies."""
+        self.assertIn("--notify", self.detach_argv("--follow", "--notify", "--for", "0"))
+
+    def test_a_follower_that_launched_its_own_run_does_not_notify(self):
+        """The other half of exactly-once: the child is notifying, so the follower must not."""
+        self.queue_complete_tasks()
+        with self.recording_notify() as seen:
+            self.call("run", self.manifest_path, "--follow", "--notify", "--for", "0")
         self.assertEqual(seen, [False])
+        self.wait_for_terminal()
+
+    def test_tail_notifies_because_it_launched_nothing(self):
+        self.queue_complete_tasks()
+        self.call("run", self.manifest_path)
+        with self.recording_notify() as seen:
+            self.call("tail", self.manifest_path, "--notify")
+        self.assertEqual(seen, [True])
+
+    def queue_complete_tasks(self):
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_blocked("T-2")
+        self.closeout_blocked("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
 
 
 class StatusVerb(CliCase):

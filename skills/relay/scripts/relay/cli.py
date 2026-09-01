@@ -43,7 +43,8 @@ def _add_follow_options(parser):
     parser.add_argument("--for", type=int, dest="for_seconds", metavar="SECONDS",
                         help="stop following after this many seconds; the run continues")
     parser.add_argument("--notify", action="store_true",
-                        help="fire a macOS notification on each phase event")
+                        help="fire a macOS notification on each phase event, from the runner "
+                             "itself on `run` and from the follower on `tail`")
 
 
 def build_parser():
@@ -156,7 +157,8 @@ def cmd_run(args, env, out):
         return _detach(args, manifest, env, out)
     outcome = run_module.run(manifest, adapter=adapter, home=env.get("HOME"), base_env=env,
                              retry_blocked=args.retry_blocked,
-                             stream=lambda line: out.write(line + "\n"))
+                             stream=lambda line: out.write(line + "\n"),
+                             notifier=notify.build(getattr(args, "notify", False)))
     if outcome.message:
         out.write("%s\n" % outcome.message)
     if outcome.store is not None:
@@ -164,16 +166,23 @@ def cmd_run(args, env, out):
     return outcome.exit_code
 
 
-def detach_command(entry, manifest_path, retry_blocked):
+def detach_command(entry, manifest_path, retry_blocked, notify=False):
     """The argv for a detached runner.
 
     `-u` is load-bearing. The child's stdout is `runner.log`, and a block buffered Python writes
     nothing to a file until 8KB or exit, so without it the log SKILL.md calls followable stays
     empty for the length of the run.
+
+    `--notify` is the whole channel by which a detached runner learns the operator wants
+    notifications (issue #44). The child is an ordinary `run` with no `--detach`, so it takes the
+    same code path a foreground `run --notify` takes and there is no second mechanism to keep in
+    step.
     """
     command = [sys.executable, "-u", entry, "run", manifest_path]
     if retry_blocked:
         command.append("--retry-blocked")
+    if notify:
+        command.append("--notify")
     return command
 
 
@@ -185,7 +194,8 @@ def _detach(args, manifest, env, out):
     store = _store_for(manifest, env)
     log_path = store.path("runner.log")
     entry = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "relay_cli.py")
-    command = detach_command(entry, os.path.abspath(args.manifest), args.retry_blocked)
+    command = detach_command(entry, os.path.abspath(args.manifest), args.retry_blocked,
+                             notify=getattr(args, "notify", False))
     if shutil.which("caffeinate"):
         command = ["caffeinate", "-i"] + command
     following = getattr(args, "follow", False)
@@ -253,6 +263,11 @@ def _follow(args, manifest, store, out, floor=None, proc=None):
     foreground `run` would have printed. `tail` follows a run somebody else started and passes
     none.
 
+    It also decides who notifies (KTD4). A follower that launched its own run has already passed
+    `--notify` down to that child, which notifies for the whole run rather than only until this
+    follower's `--for` bound, so this one stays quiet and each phase event notifies exactly once.
+    `tail` launched nothing, so it is the notifier.
+
     Four endings. A run status maps to an exit code. `None` is the `--for` bound, which is not a
     failure: the run continues. `GONE` is a launched process that exited without a record. An
     interrupt is the operator, which is an ordinary ending too.
@@ -268,7 +283,7 @@ def _follow(args, manifest, store, out, floor=None, proc=None):
             manifest, store, lambda line: out.write(line + "\n"), floor=floor,
             deadline_seconds=getattr(args, "for_seconds", None),
             phases_only=getattr(args, "phases", False),
-            notifier=notify.build(getattr(args, "notify", False)),
+            notifier=notify.build(getattr(args, "notify", False) and not launched),
             runner_alive=(lambda: proc.poll() is None) if launched else None)
     except KeyboardInterrupt:
         # The operator stopping a follower is an ordinary ending, not a fault, and the runner is
