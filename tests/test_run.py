@@ -1652,3 +1652,134 @@ class UnenforcedRun(RunCase):
         self.assertEqual(record["halt_evidence"]["error_type"], "destructive_call")
         self.assertIn("relay/T-1", self.relay_branches())
         self.assertEqual(gitread.rev_parse(self.repo, "origin/main"), origin)
+
+
+class PhaseEvents(RunCase):
+    """Issue #44, U2: the Runner's own phase events, and their isolation from the run.
+
+    A run launched bare with `--detach` reaches the operator through nothing today. These cases
+    pin what the Runner announces and, more importantly, that announcing it cannot change what
+    the run decides.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_blocked("T-2")
+        self.closeout_blocked("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+        self.seen = []
+
+    def notifier(self, body):
+        self.seen.append(body)
+
+    def test_every_status_move_is_announced_in_order(self):
+        outcome = self.go(notifier=self.notifier)
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        moves = [line for line in self.seen if " is now " in line]
+        self.assertEqual(moves[0], "T-1 is now running")
+        self.assertIn("T-1 is now landed", moves)
+        self.assertIn("T-2 is now blocked", moves)
+        self.assertIn("T-3 is now landed", moves)
+        # Per task, in the order the runner wrote them, never interleaved: the runner is serial.
+        for task_id in ("T-1", "T-2", "T-3"):
+            mine = [line for line in moves if line.startswith(task_id)]
+            self.assertEqual(mine[0], "%s is now running" % task_id)
+
+    def test_the_last_announcement_names_the_run_status_and_its_counts(self):
+        self.go(notifier=self.notifier)
+        last = self.seen[-1]
+        self.assertIn(contracts.RUN_COMPLETED, last)
+        self.assertIn("2 landed", last)
+        self.assertIn("1 blocked", last)
+
+    def test_the_phase_lines_reach_the_stream_with_no_notifier_at_all(self):
+        lines = []
+        outcome = self.go(stream=lines.append)
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        self.assertIn("T-1 is now running", lines)
+        self.assertIn("T-3 is now landed", lines)
+
+    def test_a_notifier_that_always_raises_changes_nothing_about_the_run(self):
+        """KTD5's first half. The runner is unattended: a desktop that refuses a notification
+        must not be able to halt a run or lose a landing."""
+        def boom(_body):
+            raise RuntimeError("the desktop said no")
+
+        outcome = self.go(notifier=boom)
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        records = self.store().records()
+        self.assertEqual(records["T-1"]["status"], contracts.STATUS_LANDED)
+        self.assertEqual(records["T-2"]["status"], contracts.STATUS_BLOCKED)
+        self.assertEqual(records["T-3"]["status"], contracts.STATUS_LANDED)
+        self.assertEqual(self.store().terminal()["run_status"], contracts.RUN_COMPLETED)
+
+    def test_a_stream_that_raises_on_a_phase_line_changes_nothing_about_the_run(self):
+        """Scoped to the phase lines this unit adds. `launch.launch` writes the task's own
+        stream json through the same callable and has never been guarded, so a stream that
+        raises on everything is a pre-existing failure, not one to pin here."""
+        def boom(line):
+            if " is now " in line or line.startswith("run "):
+                raise RuntimeError("the pipe closed")
+
+        outcome = self.go(stream=boom, notifier=self.notifier)
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        self.assertEqual(self.store().get("T-3")["status"], contracts.STATUS_LANDED)
+        # The stream failing does not cost the notification.
+        self.assertIn("T-1 is now running", self.seen)
+
+    def test_a_none_stream_still_notifies_and_raises_nothing(self):
+        """`run.run` guards `stream is not None` at six call sites, so None is a supported
+        caller. The announce path has to tolerate it rather than lean on the exception guard,
+        which would swallow the notification along with the TypeError."""
+        outcome = self.go(stream=None, notifier=self.notifier)
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        self.assertIn("T-1 is now running", self.seen)
+
+    def test_a_caller_supplied_store_still_emits(self):
+        store = self.store()
+        self.go(store=store, notifier=self.notifier)
+        self.assertIn("T-1 is now running", self.seen)
+
+    def test_no_notifier_fires_nothing(self):
+        self.go()
+        self.assertEqual(self.seen, [])
+
+
+class PhaseEventsOnReclaim(RunCase):
+    """The reclaim is the strongest signal an unattended operator can get, and it is written by
+    `_mark_crashed` rather than by the run loop, so it only reaches the operator if the observer
+    is attached before `acquire()`."""
+
+    def test_a_stale_lease_reclaim_is_announced(self):
+        self.seed_stale_reclaim_on_t1()
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_blocked("T-2")
+        self.closeout_blocked("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+        seen = []
+        self.go(store=self.reclaiming_store(), notifier=seen.append)
+        self.assertIn("T-1 is now halted", seen)
+
+
+class PhaseEventsOnHalt(RunCase):
+    """The ending an operator most needs on their desktop. A dirty-tree timeout is run scoped,
+    so the run stops rather than stepping past it, and the last announcement is the one thing
+    that says so to somebody who is not watching."""
+
+    def test_a_halted_run_names_the_halt_and_its_counts(self):
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.queue_entry("success.jsonl", DIRTY_AND_HANG_SH)
+        seen = []
+        outcome = self.go(timeout_overrides={"task_seconds": 2}, notifier=seen.append)
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED, outcome.message)
+        last = seen[-1]
+        self.assertIn(contracts.RUN_HALTED, last)
+        self.assertIn("1 landed", last)
+        self.assertIn("halted on T-2", last)
+        self.assertIn(contracts.HALT_TIMEOUT, last)
