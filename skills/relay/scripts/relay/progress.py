@@ -59,7 +59,8 @@ def _entry(task_id, record, now, in_manifest):
     """One line's worth of facts. A record the manifest no longer names carries no elapsed: it
     belongs to a different run's list, so a duration beside it would read as this run's."""
     if record is None:
-        return {"id": task_id, "status": TODO, "elapsed_seconds": None, "in_manifest": True}
+        return {"id": task_id, "status": TODO, "elapsed_seconds": None,
+                "in_manifest": in_manifest}
     status = record.get("status")
     return {
         "id": task_id,
@@ -103,6 +104,9 @@ def build(manifest, store, now=time.time, raw=None):
         "tasks": entries,
         "counts": counts,
         "total_seconds": sum(measured) if measured else None,
+        # Carried rather than re-derived in `lines`, the same way `landed_sample` is: both answer
+        # "how many things is this number drawn from", and both belong to the pass that counted.
+        "measured_count": len(measured),
         "landed_sample": len(landed),
         "estimate_seconds": _estimate(mine, landed),
     }
@@ -142,15 +146,20 @@ def duration(seconds):
     return "%dh %dm" % (hours, rest // 60)
 
 
+def format_counts(counts):
+    """A status count map as one sorted, comma joined phrase. Shared with the Runner's terminal
+    phase event, which counts a different population (every record in the store, rather than the
+    manifest's own tasks with pending folded into todo) but says it the same way, so an operator
+    reads one vocabulary whether the line reached them on the desktop or from `status`."""
+    return ", ".join("%d %s" % (counts[status], status) for status in sorted(counts))
+
+
 def lines(data):
     """The text form. Each line is one question an operator asks `status` to answer."""
-    counts = data["counts"]
-    tally = ", ".join("%d %s" % (counts[status], status) for status in sorted(counts))
-    out = ["progress: %s" % (tally or "nothing recorded yet")]
+    out = ["progress: %s" % (format_counts(data["counts"]) or "nothing recorded yet")]
     total = duration(data["total_seconds"])
     if total is not None:
-        out.append("elapsed: %s across %d task(s)" % (total, len(
-            [e for e in data["tasks"] if e["in_manifest"] and e["elapsed_seconds"] is not None])))
+        out.append("elapsed: %s across %d task(s)" % (total, data["measured_count"]))
     if data["estimate_seconds"] is None:
         out.append("remaining: no estimate yet, no landed task carries a duration")
     else:

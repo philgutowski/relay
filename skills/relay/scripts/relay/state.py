@@ -230,17 +230,18 @@ class StateStore:
             moved = [(task_id, before.get(task_id), after)
                      for task_id, after in self._statuses(state).items()
                      if after != before.get(task_id)]
-            for task_id, was, _now in moved:
+            for task_id, was, _after in moved:
                 self._stamp(state, task_id, was, explicit)
             self._write_locked(state)
         finally:
             os.close(fd)
         # Outside the lock deliberately. The Runner's observer fires a notification, and holding
         # the flock across an `osascript` call would block every reader, `status` included, for as
-        # long as that call took.
+        # long as that call took. `moved` is bound only on the path that reached `_write_locked`,
+        # so an `fn` that raised announces nothing, which is right: nothing was persisted.
         if self.observer is not None:
-            for task_id, was, now in moved:
-                self.observer(task_id, was, now)
+            for task_id, was, after in moved:
+                self.observer(task_id, was, after)
         return result
 
     # Lease.
@@ -454,18 +455,16 @@ class StateStore:
     def upsert(self, task_id, **fields):
         """Id-keyed merge: replace only the keys given, keep every other field. Unknown keys
         are kept too, so a newer writer and an older reader can share a file."""
-        out = {}
-
         def fn(state):
             record = state["tasks"].get(task_id) or new_record(task_id)
             record.update(fields)
             state["tasks"][task_id] = record
 
         self._mutate(fn, explicit=set(fields))
-        # Read back after the mutation rather than inside it: the transition rule may have
-        # stamped `started_at` or `ended_at` on this record after `fn` returned.
-        out["record"] = self.get(task_id)
-        return out["record"]
+        # Read back after the mutation rather than capturing the record inside `fn`: the
+        # transition rule stamps `started_at` or `ended_at` after `fn` returns, so a copy taken
+        # in there would be missing the record's own timings.
+        return self.get(task_id)
 
     def get(self, task_id):
         state = self.read() or {}

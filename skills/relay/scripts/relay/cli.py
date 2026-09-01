@@ -166,7 +166,7 @@ def cmd_run(args, env, out):
     return outcome.exit_code
 
 
-def detach_command(entry, manifest_path, retry_blocked, notify=False):
+def detach_command(entry, manifest_path, retry_blocked, notify_on=False):
     """The argv for a detached runner.
 
     `-u` is load-bearing. The child's stdout is `runner.log`, and a block buffered Python writes
@@ -177,11 +177,16 @@ def detach_command(entry, manifest_path, retry_blocked, notify=False):
     notifications (issue #44). The child is an ordinary `run` with no `--detach`, so it takes the
     same code path a foreground `run --notify` takes and there is no second mechanism to keep in
     step.
+
+    The parameter is `notify_on` rather than mirroring the flag name the way `retry_blocked`
+    does, because `notify` is a module this file imports and calls twice elsewhere; a bool of
+    that name here would shadow it for anyone later reaching for `notify.available()` inside
+    this function.
     """
     command = [sys.executable, "-u", entry, "run", manifest_path]
     if retry_blocked:
         command.append("--retry-blocked")
-    if notify:
+    if notify_on:
         command.append("--notify")
     return command
 
@@ -195,7 +200,7 @@ def _detach(args, manifest, env, out):
     log_path = store.path("runner.log")
     entry = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "relay_cli.py")
     command = detach_command(entry, os.path.abspath(args.manifest), args.retry_blocked,
-                             notify=getattr(args, "notify", False))
+                             notify_on=getattr(args, "notify", False))
     if shutil.which("caffeinate"):
         command = ["caffeinate", "-i"] + command
     following = getattr(args, "follow", False)

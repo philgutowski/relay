@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field, replace
 
 from . import (adapters, backends, brief, classify, closeout, contracts, gitread, gitwrite,
-               launch, manifest as manifest_module, state, summary, verify)
+               launch, manifest as manifest_module, progress, state, summary, verify)
 
 EXIT_OK = 0
 EXIT_CONFIG = 1
@@ -146,12 +146,17 @@ def _announcer(stream, notifier):
 def _counts_line(store, run_status):
     """The terminal record's phase event (R3). Read from the records rather than from a tally the
     loop keeps, so a status another path wrote is counted too, and short enough to read inside a
-    notification body."""
+    notification body.
+
+    Rendered through `progress.format_counts` so this line and the one `relay status` prints
+    cannot drift into two vocabularies for one fact. The populations differ on purpose: this
+    counts every record in the store, while `status` counts the manifest's own tasks.
+    """
     counts = {}
     for record in store.records().values():
         status = record.get("status")
         counts[status] = counts.get(status, 0) + 1
-    tally = ", ".join("%d %s" % (counts[status], status) for status in sorted(counts))
+    tally = progress.format_counts(counts)
     return "run %s: %s" % (run_status, tally) if tally else "run %s" % run_status
 
 

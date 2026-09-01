@@ -218,11 +218,11 @@ class DetachCommand(CliCase):
         """Issue #44: this argv is the whole channel by which a detached runner learns the
         operator wants notifications. The child is an ordinary `run` with no `--detach`, so it
         takes the same path a foreground `run --notify` takes."""
-        self.assertIn("--notify", cli.detach_command("/e", "/m", False, notify=True))
-        self.assertNotIn("--notify", cli.detach_command("/e", "/m", False, notify=False))
+        self.assertIn("--notify", cli.detach_command("/e", "/m", False, notify_on=True))
+        self.assertNotIn("--notify", cli.detach_command("/e", "/m", False, notify_on=False))
 
     def test_the_flags_do_not_displace_each_other_or_the_interpreter(self):
-        argv = cli.detach_command("/x/relay_cli.py", "/x/manifest.toml", True, notify=True)
+        argv = cli.detach_command("/x/relay_cli.py", "/x/manifest.toml", True, notify_on=True)
         self.assertEqual(argv[1], "-u")
         self.assertEqual(argv[3:5], ["run", "/x/manifest.toml"])
         self.assertEqual(sorted(argv[5:]), ["--notify", "--retry-blocked"])
