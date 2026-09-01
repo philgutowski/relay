@@ -787,13 +787,20 @@ class Reassignment(RunCase):
     first run's values and it proved nothing about a relaunch.
     """
 
+    def setUp(self):
+        super().setUp()
+        # T-2 alone, the way UnenforcedRun keeps one Task: every case here runs the flow twice,
+        # and landing T-1 and T-3 each time would be four stub launches per test that prove
+        # nothing about routing.
+        text = MANIFEST.replace("__REPO__", self.repo)
+        blocks = text.split("[[tasks]]")
+        with open(self.manifest_path, "w") as handle:
+            handle.write(blocks[0] + "[[tasks]]" + blocks[2])
+        self.manifest = mf.load(self.manifest_path)
+
     def first_run_blocks_t2(self):
-        self.task_success("T-1")
-        self.closeout_landed("T-1")
         self.queue_entry(None)
         self.closeout_halted("T-2")
-        self.task_success("T-3")
-        self.closeout_landed("T-3")
         outcome = self.go()
         self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
         record = self.store().get("T-2")
