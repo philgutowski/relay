@@ -25,18 +25,27 @@ _PINS = contracts.BACKEND_PINS["codex"]
 # Flags backends.codex.build_args actually emits. Anything outside this set is refused (KTD2):
 # a lenient stub would silently accept a build_args regression instead of failing the test that
 # exercises it.
-_VALUE_FLAGS = {"--sandbox", "--model", "-C", "--output-last-message", "--add-dir"}
-_BOOL_FLAGS = {"--json"}
+_VALUE_FLAGS = {"--sandbox", "--model", "-C", "--output-last-message", "--add-dir", "-c"}
+_BOOL_FLAGS = {"--json", "--strict-config"}
+_REPEATABLE_FLAGS = {"--add-dir", "-c"}
 
 
-# Every flag build_args always emits, --add-dir excluded since it is zero-or-more.
-_REQUIRED_FLAGS = (_VALUE_FLAGS | _BOOL_FLAGS) - {"--add-dir"}
+# Every flag build_args always emits. --add-dir is zero-or-more and excluded. The two issue #51
+# tokens are emitted off pins rather than unconditionally, so they are required here exactly when
+# the pin says codex emits them: a stub that always required them would fail an argv that is
+# correct for an empty pin, and one that never required them would accept the dropped-token
+# regression this grammar exists to catch.
+_REQUIRED_FLAGS = (_VALUE_FLAGS | _BOOL_FLAGS) - _REPEATABLE_FLAGS
+if _PINS["config_overrides"]:
+    _REQUIRED_FLAGS |= {"-c"}
+if not _PINS["strict_config"]:
+    _REQUIRED_FLAGS -= {"--strict-config"}
 
 
 def parse_args(argv):
     if not argv or argv[0] != "exec":
         raise ValueError("expected leading 'exec', got %r" % (argv[:1],))
-    flags = {"add-dir": []}
+    flags = {"add-dir": [], "config": []}
     seen = set()
     i = 1
     while i < len(argv):
@@ -51,6 +60,10 @@ def parse_args(argv):
             value = argv[i + 1]
             if arg == "--add-dir":
                 flags["add-dir"].append(value)
+            elif arg == "-c":
+                # Not `arg.lstrip("-")`: that would collide with -C's own `C` key only by case,
+                # and a dict is not the place to rest a contract on letter case.
+                flags["config"].append(value)
             else:
                 flags[arg.lstrip("-")] = value
             seen.add(arg)

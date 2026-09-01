@@ -434,9 +434,22 @@ class PerBackendArguments(LaunchCase):
         self.assertEqual(codex[codex.index("-C") + 1], repo)
         self.assertIn("--add-dir", codex)
         self.assertEqual(codex[codex.index("--add-dir") + 1], os.path.join(repo, ".git"))
+        self.assertIn("--strict-config", codex)
+        self.assertIn("-c", codex)
+        # Spelled out, not read off the pin. Issue #51: an emptied pin would drop the token from
+        # the argv and drop the stub's requirement for it in the same edit.
+        self.assertEqual(codex[codex.index("-c") + 1],
+                         "sandbox_workspace_write.network_access=true")
         self.assertEqual(codex[-1], BRIEF)
         self.assertNotIn("danger-full-access", joined)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", joined)
+
+    def test_only_codex_carries_the_config_override_tokens(self):
+        for name in ("claude", "grok"):
+            args, _ = self.args_for(name)
+            self.assertNotIn("-c", args, name)
+            self.assertNotIn("--strict-config", args, name)
+            self.assertNotIn("sandbox_workspace_write.network_access=true", " ".join(args), name)
 
     def test_a_backend_without_a_deny_flag_omits_it_and_still_resolves_the_disallow_list(self):
         args, _ = self.args_for("codex")
