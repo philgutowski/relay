@@ -3,10 +3,12 @@
 The summary tests hold R46's one direction: the JSON is the summary and the text is rendered
 from it, so every text line names the JSON field it came from.
 """
+import contextlib
 import io
 import json
 import os
 import re
+import sys
 import time
 import unittest
 from types import SimpleNamespace
@@ -61,6 +63,23 @@ class CliCase(RunCase):
         self.closeout_landed("T-1")
         self.queue_entry("success.jsonl", None)
         return self.call("run", self.manifest_path)
+
+    @contextlib.contextmanager
+    def recording_notify(self):
+        """Records what each `notify.build` call was asked for and hands back a disabled
+        notifier, so a case can prove the wiring without any case being able to fire one."""
+        seen = []
+        original = cli.notify.build
+
+        def record(enabled, **kwargs):
+            seen.append(enabled)
+            return original(False)
+
+        cli.notify.build = record
+        try:
+            yield seen
+        finally:
+            cli.notify.build = original
 
 
 class Validate(CliCase):
@@ -195,6 +214,19 @@ class DetachCommand(CliCase):
         self.assertIn("--retry-blocked", cli.detach_command("/e", "/m", True))
         self.assertNotIn("--retry-blocked", cli.detach_command("/e", "/m", False))
 
+    def test_notify_is_carried_through_only_when_asked(self):
+        """Issue #44: this argv is the whole channel by which a detached runner learns the
+        operator wants notifications. The child is an ordinary `run` with no `--detach`, so it
+        takes the same path a foreground `run --notify` takes."""
+        self.assertIn("--notify", cli.detach_command("/e", "/m", False, notify_on=True))
+        self.assertNotIn("--notify", cli.detach_command("/e", "/m", False, notify_on=False))
+
+    def test_the_flags_do_not_displace_each_other_or_the_interpreter(self):
+        argv = cli.detach_command("/x/relay_cli.py", "/x/manifest.toml", True, notify_on=True)
+        self.assertEqual(argv[1], "-u")
+        self.assertEqual(argv[3:5], ["run", "/x/manifest.toml"])
+        self.assertEqual(sorted(argv[5:]), ["--notify", "--retry-blocked"])
+
 
 class FollowedRun(CliCase):
     """U3: `run --follow` launches the runner, follows it from the launch, and reports."""
@@ -328,21 +360,117 @@ class FollowedRun(CliCase):
 
     def test_notifications_are_off_unless_the_flag_is_given(self):
         """The suite is hermetic by construction: no case passes --notify, so no case can fire
-        one. This pins the default rather than trusting it."""
-        seen = []
-        original = cli.notify.build
+        one. This pins the default rather than trusting it.
 
-        def record(enabled, **kwargs):
-            seen.append(enabled)
-            return original(False)
-
-        cli.notify.build = record
-        try:
+        Two calls, not one: the foreground `run` builds the runner's notifier (issue #44) and
+        the `tail` builds the follower's. Both are off.
+        """
+        with self.recording_notify() as seen:
             self.complete_run()
             self.call("tail", self.manifest_path)
+        self.assertEqual(seen, [False, False])
+
+
+class WhoNotifies(CliCase):
+    """Issue #44, KTD4: exactly one component notifies per phase event, and it is the one that
+    outlives the operator's attention.
+
+    Nothing here executes a notifier. Every case reads what `notify.build` was asked for, which
+    is the same discipline `test_notify` follows for the module itself.
+    """
+
+    def detach_argv(self, *extra):
+        """The runner child's argv, captured as `_detach` launches it.
+
+        `cli` spawns more than one process on this path: the backend readiness probe shells out
+        too. Select on the entry point rather than taking the last call, or the assertion lands
+        on `claude plugin list` and passes or fails for the wrong reason.
+        """
+        calls = []
+        original = cli.subprocess.Popen
+
+        def fake(command, **kwargs):
+            argv = list(command)
+            if not any("relay_cli.py" in part for part in argv):
+                # `subprocess.run` builds a Popen internally, so this patch sees the manifest's
+                # own git and readiness probes too. Substituting for those would fail validation
+                # and return before `_detach` was ever reached.
+                return original(command, **kwargs)
+            calls.append(argv)
+            return original([sys.executable, "-c", "pass"], **kwargs)
+
+        cli.subprocess.Popen = fake
+        try:
+            self.call("run", self.manifest_path, *extra)
         finally:
-            cli.notify.build = original
+            cli.subprocess.Popen = original
+        self.assertEqual(len(calls), 1, "expected exactly one runner launch: %r" % calls)
+        return calls[0]
+
+    def test_a_foreground_run_builds_the_runners_notifier_from_the_flag(self):
+        with self.recording_notify() as seen:
+            self.task_success("T-1")
+            self.closeout_landed("T-1")
+            self.task_blocked("T-2")
+            self.closeout_blocked("T-2")
+            self.task_success("T-3")
+            self.closeout_landed("T-3")
+            self.call("run", self.manifest_path, "--notify")
+        self.assertEqual(seen, [True])
+
+    def test_a_detached_launch_carries_the_flag_to_the_child(self):
+        self.assertIn("--notify", self.detach_argv("--detach", "--notify"))
+
+    def test_a_detached_launch_without_the_flag_carries_nothing(self):
+        self.assertNotIn("--notify", self.detach_argv("--detach"))
+
+    def test_a_followed_launch_carries_the_flag_to_the_child_too(self):
+        """The launch SKILL.md documents is `run --follow --notify --for 540`. Suppressing the
+        child's flag here would leave that launch silent nine minutes into a run measured in
+        hours, because the follower exits at the bound and nothing else notifies."""
+        self.assertIn("--notify", self.detach_argv("--follow", "--notify", "--for", "0"))
+
+    def test_a_follower_that_launched_its_own_run_does_not_notify(self):
+        """The other half of exactly-once: the child is notifying, so the follower must not.
+
+        The child is faked. `recording_notify` patches `notify.build` in this process only, and
+        a real detached child would inherit the real PATH, find `osascript`, and fire actual
+        desktop notifications as it landed tasks. That is the one thing the suite must never do.
+        """
+        stub = []
+        original = cli.subprocess.Popen
+
+        def fake(command, **kwargs):
+            argv = list(command)
+            if not any("relay_cli.py" in part for part in argv):
+                return original(command, **kwargs)
+            stub.append(argv)
+            return original([sys.executable, "-c", "pass"], **kwargs)
+
+        cli.subprocess.Popen = fake
+        try:
+            with self.recording_notify() as seen:
+                self.call("run", self.manifest_path, "--follow", "--notify", "--for", "0")
+        finally:
+            cli.subprocess.Popen = original
+        self.assertEqual(len(stub), 1, "the runner child was not faked")
+        self.assertIn("--notify", stub[0])
         self.assertEqual(seen, [False])
+
+    def test_tail_notifies_because_it_launched_nothing(self):
+        self.queue_complete_tasks()
+        self.call("run", self.manifest_path)
+        with self.recording_notify() as seen:
+            self.call("tail", self.manifest_path, "--notify")
+        self.assertEqual(seen, [True])
+
+    def queue_complete_tasks(self):
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_blocked("T-2")
+        self.closeout_blocked("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
 
 
 class StatusVerb(CliCase):
@@ -386,6 +514,101 @@ class StatusVerb(CliCase):
         code, out = self.call("status", self.manifest_path)
         self.assertEqual(code, cli.EXIT_OK, out)
         self.assertNotIn("terminal record:", out)
+
+
+class StatusProgressView(CliCase):
+    """U5 (issue #44): the one screen answer to how far along and how much longer.
+
+    `status` keeps everything it printed before; these cases pin what it gained.
+    """
+
+    def status_after_a_complete_run(self):
+        self.complete_run()
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        return out
+
+    def test_the_counts_line_names_what_landed_and_what_is_left(self):
+        out = self.status_after_a_complete_run()
+        self.assertIn("progress:", out)
+        self.assertIn("2 landed", out)
+        self.assertIn("1 blocked", out)
+
+    def test_the_elapsed_line_says_what_it_is_summing(self):
+        out = self.status_after_a_complete_run()
+        self.assertIn("elapsed:", out)
+        self.assertIn("across", out)
+
+    def test_the_estimate_line_is_present_once_something_has_landed(self):
+        out = self.status_after_a_complete_run()
+        self.assertIn("remaining:", out)
+        self.assertIn("landed task", out)
+
+    def test_with_nothing_landed_the_estimate_line_says_so_rather_than_guessing(self):
+        self.seed_stale_reclaim_on_t1()
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("no estimate", out)
+
+    def test_each_task_line_carries_its_elapsed(self):
+        out = self.status_after_a_complete_run()
+        landed = [line for line in out.splitlines() if line.startswith("  T-1 ")]
+        self.assertEqual(len(landed), 1)
+        self.assertRegex(landed[0], r"T-1\s+landed\s+\d+[smh]")
+
+    def test_a_task_with_no_record_prints_todo_and_no_duration(self):
+        """A zero would read as a task that ran instantly rather than one that has not started."""
+        self.seed_stale_reclaim_on_t1()
+        _, out = self.call("status", self.manifest_path)
+        pending = [line for line in out.splitlines() if line.startswith("  T-3 ")]
+        self.assertEqual(len(pending), 1)
+        self.assertIn("todo", pending[0])
+        self.assertNotRegex(pending[0], r"\d+[smh]")
+
+    def test_the_task_lines_follow_the_manifest_rather_than_sorting_by_id(self):
+        """`cmd_status` sorted the records by id, which is the manifest's order here only by
+        accident. Reversing the manifest is what tells the two apart."""
+        with open(self.manifest_path) as handle:
+            text = handle.read()
+        head, sep, rest = text.partition("[[tasks]]")
+        blocks = (sep + rest).split("[[tasks]]")[1:]
+        with open(self.manifest_path, "w") as handle:
+            handle.write(head + "".join("[[tasks]]" + block for block in reversed(blocks)))
+        self.manifest = manifest_module.load(self.manifest_path)
+        self.complete_run()
+        _, out = self.call("status", self.manifest_path)
+        printed = [line.split()[0] for line in out.splitlines()
+                   if line.startswith("  T-")]
+        self.assertEqual(printed, ["T-3", "T-2", "T-1"])
+
+    def test_status_with_no_state_still_says_so_and_exits_ok(self):
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("no state", out)
+        self.assertNotIn("progress:", out)
+
+    def test_a_crashed_run_reports_no_live_duration(self):
+        """The state directory outlives the run. A record left reading `running` by a runner
+        that died is not a task in progress, and the same screen saying `crashed` must not also
+        print a duration that grows every time the operator looks."""
+        self.seed_stale_reclaim_on_t1()
+        self.store().break_lease()
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        running = [line for line in out.splitlines() if line.startswith("  T-1 ")]
+        self.assertEqual(len(running), 1)
+        self.assertNotRegex(running[0], r"\d+[smh]")
+
+    def test_the_progress_view_takes_no_lease(self):
+        self.complete_run()
+        holder = self.store()
+        self.assertTrue(holder.acquire().ok)
+        before = json.dumps(holder.read(), sort_keys=True)
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("progress:", out)
+        self.assertEqual(json.dumps(self.store().read(), sort_keys=True), before)
+        holder.release()
 
 
 class StatusAgainstAShrunkManifest(CliCase):

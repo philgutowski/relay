@@ -106,6 +106,20 @@ class Send(unittest.TestCase):
         """A follower that died because a notification failed would be worse than a quiet one."""
         notify.send("Relay", "body", runner=Recorder(raises=OSError("no such binary")))
 
+    def test_send_bounds_the_call_in_time(self):
+        """The Runner calls this from its own loop now, synchronously, on the thread that
+        renews the Lease. An unbounded osascript would stall the run, and no exception guard
+        catches a call that never returns."""
+        recorder = Recorder()
+        notify.send("Relay", "body", runner=recorder)
+        _argv, kwargs = recorder.calls[0]
+        self.assertEqual(kwargs["timeout"], notify.TIMEOUT_SECONDS)
+        self.assertGreater(notify.TIMEOUT_SECONDS, 0)
+
+    def test_a_timeout_from_the_runner_does_not_propagate(self):
+        expired = subprocess.TimeoutExpired(cmd=[notify.BINARY], timeout=notify.TIMEOUT_SECONDS)
+        notify.send("Relay", "body", runner=Recorder(raises=expired))
+
 
 if __name__ == "__main__":
     unittest.main()

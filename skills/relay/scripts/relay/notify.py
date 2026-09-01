@@ -1,17 +1,18 @@
-"""Desktop notifications (U1): the follower's one side effect outside its own stream.
+"""Desktop notifications (U1): the one side effect a reporting component has outside its stream.
 
 macOS only, and off unless the operator asks for them. Two reasons for opt in. A notification is
 a side effect on somebody's desktop, which is not a thing a read only verb should do by default.
 And it keeps the suite hermetic by construction: no test passes `--notify`, so no test can fire
 one, rather than every future test having to remember an off switch.
 
-The notifier is the follower's, not the runner's. The follower is the component a human is
-attached to, and keeping the desktop out of the run loop means a failed notification can never
-touch a run's outcome. The cost is that a run launched with `--detach` and nobody following
-notifies nobody.
-
-Nothing here raises. A follower that died because a notification failed would be worse than one
-that stayed quiet.
+Both the follower and the runner notify (issue #44). The runner used to be kept out on the
+grounds that a failed notification must never touch a run's outcome, but a run launched with
+`--detach` and nobody following then notified nobody, which was the whole point of launching it
+unattended. The isolation that reasoning called for is kept, in two halves rather than by the
+runner staying silent. Nothing here raises: a component that died because a notification failed
+would be worse than one that stayed quiet. And `send` is bounded in time, because the runner calls
+it synchronously from the loop that renews the Lease, and an `osascript` that never returns is a
+failure no exception guard can catch.
 """
 import shutil
 import subprocess
@@ -20,6 +21,10 @@ import sys
 BINARY = "osascript"
 DARWIN = "darwin"
 TITLE = "Relay"
+# Long enough for a loaded machine to post a notification, short enough that a hung one costs a
+# run less than a poll interval. Sized like the follower's own constants; no run has needed a
+# specific value tuned against it.
+TIMEOUT_SECONDS = 10
 
 
 def _quote(text):
@@ -46,16 +51,17 @@ def available(platform=None, which=shutil.which):
 
 def send(title, body, runner=subprocess.run):
     """Fire one notification. An argv list, never a shell string, so nothing in a task id or a
-    cause line is interpreted."""
+    cause line is interpreted, and bounded in time so a hung binary cannot hold up a caller."""
     try:
         runner([BINARY, "-e", script_for(title, body)], check=False,
-               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
+               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+               timeout=TIMEOUT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired):
         pass
 
 
 def build(enabled, platform=None, which=shutil.which, runner=subprocess.run):
-    """The notifier a follower takes, or None when there is nothing to send to.
+    """The notifier a runner or a follower takes, or None when there is nothing to send to.
 
     Takes a body and nothing else. The title is always this module's, so binding it here keeps
     the follower from having to know about notifications beyond calling one function.

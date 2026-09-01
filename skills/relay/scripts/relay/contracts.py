@@ -361,6 +361,10 @@ RECORD_STATUSES = (
 )
 # Statuses a reclaimed stale lease turns into halted with class runner_crashed (R55).
 IN_FLIGHT_STATUSES = (STATUS_RUNNING, STATUS_MERGING)
+# Statuses a task does not leave under its own power. Reaching one is what stamps `ended_at`,
+# and a move between two of them is not a new ending: `verify.startup_reverify` promoting a
+# halted record to landed must keep the stamp from the run that did the work.
+TERMINAL_STATUSES = (STATUS_EXCLUDED, STATUS_BLOCKED, STATUS_HALTED, STATUS_LANDED)
 
 # Halt classes (KTD6). `HALT_LINES` are the summary cause line templates, filled from evidence.
 HALT_LANDED = "landed"

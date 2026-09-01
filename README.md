@@ -82,7 +82,7 @@ detached. Everything the skill does is a runner subcommand you can also run your
 ```bash
 python3 skills/relay/scripts/relay_cli.py validate <manifest> --list
 python3 skills/relay/scripts/relay_cli.py run <manifest>
-python3 skills/relay/scripts/relay_cli.py run <manifest> --detach
+python3 skills/relay/scripts/relay_cli.py run <manifest> --detach --notify
 python3 skills/relay/scripts/relay_cli.py status <manifest>
 python3 skills/relay/scripts/relay_cli.py tail <manifest>
 python3 skills/relay/scripts/relay_cli.py summary <manifest>
@@ -96,6 +96,16 @@ ProgramArguments python. For cron it is the python in the crontab command. The g
 and holds until that executable's identity changes. Without it the process stalls on a Files and
 Folders or Full Disk Access prompt on that Mac, with no halt class and no log line, because nothing
 has started yet. Look at the Mac display. This session cannot click it.
+
+`--notify` on macOS fires a desktop notification as each task's status moves and once at the end
+with the run's counts. The runner carries it, so a run launched with a bare `--detach` from
+launchd or cron reaches you with nothing attached to it, and a run you launched with `--follow`
+keeps notifying after you stop following.
+
+`status` is the one screen answer to how far along a run is: the landed, running, halted, and
+todo counts, the elapsed per task and in total, and a rough estimate of what is left drawn from
+the mean of the tasks that have already landed. It says it has no estimate rather than guessing
+when nothing has landed yet. Like `tail` it takes no lease, so it is safe against a live run.
 
 `tail` is how you watch a run that is already going. It follows each task's output in order and
 prints it decoded, one line per event, instead of the stream json that lands in `runner.log`. It

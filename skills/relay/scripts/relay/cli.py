@@ -15,8 +15,8 @@ import shutil
 import subprocess
 import sys
 
-from . import (adapters, contracts, manifest as manifest_module, notify, run as run_module, state,
-               summary, tail as tail_module, verify)
+from . import (adapters, contracts, manifest as manifest_module, notify, progress,
+               run as run_module, state, summary, tail as tail_module, verify)
 
 EXIT_OK = run_module.EXIT_OK
 EXIT_CONFIG = run_module.EXIT_CONFIG
@@ -43,7 +43,8 @@ def _add_follow_options(parser):
     parser.add_argument("--for", type=int, dest="for_seconds", metavar="SECONDS",
                         help="stop following after this many seconds; the run continues")
     parser.add_argument("--notify", action="store_true",
-                        help="fire a macOS notification on each phase event")
+                        help="fire a macOS notification on each phase event, from the runner "
+                             "itself on `run` and from the follower on `tail`")
 
 
 def build_parser():
@@ -156,7 +157,8 @@ def cmd_run(args, env, out):
         return _detach(args, manifest, env, out)
     outcome = run_module.run(manifest, adapter=adapter, home=env.get("HOME"), base_env=env,
                              retry_blocked=args.retry_blocked,
-                             stream=lambda line: out.write(line + "\n"))
+                             stream=lambda line: out.write(line + "\n"),
+                             notifier=notify.build(getattr(args, "notify", False)))
     if outcome.message:
         out.write("%s\n" % outcome.message)
     if outcome.store is not None:
@@ -164,16 +166,28 @@ def cmd_run(args, env, out):
     return outcome.exit_code
 
 
-def detach_command(entry, manifest_path, retry_blocked):
+def detach_command(entry, manifest_path, retry_blocked, notify_on=False):
     """The argv for a detached runner.
 
     `-u` is load-bearing. The child's stdout is `runner.log`, and a block buffered Python writes
     nothing to a file until 8KB or exit, so without it the log SKILL.md calls followable stays
     empty for the length of the run.
+
+    `--notify` is the whole channel by which a detached runner learns the operator wants
+    notifications (issue #44). The child is an ordinary `run` with no `--detach`, so it takes the
+    same code path a foreground `run --notify` takes and there is no second mechanism to keep in
+    step.
+
+    The parameter is `notify_on` rather than mirroring the flag name the way `retry_blocked`
+    does, because `notify` is a module this file imports and calls twice elsewhere; a bool of
+    that name here would shadow it for anyone later reaching for `notify.available()` inside
+    this function.
     """
     command = [sys.executable, "-u", entry, "run", manifest_path]
     if retry_blocked:
         command.append("--retry-blocked")
+    if notify_on:
+        command.append("--notify")
     return command
 
 
@@ -185,7 +199,8 @@ def _detach(args, manifest, env, out):
     store = _store_for(manifest, env)
     log_path = store.path("runner.log")
     entry = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "relay_cli.py")
-    command = detach_command(entry, os.path.abspath(args.manifest), args.retry_blocked)
+    command = detach_command(entry, os.path.abspath(args.manifest), args.retry_blocked,
+                             notify_on=getattr(args, "notify", False))
     if shutil.which("caffeinate"):
         command = ["caffeinate", "-i"] + command
     following = getattr(args, "follow", False)
@@ -205,7 +220,12 @@ def _detach(args, manifest, env, out):
 
 def cmd_status(args, env, out):
     """Reads state and nothing else. It never acquires the lease, so an operator can ask what a
-    live run is doing without disturbing it."""
+    live run is doing without disturbing it.
+
+    It answers two questions now (issue #44). Where the run is, which is the cursor, the lease,
+    and the terminal record it always printed. And how far along it is, which is the counts, the
+    elapsed, and the rough remaining estimate `progress` derives from the record stamps.
+    """
     manifest, failure = _load(args.manifest, out)
     if failure:
         return failure
@@ -214,9 +234,17 @@ def cmd_status(args, env, out):
     if raw is None:
         out.write("no state for %s yet\n" % args.manifest)
         return EXIT_OK
-    out.write("status: %s\n" % store.status_word())
+    word = store.status_word()
+    # The progress view is built from the read above rather than taking its own, so the counts,
+    # the durations, and the per task lines below all describe one moment. `live` is what stops a
+    # crashed run's last record from counting to the present: without it the same screen would
+    # print `status: crashed` beside a task that has been "running" for eight hours.
+    view = progress.build(manifest, store, raw=raw, live=(word == "running"))
+    out.write("status: %s\n" % word)
     cursor = raw.get("cursor", 0)
     out.write("cursor: %d of %d task(s)\n" % (cursor, len(manifest.tasks)))
+    for line in progress.lines(view):
+        out.write(line + "\n")
     # The state directory is keyed on the manifest's real path, so editing the manifest in place
     # keeps the directory and everything the previous run left in it. Say so rather than clamping
     # the number: the cursor and the terminal record are true facts, about a run this manifest no
@@ -238,9 +266,12 @@ def cmd_status(args, env, out):
         if terminal.get("halt_task"):
             out.write("halted on %s with class %s\n"
                       % (terminal.get("halt_task"), terminal.get("halt_class")))
-    for task_id, record in sorted(records.items()):
-        out.write("  %s %s%s\n" % (task_id, record.get("status"),
-                                   "  (not in this manifest)" if task_id not in ids else ""))
+    # Manifest order, then whatever the state directory still holds from a different list, which
+    # is the ordering `summary.build` already uses for the same inputs. Sorting by id put the
+    # tasks in an order the run never followed.
+    for entry in view["tasks"]:
+        out.write("  %s %s%s\n" % (entry["id"], progress.task_line(entry),
+                                   "  (not in this manifest)" if not entry["in_manifest"] else ""))
     out.write("state: %s\n" % store.dir)
     return EXIT_OK
 
@@ -252,6 +283,11 @@ def _follow(args, manifest, store, out, floor=None, proc=None):
     that launched a run can watch that process, and only it owes the operator the summary a
     foreground `run` would have printed. `tail` follows a run somebody else started and passes
     none.
+
+    It also decides who notifies (KTD4). A follower that launched its own run has already passed
+    `--notify` down to that child, which notifies for the whole run rather than only until this
+    follower's `--for` bound, so this one stays quiet and each phase event notifies exactly once.
+    `tail` launched nothing, so it is the notifier.
 
     Four endings. A run status maps to an exit code. `None` is the `--for` bound, which is not a
     failure: the run continues. `GONE` is a launched process that exited without a record. An
@@ -268,7 +304,7 @@ def _follow(args, manifest, store, out, floor=None, proc=None):
             manifest, store, lambda line: out.write(line + "\n"), floor=floor,
             deadline_seconds=getattr(args, "for_seconds", None),
             phases_only=getattr(args, "phases", False),
-            notifier=notify.build(getattr(args, "notify", False)),
+            notifier=notify.build(getattr(args, "notify", False) and not launched),
             runner_alive=(lambda: proc.poll() is None) if launched else None)
     except KeyboardInterrupt:
         # The operator stopping a follower is an ordinary ending, not a fault, and the runner is

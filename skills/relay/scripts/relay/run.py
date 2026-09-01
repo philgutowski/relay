@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field, replace
 
 from . import (adapters, backends, brief, classify, closeout, contracts, gitread, gitwrite,
-               launch, manifest as manifest_module, state, summary, verify)
+               launch, manifest as manifest_module, progress, state, summary, verify)
 
 EXIT_OK = 0
 EXIT_CONFIG = 1
@@ -117,8 +117,59 @@ def _routable(manifest, adapter, digest, repo, branch, baseline_sha):
     return False, "no envelope and the card did not move"
 
 
+def _announcer(stream, notifier):
+    """One phase event: a line, and a notification when the operator asked for them (R2).
+
+    Both come from one call so the printed line and the notification cannot drift, which is the
+    same shape `tail.follow` uses for the Follower's side of the same events.
+
+    Everything is swallowed. This is a report about a run, not a part of one, so a desktop that
+    refuses a notification and a stream whose pipe has closed must both leave the run's outcome
+    exactly where it was (R4, KTD5). The other half of that isolation is the time bound in
+    `notify.send`: an `osascript` that never returns is a failure no guard here could catch.
+    """
+    def announce(text):
+        try:
+            if stream is not None:
+                stream(text)
+        except Exception:
+            pass
+        if notifier is not None:
+            try:
+                notifier(text)
+            except Exception:
+                pass
+
+    return announce
+
+
+def _counts_line(store, run_status):
+    """The terminal record's phase event (R3). Read from the records rather than from a tally the
+    loop keeps, so a status another path wrote is counted too, and short enough to read inside a
+    notification body.
+
+    Rendered through `progress.format_counts` so this line and the one `relay status` prints
+    cannot drift into two vocabularies for one fact. The populations differ on purpose: this
+    counts every record in the store, while `status` counts the manifest's own tasks.
+    """
+    counts = {}
+    for record in store.records().values():
+        # Same guard `state._statuses` applies. This line is built outside `announce`, so a
+        # record shaped unlike the others would escape as a traceback from the run's own last
+        # act rather than costing a notification.
+        if not isinstance(record, dict):
+            continue
+        status = record.get("status")
+        if status is None:
+            continue
+        counts[status] = counts.get(status, 0) + 1
+    tally = progress.format_counts(counts)
+    return "run %s: %s" % (run_status, tally) if tally else "run %s" % run_status
+
+
 def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=print,
-        retry_blocked=False, timeout_overrides=None, launch_kwargs=None, now=time.time):
+        retry_blocked=False, timeout_overrides=None, launch_kwargs=None, now=time.time,
+        notifier=None):
     """Drive one manifest to completion or to a named halt. Returns a RunOutcome; never raises
     for a task level failure, because every one of those is a class an operator can act on."""
     repo = manifest.project.repo
@@ -132,6 +183,12 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
     except adapters.ConfigurationError as exc:
         return RunOutcome(EXIT_CONFIG, message=str(exc))
     store = store or state.StateStore(manifest.path, repo, home=home)
+
+    announce = _announcer(stream, notifier)
+    # Attached before `acquire()`, which is what makes a stale lease reclaim visible: the records
+    # it marks halted are written by `_mark_crashed` inside that call, and it is the strongest
+    # signal an operator who is not watching can receive.
+    store.observer = lambda task_id, _before, after: announce("%s is now %s" % (task_id, after))
 
     acquired = store.acquire()
     if acquired.code == state.LOCKED:
@@ -206,11 +263,12 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
                 store.set_cursor(index + 1)
                 continue
             _write_terminal(store, env, contracts.RUN_HALTED, halt.task_id, halt.halt_class,
-                            config.used_backends)
+                            config.used_backends, announce=announce)
             wrote_terminal = True
             return RunOutcome(EXIT_HALTED, halt.task_id, halt.halt_class, halt.message,
                               store, store.records())
-        _write_terminal(store, env, contracts.RUN_COMPLETED, used_backends=config.used_backends)
+        _write_terminal(store, env, contracts.RUN_COMPLETED,
+                        used_backends=config.used_backends, announce=announce)
         wrote_terminal = True
         outcome.records = store.records()
         return outcome
@@ -221,7 +279,7 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
         if not wrote_terminal:
             try:
                 _write_terminal(store, env, contracts.RUN_CRASHED,
-                                used_backends=config.used_backends)
+                                used_backends=config.used_backends, announce=announce)
             except Exception:
                 pass
         store.release()
@@ -233,12 +291,24 @@ def _git_error_fields(exc):
             "stderr": (exc.stderr or "")[-2000:]}
 
 
-def _write_terminal(store, env, run_status, halt_task=None, halt_class=None, used_backends=()):
-    """Write terminal version evidence for only the CLIs this invocation actually launched."""
+def _write_terminal(store, env, run_status, halt_task=None, halt_class=None, used_backends=(),
+                    announce=None):
+    """Write terminal version evidence for only the CLIs this invocation actually launched.
+
+    The run's last phase event goes out from here rather than from each of the three call sites,
+    so a fourth ending added later cannot forget to announce itself. The counts are read after the
+    record is written, so they describe the run the record just closed.
+    """
     used = sorted(used_backends)
     pinned = {name: backends.build(name).CAPABILITY.version_tested for name in used}
     observed = {name: launch.cli_version(env, backend=name) for name in used}
-    return store.write_terminal(run_status, halt_task, halt_class, pinned, observed)
+    record = store.write_terminal(run_status, halt_task, halt_class, pinned, observed)
+    if announce is not None:
+        line = _counts_line(store, run_status)
+        if halt_task:
+            line += "; halted on %s with class %s" % (halt_task, halt_class)
+        announce(line)
+    return record
 
 
 def _continue_past(cfg, halt):
@@ -435,7 +505,7 @@ def _one_task(cfg, task):
     store.upsert(task.id, status=contracts.STATUS_RUNNING, baseline_sha=baseline_sha,
                  baseline_tracker_status=card_status.get("status"),
                  baseline_comment_id=baseline_comment_id, branch=branch,
-                 brief_sha256=brief_sha, started_at=None, halt_class=None, findings=[],
+                 brief_sha256=brief_sha, halt_class=None, findings=[],
                  continued_past=False, backend=task.backend)
 
     launched = launch.launch(
