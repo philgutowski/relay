@@ -497,6 +497,89 @@ class StatusVerb(CliCase):
         self.assertNotIn("terminal record:", out)
 
 
+class StatusProgressView(CliCase):
+    """U5 (issue #44): the one screen answer to how far along and how much longer.
+
+    `status` keeps everything it printed before; these cases pin what it gained.
+    """
+
+    def status_after_a_complete_run(self):
+        self.complete_run()
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        return out
+
+    def test_the_counts_line_names_what_landed_and_what_is_left(self):
+        out = self.status_after_a_complete_run()
+        self.assertIn("progress:", out)
+        self.assertIn("2 landed", out)
+        self.assertIn("1 blocked", out)
+
+    def test_the_elapsed_line_says_what_it_is_summing(self):
+        out = self.status_after_a_complete_run()
+        self.assertIn("elapsed:", out)
+        self.assertIn("across", out)
+
+    def test_the_estimate_line_is_present_once_something_has_landed(self):
+        out = self.status_after_a_complete_run()
+        self.assertIn("remaining:", out)
+        self.assertIn("landed task", out)
+
+    def test_with_nothing_landed_the_estimate_line_says_so_rather_than_guessing(self):
+        self.seed_stale_reclaim_on_t1()
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("no estimate", out)
+
+    def test_each_task_line_carries_its_elapsed(self):
+        out = self.status_after_a_complete_run()
+        landed = [line for line in out.splitlines() if line.startswith("  T-1 ")]
+        self.assertEqual(len(landed), 1)
+        self.assertRegex(landed[0], r"T-1\s+landed\s+\d+[smh]")
+
+    def test_a_task_with_no_record_prints_todo_and_no_duration(self):
+        """A zero would read as a task that ran instantly rather than one that has not started."""
+        self.seed_stale_reclaim_on_t1()
+        _, out = self.call("status", self.manifest_path)
+        pending = [line for line in out.splitlines() if line.startswith("  T-3 ")]
+        self.assertEqual(len(pending), 1)
+        self.assertIn("todo", pending[0])
+        self.assertNotRegex(pending[0], r"\d+[smh]")
+
+    def test_the_task_lines_follow_the_manifest_rather_than_sorting_by_id(self):
+        """`cmd_status` sorted the records by id, which is the manifest's order here only by
+        accident. Reversing the manifest is what tells the two apart."""
+        with open(self.manifest_path) as handle:
+            text = handle.read()
+        head, sep, rest = text.partition("[[tasks]]")
+        blocks = (sep + rest).split("[[tasks]]")[1:]
+        with open(self.manifest_path, "w") as handle:
+            handle.write(head + "".join("[[tasks]]" + block for block in reversed(blocks)))
+        self.manifest = manifest_module.load(self.manifest_path)
+        self.complete_run()
+        _, out = self.call("status", self.manifest_path)
+        printed = [line.split()[0] for line in out.splitlines()
+                   if line.startswith("  T-")]
+        self.assertEqual(printed, ["T-3", "T-2", "T-1"])
+
+    def test_status_with_no_state_still_says_so_and_exits_ok(self):
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("no state", out)
+        self.assertNotIn("progress:", out)
+
+    def test_the_progress_view_takes_no_lease(self):
+        self.complete_run()
+        holder = self.store()
+        self.assertTrue(holder.acquire().ok)
+        before = json.dumps(holder.read(), sort_keys=True)
+        code, out = self.call("status", self.manifest_path)
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertIn("progress:", out)
+        self.assertEqual(json.dumps(self.store().read(), sort_keys=True), before)
+        holder.release()
+
+
 class StatusAgainstAShrunkManifest(CliCase):
     """U5: the state directory is keyed on the manifest's real path, so editing the manifest in
     place keeps everything the previous, longer run left behind."""

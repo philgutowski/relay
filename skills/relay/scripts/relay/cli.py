@@ -15,8 +15,8 @@ import shutil
 import subprocess
 import sys
 
-from . import (adapters, contracts, manifest as manifest_module, notify, run as run_module, state,
-               summary, tail as tail_module, verify)
+from . import (adapters, contracts, manifest as manifest_module, notify, progress,
+               run as run_module, state, summary, tail as tail_module, verify)
 
 EXIT_OK = run_module.EXIT_OK
 EXIT_CONFIG = run_module.EXIT_CONFIG
@@ -215,7 +215,12 @@ def _detach(args, manifest, env, out):
 
 def cmd_status(args, env, out):
     """Reads state and nothing else. It never acquires the lease, so an operator can ask what a
-    live run is doing without disturbing it."""
+    live run is doing without disturbing it.
+
+    It answers two questions now (issue #44). Where the run is, which is the cursor, the lease,
+    and the terminal record it always printed. And how far along it is, which is the counts, the
+    elapsed, and the rough remaining estimate `progress` derives from the record stamps.
+    """
     manifest, failure = _load(args.manifest, out)
     if failure:
         return failure
@@ -224,9 +229,14 @@ def cmd_status(args, env, out):
     if raw is None:
         out.write("no state for %s yet\n" % args.manifest)
         return EXIT_OK
+    # One read, handed to `progress` rather than letting it take its own. Two reads of a live
+    # run's state would put two different moments on one screen.
+    view = progress.build(manifest, store, raw=raw)
     out.write("status: %s\n" % store.status_word())
     cursor = raw.get("cursor", 0)
     out.write("cursor: %d of %d task(s)\n" % (cursor, len(manifest.tasks)))
+    for line in progress.lines(view):
+        out.write(line + "\n")
     # The state directory is keyed on the manifest's real path, so editing the manifest in place
     # keeps the directory and everything the previous run left in it. Say so rather than clamping
     # the number: the cursor and the terminal record are true facts, about a run this manifest no
@@ -248,9 +258,12 @@ def cmd_status(args, env, out):
         if terminal.get("halt_task"):
             out.write("halted on %s with class %s\n"
                       % (terminal.get("halt_task"), terminal.get("halt_class")))
-    for task_id, record in sorted(records.items()):
-        out.write("  %s %s%s\n" % (task_id, record.get("status"),
-                                   "  (not in this manifest)" if task_id not in ids else ""))
+    # Manifest order, then whatever the state directory still holds from a different list, which
+    # is the ordering `summary.build` already uses for the same inputs. Sorting by id put the
+    # tasks in an order the run never followed.
+    for entry in view["tasks"]:
+        out.write("  %s %s%s\n" % (entry["id"], progress.task_line(entry),
+                                   "  (not in this manifest)" if not entry["in_manifest"] else ""))
     out.write("state: %s\n" % store.dir)
     return EXIT_OK
 
