@@ -143,6 +143,18 @@ def steps_section(text):
 
 
 class LocalMergeTemplate(BriefCase):
+    def test_a_custom_branch_prefix_is_the_create_branch_name(self):
+        text = self.render(self.toml.replace("mirror = []", 'mirror = []\nbranch_prefix = "IW-"'))
+        steps = steps_section(text)
+        self.assertIn("IW-T-1", steps)
+        self.assertNotIn("relay/T-1", steps)
+
+    def test_an_empty_branch_prefix_uses_the_task_id_alone(self):
+        text = self.render(self.toml.replace("mirror = []", 'mirror = []\nbranch_prefix = ""'))
+        steps = steps_section(text)
+        self.assertIn("Create `T-1` from", steps)
+        self.assertNotIn("relay/T-1", steps)
+
     def test_the_brief_orders_the_pipeline_and_keeps_the_runner_owned_steps_out(self):
         text = self.render()
         steps = steps_section(text)

@@ -494,6 +494,7 @@ DEFAULT_CLOSEOUT_TIMEOUT_MINUTES = 20
 DEFAULT_CLOSEOUT_MODEL = "sonnet"
 DEFAULT_CLOSEOUT_EFFORT = "medium"
 DEFAULT_GATE_TIMEOUT_MINUTES = 30
+DEFAULT_TASK_BRANCH_PREFIX = "relay/"
 
 # A push can run the project's gate inside a pre-push hook, so it is bounded by the gate's own
 # timeout plus the network transfer, never by gitread's read timeout. See

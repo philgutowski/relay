@@ -99,6 +99,27 @@ class CompleteManifest(ManifestCase):
         with self.assertRaises(Exception):
             m.shipping_mode = "pr_terminal"
 
+    def test_branch_prefix_defaults_to_relay_slash_and_is_named(self):
+        m = self.load()
+        self.assertEqual(m.project.branch_prefix, "relay/")
+        result = mf.validate(m)
+        self.assertTrue(result.ok, result.errors)
+        self.assertIn("project.branch_prefix = 'relay/'", result.defaults_applied)
+
+    def test_branch_prefix_override_is_not_a_named_default(self):
+        m = self.load(self.edit(r"^mirror = \[\]", 'mirror = []\nbranch_prefix = "IW-"'))
+        self.assertEqual(m.project.branch_prefix, "IW-")
+        result = mf.validate(m)
+        self.assertTrue(result.ok, result.errors)
+        self.assertFalse(any("branch_prefix" in d for d in result.defaults_applied))
+
+    def test_an_empty_branch_prefix_is_a_real_override(self):
+        m = self.load(self.edit(r"^mirror = \[\]", 'mirror = []\nbranch_prefix = ""'))
+        self.assertEqual(m.project.branch_prefix, "")
+        result = mf.validate(m)
+        self.assertTrue(result.ok, result.errors)
+        self.assertFalse(any("branch_prefix" in d for d in result.defaults_applied))
+
 
 class NegativeManifests(ManifestCase):
     def assert_error(self, text, fragment):
@@ -127,6 +148,10 @@ class NegativeManifests(ManifestCase):
 
     def test_mirror_as_a_string_fails(self):
         self.assert_error(self.edit(r"^mirror = \[\]", 'mirror = "git push origin main:master"'), "project.mirror must be an array")
+
+    def test_a_non_string_branch_prefix_fails_naming_the_field(self):
+        self.assert_error(self.edit(r"^mirror = \[\]", "mirror = []\nbranch_prefix = 1"),
+                          "project.branch_prefix")
 
     def test_missing_qualifying_gate_names_the_property(self):
         self.assert_error(self.edit(r"^gate = \"A pre push hook.*$", ""), "qualifying.gate has no satisfier")

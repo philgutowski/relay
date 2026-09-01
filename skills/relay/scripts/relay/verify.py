@@ -122,7 +122,8 @@ def verify(manifest, record, adapter, scope=SCOPE_FULL, pr_probe=None, do_fetch=
     default = default_branch_of(manifest)
     mode = manifest.shipping_mode
     task_id = record.get("id")
-    branch = gitwrite.task_branch_for(task_id) if task_id else None
+    prefix = manifest.project.branch_prefix
+    branch = gitwrite.task_branch_for(task_id, prefix) if task_id else None
     checks = {}
 
     if do_fetch:

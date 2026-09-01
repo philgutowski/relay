@@ -16,7 +16,7 @@ import unittest
 import _paths
 from relay import backends, cli, contracts, state, tail
 from test_cli import CliCase
-from test_run import CLOSE_SH, TASK_BRANCH_SH
+from test_run import CLOSE_SH, task_branch_sh
 
 STDOUT_FIXTURES = os.path.join(_paths.FIXTURES_DIR, "stdout")
 REAL_STREAM = os.path.join(STDOUT_FIXTURES, "real_stream.jsonl")
@@ -820,7 +820,7 @@ class TailAStubRun(CliCase):
     def streamed_run(self):
         for task_id in ("T-1", "T-2", "T-3"):
             self.queue_entry("success.jsonl",
-                             TASK_BRANCH_SH % (task_id, task_id.lower().replace("-", "_"), task_id),
+                             task_branch_sh(task_id),
                              stream=self.stream_file(task_id, "working on %s" % task_id))
             self.queue_entry("closeout_skipped.jsonl", CLOSE_SH % (task_id, task_id),
                              stream=self.stream_file(task_id + "-closeout",

@@ -55,6 +55,32 @@ class VerifyCase(unittest.TestCase):
         )
 
 
+class TaskBranchPrefix(VerifyCase):
+    def test_pr_probe_receives_the_manifest_prefix_plus_task_id(self):
+        text = self.toml.replace('mode = "local_merge"', 'mode = "pr_terminal"')
+        text = text.replace("mirror = []", 'mirror = []\nbranch_prefix = "IW-"')
+        seen = []
+
+        def probe(branch):
+            seen.append(branch)
+            return {"url": "https://example.test/pr/1", "state": "OPEN", "ci": "pass"}
+
+        verify.verify(self.manifest(text), self.record(), FakeAdapter(), pr_probe=probe)
+        self.assertEqual(seen, ["IW-T-1"])
+
+    def test_an_empty_prefix_sends_the_task_id_alone_to_pr_probe(self):
+        text = self.toml.replace('mode = "local_merge"', 'mode = "pr_terminal"')
+        text = text.replace("mirror = []", 'mirror = []\nbranch_prefix = ""')
+        seen = []
+
+        def probe(branch):
+            seen.append(branch)
+            return {"url": "https://example.test/pr/1", "state": "OPEN", "ci": "pass"}
+
+        verify.verify(self.manifest(text), self.record(), FakeAdapter(), pr_probe=probe)
+        self.assertEqual(seen, ["T-1"])
+
+
 class CodeScope(VerifyCase):
     def test_a_pushed_merge_passes_every_applicable_code_check(self):
         sha = self.land_a_commit()

@@ -9,6 +9,9 @@
 repo = "~/code/example-service"
 default_branch = "main"
 mirror = []
+# Optional. Task branches are this prefix plus the Task id. Default is "relay/" when the key is
+# absent. Set it when the repo's convention is not relay/<id>.
+# branch_prefix = "feat/"
 
 [tracker]
 adapter = "github"

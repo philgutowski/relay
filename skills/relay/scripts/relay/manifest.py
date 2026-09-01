@@ -48,6 +48,10 @@ class Project:
     repo: str
     default_branch: str | None
     mirror: tuple
+    # Optional. Concatenated with the Task id to name the Task branch. Absent key is
+    # contracts.DEFAULT_TASK_BRANCH_PREFIX, recorded in defaults_applied. An explicit empty
+    # string is the Task id alone.
+    branch_prefix: str
 
 
 @dataclass(frozen=True)
@@ -213,6 +217,7 @@ def load(path):
         repo=os.path.expanduser(str(p.get("repo", ""))),
         default_branch=p.get("default_branch"),
         mirror=_tuple(p.get("mirror", [])),
+        branch_prefix=pick(p, "project", "branch_prefix", contracts.DEFAULT_TASK_BRANCH_PREFIX),
     )
     tracker = Tracker(
         adapter=t.get("adapter"),
@@ -399,6 +404,8 @@ def validate(manifest, check_repo=True, check_environment=False, env=None):
         err("gate.command must be a non-empty array of strings (an argument list, never a shell string)")
     if not _is_string_list(manifest.project.mirror):
         err("project.mirror must be an array of strings (an argument list, never a shell string)")
+    if not isinstance(manifest.project.branch_prefix, str):
+        err("project.branch_prefix must be a string")
 
     # R10, R11: the disallow list carries every R10 variant, for whichever backend a task runs.
     raw_perms = manifest.raw.get("permissions", {})
