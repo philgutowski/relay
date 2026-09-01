@@ -656,7 +656,7 @@ def _run_closeout(ctx, outcome, landing_ref=None, branch=None, commit_range=None
 
     result = closeout.run(
         ctx.manifest, ctx.card, outcome, ctx.digest, comments, ctx.adapter, ctx.store,
-        allowed_paths, backend=ctx.task.backend,
+        allowed_paths, backend=ctx.task.backend, task_model=ctx.task.model,
         landing_ref=landing_ref, branch=branch or ctx.branch,
         commit_range=commit_range, plan_path=envelope.get("plan_path"), gate=gate,
         wall_seconds=ctx.launched.wall_seconds, active_seconds=ctx.launched.active_seconds,

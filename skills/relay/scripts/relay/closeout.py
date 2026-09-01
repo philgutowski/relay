@@ -237,17 +237,25 @@ def parse(last_message):
     return RESULT_UNFINISHED
 
 
-def _closeout_task(manifest, task_id, backend):
+def _closeout_task(manifest, task_id, backend, task_model=None):
     """A task record shaped for the launcher, carrying the closeout's own model and effort
     (R29): two bounded jobs that need judgement, not depth. `backend` is required for the same
-    reason `compound_command`'s is."""
-    return manifest_module.Task(id=task_id, model=manifest.closeout.model,
+    reason `compound_command`'s is.
+
+    The manifest's closeout model is claude vocabulary. On any other backend it is not a model
+    that CLI serves (U14 found codex refusing `sonnet` with a 400 and its Closeout dying without
+    a terminal line), so a non claude Closeout runs on the Task's own model, which the operator
+    already chose for that backend."""
+    model = manifest.closeout.model
+    if backend != manifest_module.DEFAULT_BACKEND and task_model:
+        model = task_model
+    return manifest_module.Task(id=task_id, model=model,
                                 effort=manifest.closeout.effort, excluded=False, reason=None,
                                 backend=backend)
 
 
 def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths,
-        backend,
+        backend, task_model=None,
         landing_ref=None, branch=None, commit_range=None, plan_path=None, gate=None,
         wall_seconds=None, active_seconds=None, halt_class=None, cause_line=None,
         timeout_seconds=None,
@@ -270,7 +278,7 @@ def run(manifest, card, outcome, digest, comments, adapter, store, allowed_paths
     if timeout_seconds is None:
         timeout_seconds = manifest.timeouts.closeout_minutes * 60
     launch_result = launch.launch(
-        manifest, _closeout_task(manifest, task_id, backend), text,
+        manifest, _closeout_task(manifest, task_id, backend, task_model=task_model), text,
         store.path("logs", task_id + ".closeout.stdout.log"), timeout_seconds,
         allowed=allowed_tools(manifest, adapter),
         disallowed=contracts.CLOSEOUT_DISALLOWED_EXTRA, **launch_kwargs)
