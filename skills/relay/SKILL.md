@@ -273,6 +273,17 @@ Blocked tasks are skipped by default, because blocked is a deliberate outcome ra
 failure. Pass `--retry-blocked` only when the operator asks for it, and expect it to refuse when a
 stranded Task branch still carries commits; that work is theirs to keep or discard.
 
+Editing a task's `backend` or `model` between runs moves it. The manifest's resolution decides a
+relaunch, so the next run launches that task where the operator sent it and names the move on its
+output and on the task's record. Three things bound that: a stranded task branch is refused
+exactly as above, judged against the name and baseline the record already carries, so the edit
+does not get the task past it; a blocked task needs `--retry-blocked` before a reassignment
+reaches it at all; and `validate` refuses a manifest pairing a backend with a model another
+backend is known to accept, before any task launches. That last check is a narrow one by design.
+It knows the model names Relay has been told about, so it catches the common slip of leaving a
+claude model on a task moved to grok, and it stays silent on a name it does not recognise rather
+than refusing a model the provider shipped after Relay last learned the list.
+
 ## What this skill never does
 
 Never merge, push, or move a card yourself. Never edit a manifest's qualifying sentences, the

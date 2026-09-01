@@ -55,12 +55,14 @@ class Dispatch(unittest.TestCase):
 
 class CapabilityRecord(unittest.TestCase):
     def test_every_record_is_a_complete_copy_of_the_pins(self):
-        declared = {item.name for item in fields(backends.Capability)}
+        # Every field except the ones a backend module supplies itself (`known_models`, issue
+        # #58) comes from the pins, and the record is that copy and nothing else.
+        declared = {item.name for item in fields(backends.Capability)} - set(backends.NON_PIN_FIELDS)
         for name in mf.BACKENDS:
             pins = contracts.BACKEND_PINS[name]
             self.assertEqual(set(pins), declared, name)
             record = backends.build(name).CAPABILITY
-            rebuilt = backends.Capability(**pins)
+            rebuilt = backends.Capability(**pins, known_models=record.known_models)
             self.assertEqual(record, rebuilt, name)
             for field, value in pins.items():
                 if isinstance(value, str):
@@ -70,6 +72,21 @@ class CapabilityRecord(unittest.TestCase):
         self.assertTrue(backends.build("claude").CAPABILITY.enforces_at_launch)
         self.assertFalse(backends.build("codex").CAPABILITY.enforces_at_launch)
         self.assertTrue(backends.build("grok").CAPABILITY.enforces_at_launch)
+
+    def test_every_backend_names_the_models_it_is_known_to_accept(self):
+        """Issue #58, KTD11. The lists are partial by design, so the only claims made here are
+        that each record carries some names and that no two records claim the same one today.
+        That second fact is what lets manifest.validate read a name found on another record as
+        a wrong pairing rather than as an ambiguity."""
+        claimed = {}
+        for name in mf.BACKENDS:
+            models = backends.build(name).CAPABILITY.known_models
+            self.assertIsInstance(models, tuple, name)
+            self.assertTrue(models, name)
+            for model in models:
+                self.assertNotIn(model, claimed,
+                                 "%s and %s both claim %r" % (claimed.get(model), name, model))
+                claimed[model] = name
 
     def test_credential_list_is_prefixes_only(self):
         self.assertFalse(hasattr(backends.Capability, "credential_variables"))

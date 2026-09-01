@@ -21,7 +21,7 @@ The runner never writes to the tracker (R19). Every tracker write in this file h
 closeout process the runner launched; the runner reads the result back and decides from it.
 """
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from . import (adapters, backends, brief, classify, closeout, contracts, gitread, gitwrite,
                launch, manifest as manifest_module, progress, state, summary, verify)
@@ -247,15 +247,22 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
             # line. First live run: a retry refused under R48 halted as unclean_exit and the
             # summary said "left the tree dirty" about a clean tree, because the sentence that
             # explained the refusal was printed to stdout and never written down.
-            # Fill the backend only when the record has none (a halt before anything
-            # launched), and never overwrite one: the record wins rule in _one_task may have
-            # swapped the running task onto the record's backend, and this outer handler holds
-            # the manifest's un swapped task.
-            recorded = (store.get(halt.task_id) or {}).get("backend")
+            # Fill the routing only when the record has none, and never overwrite it. Three
+            # raise sites reach here before anything launches: the pre flight refusal, the R48
+            # stranded branch refusal, and a git or adapter error. On those the record still
+            # describes the previous attempt, whose args, binary, and transcript all name the
+            # backend that actually ran, so writing this run's manifest value would leave the
+            # record naming a CLI that never launched, with no finding to explain it (#58).
+            # Both halves come from one source, never OR'd independently: a record predating the
+            # model field carries a backend and no model, and filling each from whichever source
+            # is non empty would pair the previous attempt's CLI with this run's model.
+            previous = store.get(halt.task_id) or {}
+            kept = previous if previous.get("backend") else {"backend": task.backend,
+                                                             "model": task.model}
             store.upsert(halt.task_id, status=contracts.STATUS_HALTED,
                          halt_class=halt.halt_class, halt_evidence=halt.evidence,
                          halt_message=halt.message, continued_past=continued,
-                         backend=recorded or task.backend)
+                         backend=kept.get("backend"), model=kept.get("model"))
             if continued:
                 if stream is not None:
                     stream("%s halted with class %s; continuing past it"
@@ -435,13 +442,34 @@ def _destructive_finding(findings):
     return None
 
 
+def _reassignment(record, task):
+    """The finding for a task the Manifest now routes somewhere other than where it last ran, or
+    None (issue #58).
+
+    Compared per field, and only where the record actually carries a value. A record written
+    before `model` joined `RECORD_FIELDS` has no key at all, and a record that halted before its
+    first launch has no backend, so an absent value is not a changed value. Without that rule
+    every older record would report a move on its first relaunch.
+    """
+    was_backend, was_model = record.get("backend"), record.get("model")
+    moved_backend = bool(was_backend) and was_backend != task.backend
+    moved_model = bool(was_model) and was_model != task.model
+    if not (moved_backend or moved_model):
+        return None
+    # The recorded halves pass through as they are, never defaulted to this run's values. A
+    # record that predates the model field carries a backend and no model, so filling the gap
+    # from the manifest would report a previous attempt that never happened, on a pair validate
+    # itself refuses. An absent half renders as the line's own placeholder instead.
+    return {"class": contracts.BACKEND_REASSIGNED,
+            "from_backend": was_backend, "from_model": was_model,
+            "to_backend": task.backend, "to_model": task.model}
+
+
 def _one_task(cfg, task):
     manifest, adapter, store = cfg.manifest, cfg.adapter, cfg.store
     repo, default, env = cfg.repo, cfg.default, cfg.env
     stream = cfg.stream
     record = store.get(task.id) or state.new_record(task.id)
-    if record.get("backend") and record["backend"] != task.backend:
-        task = replace(task, backend=record["backend"])
     status = record.get("status")
 
     if task.excluded:
@@ -452,9 +480,23 @@ def _one_task(cfg, task):
     if status == contracts.STATUS_EXCLUDED and record.get("excluded_reason"):
         return
     branch = gitwrite.task_branch_for(task.id, cfg.manifest.project.branch_prefix)
+
+    if status == contracts.STATUS_BLOCKED and not cfg.retry_blocked:
+        return
+
+    # Issue #58. The manifest's resolution decides where a relaunch goes, so a task the operator
+    # moved lands on the CLI they moved it to. Computed past every early return, so a task that
+    # will not relaunch never reports a move, and announced ahead of the stranded branch check
+    # and pre-flight, the two refusals an operator most needs it beside: both leave the move
+    # unperformed on the repair path SKILL.md sends them down, and a run that never reaches the
+    # launch would otherwise say nothing at all. The sentence is intent, not history, because
+    # those refusals are still ahead of it.
+    reassignment = _reassignment(record, task)
+    if reassignment and stream is not None:
+        stream("%s will relaunch on %s"
+               % (task.id, summary.cause_line(contracts.BACKEND_REASSIGNED, reassignment)))
+
     if status == contracts.STATUS_BLOCKED:
-        if not cfg.retry_blocked:
-            return
         # Prefer the name recorded when the task blocked. A later prefix edit must not hide
         # a stranded branch that still carries commits.
         _clear_blocked_branch(store, task, repo, record, env, record.get("branch") or branch)
@@ -502,21 +544,39 @@ def _one_task(cfg, task):
         return
     brief_path, brief_sha = brief.write(store, task.id, brief_text)
 
+    capability = backends.build(task.backend).CAPABILITY
+    # Supplied afresh by this attempt rather than cleared and rewritten after the launch. `upsert`
+    # merges, so nothing else resets it, and while the record pinned the backend a stale one was
+    # impossible. Clearing it here and restoring it later would leave the whole task process
+    # lifetime, hours in the shipped examples, during which a crash strands a record that ran on a
+    # CLI which cannot refuse tools while disclosing nothing about it.
+    unenforced = (_unenforced_scalar(manifest, capability)
+                  if not capability.enforces_at_launch else None)
+    log_path = store.path("logs", task.id + ".stdout.log")
+    if reassignment:
+        # The log is per task and appended to by every attempt, so a move leaves one file holding
+        # two backends' output. That is not cosmetic: `codex.readable` counts the file's own lines
+        # and would pass on the previous CLI's, and the follower decodes the whole file with the
+        # manifest's current grammar. Start the reassigned attempt on an empty one.
+        with open(log_path, "w", encoding="utf-8"):
+            pass
+
     store.upsert(task.id, status=contracts.STATUS_RUNNING, baseline_sha=baseline_sha,
                  baseline_tracker_status=card_status.get("status"),
                  baseline_comment_id=baseline_comment_id, branch=branch,
-                 brief_sha256=brief_sha, halt_class=None, findings=[],
-                 continued_past=False, backend=task.backend)
+                 brief_sha256=brief_sha, halt_class=None,
+                 findings=[reassignment] if reassignment else [],
+                 continued_past=False, backend=task.backend, model=task.model,
+                 unenforced_restrictions=unenforced)
 
     launched = launch.launch(
-        manifest, task, brief_text, store.path("logs", task.id + ".stdout.log"),
+        manifest, task, brief_text, log_path,
         cfg.overrides.get("task_seconds") or manifest.timeouts.task_minutes * 60,
         home=cfg.home, base_env=cfg.base_env, stream=stream,
         heartbeat=store.heartbeat, on_release=store.release, **cfg.launch_kwargs)
     if not launched.launch_error:
         cfg.used_backends.add(task.backend)
 
-    capability = backends.build(task.backend).CAPABILITY
     disallow = (manifest_module.resolved_disallowed(manifest)
                 if not capability.enforces_at_launch else None)
     digest = classify.classify(launched.transcript_path, launched,
@@ -524,17 +584,20 @@ def _one_task(cfg, task):
                                disallow_patterns=disallow)
     digest["task_id"] = task.id
     raw_findings = digest.get("findings")
-    findings = list(raw_findings or [])
     if raw_findings is not None:
-        digest["findings"] = findings
+        digest["findings"] = list(raw_findings)
+    # The record's list, deliberately not the digest's object. A reassignment is a routing note
+    # about the operator's own edit, and the digest is what closeout renders as Other findings
+    # bullets in the Closeout brief, so sharing the list would have the Closeout process comment
+    # a tracker card about a routing change (issue #58).
+    findings = ([reassignment] if reassignment else []) + list(raw_findings or [])
     classify.write_digest(digest, store.path("digests", task.id + ".json"))
-    extra = {}
-    if not capability.enforces_at_launch:
-        extra["unenforced_restrictions"] = _unenforced_scalar(manifest, capability)
+    # `unenforced_restrictions` is not rewritten here: the running upsert above already supplied
+    # it from this attempt's own capability, before the launch rather than after it.
     store.upsert(task.id, session_id=launched.session_id,
                  transcript_path=launched.transcript_path, wall_seconds=launched.wall_seconds,
                  active_seconds=launched.active_seconds, findings=findings,
-                 binary_path=launched.binary_path, args=launched.args, **extra)
+                 binary_path=launched.binary_path, args=launched.args)
 
     context = _Context(task=task, card=card, branch=branch, baseline_sha=baseline_sha,
                        baseline_comment_id=baseline_comment_id, digest=digest,

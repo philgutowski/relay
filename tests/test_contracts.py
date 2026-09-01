@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 
 import _paths  # noqa: F401
-from relay import classify, contracts
+from relay import classify, contracts, summary
 
 PLUGIN_ROOT = os.path.expanduser(
     "~/.claude/plugins/cache/compound-engineering-plugin/compound-engineering/%s" % contracts.PLUGIN_MIN_VERSION
@@ -71,6 +71,25 @@ class OwnVocabulary(unittest.TestCase):
             self.assertIn(cls, contracts.LINE_CLASSES)
         for cls in contracts.FINDING_CLASSES:
             self.assertIn(cls, contracts.LINE_CLASSES)
+
+    def test_the_reassignment_class_prints_one_line_and_survives_a_missing_key(self):
+        """Issue #58. The class is a finding only, so it has to reach LINE_CLASSES and
+        HALT_LINES without joining HALT_CLASSES, and its line has to stay Cause-line safe: a
+        newline in a rendered value corrupts the line, and a record relaunched off a legacy
+        record carries no previous model, so one key is routinely absent."""
+        self.assertIn(contracts.BACKEND_REASSIGNED, contracts.FINDING_CLASSES)
+        self.assertNotIn(contracts.BACKEND_REASSIGNED, contracts.HALT_CLASSES)
+        full = summary.cause_line(contracts.BACKEND_REASSIGNED, {
+            "class": contracts.BACKEND_REASSIGNED, "from_backend": "grok",
+            "from_model": "grok-4", "to_backend": "claude", "to_model": "sonnet"})
+        self.assertNotIn("\n", full)
+        for value in ("grok", "grok-4", "claude", "sonnet"):
+            self.assertIn(value, full)
+        partial = summary.cause_line(contracts.BACKEND_REASSIGNED, {
+            "class": contracts.BACKEND_REASSIGNED, "from_backend": "claude",
+            "to_backend": "grok", "to_model": "grok-4"})
+        self.assertNotIn("\n", partial)
+        self.assertIn("?", partial)
 
     def test_the_run_scoped_halt_classes_are_the_three_that_implicate_every_later_task(self):
         """Issue #15: a halt the runner may continue past is decided from the repo, not from

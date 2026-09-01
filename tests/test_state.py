@@ -549,15 +549,45 @@ class Terminal(StateCase):
         self.assertEqual(store.get("T-1")["backend"], "claude")
 
     def test_a_current_schema_record_with_no_backend_is_not_backfilled(self):
-        """U14, T-35: a record halted before launch has no backend yet. Backfilling claude onto
-        it made run.py's record wins rule swap a resumed grok task onto claude, which launched
-        claude with grok's model. Only a genuinely legacy file earns the backfill."""
+        """A record halted before launch has no backend yet, so there is no attempt for one to
+        be evidence of, and inventing claude would put a CLI on the summary that never ran.
+        Only a genuinely legacy file, where every task really did run on claude, earns the
+        backfill. Found as U14, T-35, when the backfill reached this case too."""
         store = self.store()
         store.acquire()
         store.upsert("T-1", status=contracts.STATUS_HALTED,
                      halt_class=contracts.HALT_UNCLEAN_EXIT)
         store.release()
         self.assertIsNone(store.get("T-1")["backend"])
+
+    def test_a_new_record_seeds_the_model_and_an_older_one_simply_has_no_key(self):
+        """Issue #58. `model` joins the record so both halves of a routing choice are readable.
+        `upsert` reaches for an existing record before it builds a new one, so a record already
+        in a state file never gains the key. Every reader therefore takes it through `.get`,
+        which is what lets run.py read a missing model as "not a change"."""
+        store = self.store()
+        self.assertIsNone(st.new_record("T-1")["model"])
+        store.acquire()
+        store.upsert("T-1", status=contracts.STATUS_RUNNING, backend="grok", model="grok-4")
+        store.release()
+        self.assertEqual(self.store().get("T-1")["model"], "grok-4")
+
+    def test_a_record_written_before_the_model_field_reads_as_absent(self):
+        store = self.store()
+        older = {
+            "schema_version": contracts.STATE_SCHEMA_VERSION,
+            "manifest": store.manifest_path,
+            "repo": store.repo_path,
+            "lease": None,
+            "cursor": 0,
+            "tasks": {"T-1": {"id": "T-1", "status": contracts.STATUS_BLOCKED,
+                              "backend": "grok"}},
+            "terminal": None,
+            "git_ops": [],
+        }
+        with open(store.state_path, "w", encoding="utf-8") as handle:
+            json.dump(older, handle)
+        self.assertIsNone(store.get("T-1").get("model"))
 
 
 class Layout(StateCase):

@@ -461,6 +461,12 @@ WAITING_LAST_MESSAGE = "waiting_last_message"
 # or unclean_exit), this names the mechanism instead of leaving the Cause line to read only the
 # downstream symptom, the same shape WAITING_LAST_MESSAGE above already established.
 CANCELLED_TOOL_CALL = "cancelled_tool_call"
+# Issue #58. The Manifest's resolution decided this relaunch's backend or model, and it differed
+# from what the record carried, so the Task went somewhere other than where it last ran. Finding
+# only, and unlike the three above it names an operator's own choice rather than a failure: the
+# record's `halt_class` is untouched, and summary deliberately keeps it off the pending checks
+# list, because a move the operator asked for is not a chore they owe.
+BACKEND_REASSIGNED = "backend_reassigned"
 
 # The .claude/ backstop's operator sentence. HALT_LINES[path_gate] is {detail}; this
 # raiser and classify's path_gate promotion fill it so the Cause line stays true.
@@ -523,13 +529,14 @@ FINDING_CLASSES = (
     RUNNER_SELF_KILL,
     WAITING_LAST_MESSAGE,
     CANCELLED_TOOL_CALL,
+    BACKEND_REASSIGNED,
 )
 
 # Every class that can reach a summary line: the closed halt class set of KTD6, plus the
 # findings that are never a record's own class but still have to print.
 LINE_CLASSES = HALT_CLASSES + (
     CLOSEOUT_UNFINISHED, BLOCKED_UNRECORDED, UNENFORCED_DISALLOWED, RUNNER_SELF_KILL,
-    WAITING_LAST_MESSAGE, CANCELLED_TOOL_CALL,
+    WAITING_LAST_MESSAGE, CANCELLED_TOOL_CALL, BACKEND_REASSIGNED,
 )
 
 HALT_LINES = {
@@ -559,6 +566,10 @@ HALT_LINES = {
     RUNNER_SELF_KILL: "self-kill: {command} named the runner's own pid {victim_pid} among {pids}",
     WAITING_LAST_MESSAGE: "ended the turn waiting on background work that does not resume headless: {last_message}",
     CANCELLED_TOOL_CALL: "the CLI cancelled its own tool call, no user present: {tool} on {target}",
+    # Tense neutral on purpose: the runner streams this sentence before the launch, where the
+    # move is still intent, and writes it onto the record afterwards, where it is history.
+    BACKEND_REASSIGNED: ("{to_backend} {to_model}, reassigned from "
+                         "{from_backend} {from_model}"),
 }
 
 # The digest classify.classify() (U7) guarantees, read by run.py and closeout.py via

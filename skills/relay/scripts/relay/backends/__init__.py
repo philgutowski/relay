@@ -169,12 +169,25 @@ class Capability:
     # `enforces_at_launch`). `None` for a backend with no such constraint, matching the
     # `allow_flag`/`deny_flag` precedent for "this backend has none" rather than `""`.
     commit_message_constraint: str | None
+    # Issue #58, KTD11. Model names this backend is known to accept, so `manifest.validate` can
+    # refuse a manifest that hands one backend's model to another. Deliberately partial: the
+    # check is negative, a name no record claims is allowed through, so a list that goes stale
+    # costs nothing and a provider shipping a new model never breaks a manifest. Supplied by
+    # each backend module rather than by `contracts.BACKEND_PINS`, because a pin is a launch
+    # fact and these names are neither read nor written at launch.
+    known_models: tuple = ()
 
 
-def _record(name):
-    """The frozen pin copy for one backend. Backend modules call this and do not
-    import Capability, so the type object is not a public callable on the module."""
-    return Capability(**contracts.BACKEND_PINS[name])
+# Capability fields that do not come from `contracts.BACKEND_PINS`. Named here so the pins
+# completeness test can subtract them rather than hard coding the exception.
+NON_PIN_FIELDS = ("known_models",)
+
+
+def _record(name, **extra):
+    """The frozen pin copy for one backend, plus any non-pin field the backend module supplies
+    (`NON_PIN_FIELDS`). Backend modules call this and do not import Capability, so the type
+    object is not a public callable on the module."""
+    return Capability(**contracts.BACKEND_PINS[name], **extra)
 
 
 def _parse_leading_digit(text):

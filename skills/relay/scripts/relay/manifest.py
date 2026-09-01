@@ -392,6 +392,15 @@ def _backend_readiness_errors(manifest, env):
     return errors
 
 
+def _model_owners(model):
+    """Every backend whose capability record claims `model`, in BACKENDS order. Empty means no
+    backend claims the name, which KTD11 reads as "allowed", not as "unknown and therefore
+    refused": the coherence check is negative so a provider shipping a new model never turns a
+    routine model bump into a manifest that will not load."""
+    return tuple(name for name in BACKENDS
+                 if model in backends.build(name).CAPABILITY.known_models)
+
+
 def validate(manifest, check_repo=True, check_environment=False, env=None):
     """Apply every rule from plan U2 step 2. Returns a ValidationResult; never raises for a
     rule failure, so the CLI can print every problem at once."""
@@ -512,6 +521,20 @@ def validate(manifest, check_repo=True, check_environment=False, env=None):
                 and not (task.reason or "").strip()):
             err("%s (%s) names backend %s, which differs from the default %s, but carries no reason"
                 % (label, task.id or "?", task.backend, resolved_default))
+        # R9, KTD10. Refused here, before any Task launches, because a single [defaults] backend
+        # edit hands every Task's old model string to the new CLI and there is no [defaults]
+        # model to catch it. Its own check, never ANDed with the reason rule above: joining "is
+        # the reference value valid" to "does this Task break a rule" waives the rule whenever
+        # the reference is invalid. See docs/solutions/logic-errors/
+        # invalid-defaults-backend-silently-turned-off-the-reason-check.md.
+        if task.backend in BACKENDS and task.model:
+            owners = _model_owners(task.model)
+            # KTD11, negative rather than an allowlist. Silent on a name no record claims, and
+            # silent when this backend claims it too, so a model two CLIs both accept is valid
+            # on both rather than a mismatch against whichever record is checked first.
+            if owners and task.backend not in owners:
+                err("%s (%s) names backend %s with model %r, which belongs to backend %s"
+                    % (label, task.id or "?", task.backend, task.model, ", ".join(owners)))
     if not manifest.tasks:
         err("tasks is empty")
 

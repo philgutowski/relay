@@ -150,6 +150,18 @@ sleep 30
 """
 
 
+def reroute(manifest, task_id, backend=None, model=None):
+    """One task moved to another backend or model, the way an operator edits the manifest file
+    between runs. Backend and model move together by default because manifest.validate refuses a
+    model belonging to another backend, so a run test that split them would encode a manifest the
+    CLI would not load."""
+    def moved(task):
+        if task.id != task_id:
+            return task
+        return replace(task, backend=backend or task.backend, model=model or task.model)
+    return replace(manifest, tasks=tuple(moved(task) for task in manifest.tasks))
+
+
 class RunCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -357,19 +369,22 @@ class EndToEnd(RunCase):
         self.assertEqual(terminal["cli_version"], {})
         self.assertEqual(terminal["cli_version_observed"], {})
 
-    def test_resume_uses_the_recorded_backend_after_a_manifest_edit(self):
+    def test_a_stranded_retry_keeps_the_backend_of_the_attempt_that_ran(self):
+        """AE3, and the half of the record wins rule that survives. A blocked task's branch
+        carries commits past its baseline, so R48 refuses it and the halt is raised before
+        anything launches. Writing the manifest's backend on that record would name a CLI whose
+        args and transcript belong to the previous attempt, with no finding to explain it,
+        because the finding is written at the running upsert this path never reaches."""
         self.go()
-        self.task_success("T-2")
-        self.closeout_landed("T-2")
-        self.manifest = replace(
-            self.manifest,
-            tasks=tuple(replace(task, backend="codex") if task.id == "T-2" else task
-                        for task in self.manifest.tasks),
-        )
-        self.go(retry_blocked=True)
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        outcome = self.go(retry_blocked=True)
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
+        self.assertIn("relay/T-2", outcome.message)
         record = self.store().get("T-2")
         self.assertEqual(record["backend"], "claude")
-        self.assertEqual(record["args"][0], "claude")
+        self.assertEqual(record["backend"], record["args"][0])
+        self.assertEqual([f["class"] for f in record["findings"]
+                          if f["class"] == contracts.BACKEND_REASSIGNED], [])
 
     def test_each_landed_record_carries_its_landing_reference_and_verify_timestamp(self):
         self.go()
@@ -758,6 +773,182 @@ class RetryBlocked(RunCase):
         outcome = self.go(retry_blocked=True)
         self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
         self.assertIn("relay/T-2", outcome.message)
+
+
+class Reassignment(RunCase):
+    """Issue #58. Round eight: task 45 halted on grok, the operator moved it in the manifest,
+    and the resume relaunched it on grok anyway, leaving hand editing state.json as the only way
+    out. The Manifest's resolution decides now, and the move is reported rather than silent.
+
+    Every case here runs the flow twice with no record edit and no git surgery between the runs.
+    The first run's T-2 process writes no transcript at all, so the task ends blocked with no
+    branch, and the retry therefore reaches an actual launch. The test this class replaces
+    retried a task whose stranded branch always refused first, so its assertions passed on the
+    first run's values and it proved nothing about a relaunch.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # T-2 alone, the way UnenforcedRun keeps one Task: every case here runs the flow twice,
+        # and landing T-1 and T-3 each time would be four stub launches per test that prove
+        # nothing about routing.
+        text = MANIFEST.replace("__REPO__", self.repo)
+        blocks = text.split("[[tasks]]")
+        with open(self.manifest_path, "w") as handle:
+            handle.write(blocks[0] + "[[tasks]]" + blocks[2])
+        self.manifest = mf.load(self.manifest_path)
+
+    def first_run_blocks_t2(self):
+        self.queue_entry(None)
+        self.closeout_halted("T-2")
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        record = self.store().get("T-2")
+        self.assertEqual(record["status"], contracts.STATUS_BLOCKED)
+        self.assertIsNone(record["branch"], "the retry must not be gated on a stranded branch")
+
+    def second_run(self, **kwargs):
+        self.task_success("T-2")
+        self.closeout_landed("T-2")
+        kwargs.setdefault("retry_blocked", True)
+        return self.go(**kwargs)
+
+    def finding(self, task_id="T-2"):
+        found = [f for f in self.store().get(task_id)["findings"]
+                 if f["class"] == contracts.BACKEND_REASSIGNED]
+        return found[0] if len(found) == 1 else found
+
+    def test_a_manifest_edit_moves_the_relaunch_to_the_new_backend(self):
+        self.first_run_blocks_t2()
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        self.second_run()
+        record = self.store().get("T-2")
+        self.assertEqual(record["backend"], "codex")
+        self.assertEqual(record["model"], "gpt-5-codex")
+        self.assertEqual(record["args"][0], "codex")
+        self.assertEqual(self.finding(), {"class": contracts.BACKEND_REASSIGNED,
+                                          "from_backend": "claude", "from_model": "sonnet",
+                                          "to_backend": "codex", "to_model": "gpt-5-codex"})
+
+    def test_the_move_reaches_the_runners_own_output(self):
+        self.first_run_blocks_t2()
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        said = []
+        self.second_run(stream=said.append)
+        # Matched on the rendered sentence, not on the substring "codex", which the model name
+        # gpt-5-codex satisfies on its own and would leave the backend half unproven.
+        moved = [line for line in said if "reassigned from" in line]
+        self.assertEqual(len(moved), 1, said)
+        self.assertEqual(moved[0],
+                         "T-2 will relaunch on codex gpt-5-codex, reassigned from claude sonnet")
+
+    def test_an_unedited_manifest_relaunches_with_no_finding(self):
+        self.first_run_blocks_t2()
+        self.second_run()
+        record = self.store().get("T-2")
+        self.assertEqual(record["backend"], "claude")
+        self.assertEqual(record["model"], "sonnet")
+        self.assertEqual(self.finding(), [])
+
+    def test_a_model_only_change_names_the_same_backend_on_both_sides(self):
+        self.first_run_blocks_t2()
+        self.manifest = reroute(self.manifest, "T-2", model="opus")
+        self.second_run()
+        self.assertEqual(self.finding(), {"class": contracts.BACKEND_REASSIGNED,
+                                          "from_backend": "claude", "from_model": "sonnet",
+                                          "to_backend": "claude", "to_model": "opus"})
+
+    def test_a_record_with_no_stored_model_is_not_read_as_a_model_change(self):
+        """A record written before `model` joined RECORD_FIELDS has no key at all, so an absent
+        model is not a changed model. Without this rule every older record would report a
+        reassignment on its first relaunch."""
+        self.first_run_blocks_t2()
+        store = self.store()
+        store.acquire()
+        store.upsert("T-2", model=None)
+        store.release()
+        self.second_run()
+        self.assertEqual(self.finding(), [])
+
+    def test_a_record_with_no_model_reports_the_absent_half_rather_than_inventing_one(self):
+        """Every record written before `model` joined the fields has a backend and no model, so
+        this is the shape the first relaunch after this change actually meets. Filling the gap
+        from the manifest would report a previous attempt on a pair validate itself refuses."""
+        self.first_run_blocks_t2()
+        store = self.store()
+        store.acquire()
+        store.upsert("T-2", model=None)
+        store.release()
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        said = []
+        self.second_run(stream=said.append)
+        finding = self.finding()
+        self.assertEqual(finding["from_backend"], "claude")
+        self.assertIsNone(finding["from_model"])
+        self.assertEqual(finding["to_model"], "gpt-5-codex")
+        moved = [line for line in said if "reassigned from" in line]
+        self.assertEqual(moved, ["T-2 will relaunch on codex gpt-5-codex, "
+                                 "reassigned from claude ?"])
+
+    def test_a_stranded_branch_refusal_still_announces_the_move(self):
+        """The stranded branch check is the refusal the operator's own docs send them into, and
+        it raises before the launch, so the move has to be announced ahead of it or a run that
+        never launches says nothing about the edit at all."""
+        self.queue_entry("blocked.jsonl", task_branch_sh("T-2"))
+        self.closeout_blocked("T-2")
+        self.assertEqual(self.go().exit_code, runner.EXIT_OK)
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        said = []
+        outcome = self.go(retry_blocked=True, stream=said.append)
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
+        self.assertIn("relay/T-2", outcome.message)
+        self.assertEqual([line for line in said if "reassigned from" in line],
+                         ["T-2 will relaunch on codex gpt-5-codex, "
+                          "reassigned from claude sonnet"])
+        self.assertEqual(self.store().get("T-2")["backend"], "claude")
+
+    def test_a_blocked_task_left_alone_announces_nothing(self):
+        self.first_run_blocks_t2()
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        said = []
+        self.go(stream=said.append)
+        self.assertEqual([line for line in said if "reassigned from" in line], [])
+        self.assertEqual(self.store().get("T-2")["backend"], "claude")
+
+    def test_the_finding_stays_off_the_digest_and_out_of_the_closeout_brief(self):
+        """The record's findings list and digest["findings"] were the same object, so the
+        obvious prepend would put a routing note into the digest, where closeout renders it as an
+        Other findings bullet and the Closeout process comments a card about a routing change."""
+        self.first_run_blocks_t2()
+        self.manifest = reroute(self.manifest, "T-2", backend="codex", model="gpt-5-codex")
+        self.second_run()
+        with open(self.store().path("digests", "T-2.json"), encoding="utf-8") as handle:
+            digest = json.load(handle)
+        self.assertNotIn(contracts.BACKEND_REASSIGNED,
+                         [f.get("class") for f in (digest.get("findings") or [])])
+        self.assertEqual(self.finding()["class"], contracts.BACKEND_REASSIGNED)
+
+    def test_a_move_onto_an_enforcing_backend_clears_the_stale_unenforced_scalar(self):
+        """`unenforced_restrictions` is written only by a backend that cannot refuse tools at
+        launch, and `upsert` merges, so nothing ever cleared it. While the record pinned the
+        backend that could not happen. The reversal makes it possible, and the summary would
+        then disclose a posture that did not apply to the run it names.
+
+        The scalar is seeded rather than produced by a real codex first run, because a codex
+        Task needs its own evidence fixture and stream (see UnenforcedRun) and driving one here
+        would test that machinery instead of this rule. The seed is the precondition under test,
+        not a repair that hides one: it stands in for the attempt that wrote the scalar.
+        """
+        self.first_run_blocks_t2()
+        store = self.store()
+        store.acquire()
+        store.upsert("T-2", backend="codex", model="gpt-5-codex",
+                     unenforced_restrictions="fixture: written by the codex attempt")
+        store.release()
+        self.second_run()
+        record = self.store().get("T-2")
+        self.assertEqual(record["backend"], "claude")
+        self.assertIsNone(record.get("unenforced_restrictions"))
 
 
 class CustomPrefixEndToEnd(RunCase):
@@ -1550,7 +1741,11 @@ class UnenforcedRun(RunCase):
         self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
         record = self.store().get("T-1")
         self.assertEqual(record["status"], contracts.STATUS_LANDED)
-        self.assertNotIn("unenforced_restrictions", record)
+        # Written afresh by every attempt now, None when there is nothing to disclose, because
+        # `upsert` merges and a reassignment onto an enforcing backend would otherwise leave the
+        # previous backend's scalar standing (#58). Absent and None mean the same thing to the
+        # summary, which reads it for truth.
+        self.assertIsNone(record["unenforced_restrictions"])
         self.assertNotIn(contracts.UNENFORCED_DISALLOWED,
                          [f["class"] for f in record.get("findings") or []])
 
