@@ -118,6 +118,13 @@ runner re-verifies what halted and resumes at the first task that did not land. 
 into continuing past a halt contained to one task instead (`on_halt.continue_past_task_halt`); the
 summary still lists that task as a check-by-hand item, and the same repair-and-rerun path applies.
 
+Part of that repair can be the manifest itself. Editing a task's `backend` or `model` moves any
+task that has not landed, and the next run launches it where you sent it, naming the move on its
+output and on the task's record. The record still owns the branch name and the baseline, so a
+stranded task branch is refused the same way; a blocked task needs `--retry-blocked` before a
+reassignment reaches it; and a manifest pairing a backend with a model belonging to another
+backend is refused at validate, before any task launches.
+
 ## Where things are
 
 - `CONCEPTS.md`: the vocabulary. Runner, Manifest, Lease, Task process, Closeout process,

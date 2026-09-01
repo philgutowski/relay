@@ -116,6 +116,13 @@ operator sees every proposal and can change it. The Runner launches on that CLI.
 choose or change the backend during a run. `/relay` itself still runs in Claude Code. Only
 the launched processes vary.
 
+Between runs the Manifest's resolution decides again, so editing a Task's backend or model moves
+any Task that has not landed, and the Runner reports the move on its own output and as a finding
+on that Task's record rather than taking it silently. The record still wins for what it names on
+disk, the branch and the baseline, because recomputing those can strand or destroy work while a
+backend names nothing that survives the attempt. A Manifest that pairs a backend with a model
+belonging to another backend is refused before any Task launches.
+
 ### Capability record
 The frozen facts the Runner reads about one backend: whether it enforces tool restrictions at
 launch, its permission flags and forbidden spellings, the version it was tested against, how to

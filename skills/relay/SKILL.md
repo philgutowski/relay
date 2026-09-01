@@ -273,6 +273,13 @@ Blocked tasks are skipped by default, because blocked is a deliberate outcome ra
 failure. Pass `--retry-blocked` only when the operator asks for it, and expect it to refuse when a
 stranded Task branch still carries commits; that work is theirs to keep or discard.
 
+Editing a task's `backend` or `model` between runs moves it. The manifest's resolution decides a
+relaunch, so the next run launches that task where the operator sent it and names the move on its
+output and on the task's record. Three things bound that: the record still owns the branch name
+and the baseline, so a stranded branch is refused exactly as above; a blocked task needs
+`--retry-blocked` before a reassignment reaches it at all; and `validate` refuses a manifest that
+pairs a backend with a model belonging to another backend, before any task launches.
+
 ## What this skill never does
 
 Never merge, push, or move a card yourself. Never edit a manifest's qualifying sentences, the
