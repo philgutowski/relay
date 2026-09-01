@@ -161,6 +161,8 @@ BACKEND_PINS = {
         "nesting_markers": ("CLAUDECODE", "CLAUDE_CODE_"),
         "writes_into_worktree": False,
         "extra_writable_dirs": (),
+        "config_overrides": (),
+        "strict_config": False,
     },
     "codex": {
         "binary": "codex",
@@ -185,6 +187,12 @@ BACKEND_PINS = {
         # not enforcing. R19's acceptance sentence, R21's landing bound, and R24's audit are the
         # compensating controls. Codex does refuse some `rm -f` shapes on its own, but that is
         # its own built-in judgment and not something the manifest's disallow list can reach.
+        #
+        # Until 2026-09-01 the sandbox's absent network was also holding shut, on this backend
+        # alone, every remote reaching pattern in DISALLOWED_TOOLS and all of
+        # CLOSEOUT_DISALLOWED_EXTRA: with no deny flag they never reach the argv, so a push
+        # simply could not complete. `config_overrides` below removes that, and nothing detects a
+        # push from a Task or Closeout here yet. Issue #60.
         "enforces_at_launch": False,
         "skill_form": "$%s",
         "evidence": "stdout log plus --output-last-message file; session jsonl at "
@@ -198,6 +206,27 @@ BACKEND_PINS = {
         # so a Task cannot branch or commit at all. Passing the repository's own .git as an
         # extra writable directory is what makes the sandbox usable for Relay's purposes.
         "extra_writable_dirs": ("<repo>/.git",),
+        # Issue #51, observed on codex-cli 0.151.0 on 2026-09-01. Under `--sandbox
+        # workspace-write` the sandbox blocks network by default, so `gh` cannot reach
+        # api.github.com and a Task cannot move or comment its own card. Every codex task cost a
+        # hand landing. This override restores the reach; the session header then reads
+        # "(network access enabled)".
+        #
+        # The grant is all or nothing. `sandbox_workspace_write` takes four fields,
+        # writable_roots, network_access, exclude_tmpdir_env_var, exclude_slash_tmp, and no host
+        # allowlist: `-c 'sandbox_workspace_write.allowed_domains=["api.github.com"]'` is refused
+        # with "unknown configuration field". So a codex Task reaches every host, not just the
+        # tracker, and run._unenforced_scalar says so on the record.
+        "config_overrides": ("sandbox_workspace_write.network_access=true",),
+        # Rides with the override rather than standing on its own. Without it, a key this CLI
+        # does not recognize is accepted and ignored: the process runs, the sandbox stays fenced,
+        # and the only symptom is the blocked halt the override exists to remove. Neither the
+        # suite nor the stub can see that, because both derive the argv from this same pin. With
+        # it, the same key fails before launch with "Error loading config.toml: unknown
+        # configuration field ... in -c/--config override". The cost is that it also validates the
+        # operator's own ~/.codex/config.toml, so a field this codex version rejects there fails
+        # every launch, loudly, which is the trade this pin accepts.
+        "strict_config": True,
     },
     "grok": {
         "binary": "grok",
@@ -238,6 +267,8 @@ BACKEND_PINS = {
         "nesting_markers": ("GROK_SANDBOX",),
         "writes_into_worktree": False,
         "extra_writable_dirs": (),
+        "config_overrides": (),
+        "strict_config": False,
     },
 }
 

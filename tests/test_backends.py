@@ -90,6 +90,17 @@ class CapabilityRecord(unittest.TestCase):
         self.assertEqual(backends.build("grok").CAPABILITY.extra_writable_dirs, ())
         self.assertEqual(backends.build("codex").CAPABILITY.extra_writable_dirs, ("<repo>/.git",))
 
+    def test_config_overrides_and_strict_config_are_uniform_and_only_codex_carries_them(self):
+        # The token is spelled out here rather than read back off the pin. `build_args` and the
+        # codex stub's required flag set both derive from that same pin, so an edit that emptied
+        # it would stop the emit and stop the grammar check together and nothing would fail.
+        self.assertEqual(backends.build("codex").CAPABILITY.config_overrides,
+                         ("sandbox_workspace_write.network_access=true",))
+        self.assertTrue(backends.build("codex").CAPABILITY.strict_config)
+        for name in ("claude", "grok"):
+            self.assertEqual(backends.build(name).CAPABILITY.config_overrides, (), name)
+            self.assertFalse(backends.build(name).CAPABILITY.strict_config, name)
+
     def test_codex_allow_and_deny_flags_may_be_none(self):
         cap = backends.build("codex").CAPABILITY
         self.assertIsNone(cap.allow_flag)
