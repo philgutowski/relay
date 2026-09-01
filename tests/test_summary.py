@@ -245,16 +245,19 @@ class CauseLineTable(unittest.TestCase):
                 self.assertTrue(entry["cause"])
                 self.assertNotIn("{", entry["cause"])
 
-    def test_summary_names_each_task_backend_and_legacy_records_default_to_claude(self):
+    def test_summary_names_each_task_backend_and_an_unrecorded_one_stays_untagged(self):
+        """A current schema record with no backend never launched, so the summary does not
+        invent a CLI for it; the legacy claude default is a read side normalization gated on
+        the file's schema version (test_state covers it)."""
         self.store.upsert("T-1", status=contracts.STATUS_LANDED,
                           halt_class=contracts.HALT_LANDED, backend="codex", findings=[])
         self.store.upsert("T-2", status=contracts.STATUS_LANDED,
                           halt_class=contracts.HALT_LANDED, findings=[])
         data = self.summarise([("T-1", "codex"), ("T-2", "grok")])
-        self.assertEqual([entry["backend"] for entry in data["tasks"]], ["codex", "claude"])
+        self.assertEqual([entry["backend"] for entry in data["tasks"]], ["codex", None])
         text = summary.render(data)
         self.assertIn("T-1  landed  [landed]  (codex)", text)
-        self.assertIn("T-2  landed  [landed]  (claude)", text)
+        self.assertIn("T-2  landed  [landed]\n", text)
 
     def test_cause_line_keeps_a_backend_scalar_when_other_record_values_are_structured(self):
         original = contracts.HALT_LINES[contracts.HALT_UNEXPECTED_ERROR]

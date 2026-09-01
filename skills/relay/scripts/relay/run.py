@@ -189,10 +189,15 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
             # line. First live run: a retry refused under R48 halted as unclean_exit and the
             # summary said "left the tree dirty" about a clean tree, because the sentence that
             # explained the refusal was printed to stdout and never written down.
+            # Fill the backend only when the record has none (a halt before anything
+            # launched), and never overwrite one: the record wins rule in _one_task may have
+            # swapped the running task onto the record's backend, and this outer handler holds
+            # the manifest's un swapped task.
+            recorded = (store.get(halt.task_id) or {}).get("backend")
             store.upsert(halt.task_id, status=contracts.STATUS_HALTED,
                          halt_class=halt.halt_class, halt_evidence=halt.evidence,
                          halt_message=halt.message, continued_past=continued,
-                         backend=task.backend)
+                         backend=recorded or task.backend)
             if continued:
                 if stream is not None:
                     stream("%s halted with class %s; continuing past it"
