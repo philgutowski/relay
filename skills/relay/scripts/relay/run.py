@@ -322,9 +322,16 @@ UNENFORCED_BOUND = (
 )
 
 
-def _unenforced_scalar(manifest):
-    """One plain string naming the unenforced disallow patterns and the bound on what the audit
-    that follows them can prove.
+def _unenforced_scalar(manifest, capability):
+    """One plain string naming the unenforced disallow patterns, the bound on what the audit that
+    follows them can prove, and any sandbox network grant the backend launches with.
+
+    The network clause is written off the capability's own `config_overrides`, not off
+    `enforces_at_launch`, so a backend that enforces nothing and reaches no network never
+    inherits a sentence that is false for it. It belongs on the record and not only in
+    `SKILL.md`, because the skill speaks when a manifest is authored: an operator running a
+    manifest written before the grant existed would otherwise never be told, and `validate` only
+    checks that `permissions.unenforced_acceptance` is non empty (issue #51).
 
     Single line, and the newline ban is not a style preference: `summary.line_fields` hoists
     every non-container record field into the namespace `cause_line` formats halt templates
@@ -335,7 +342,12 @@ def _unenforced_scalar(manifest):
         inner = contracts.disallow_inner(pattern)
         if inner not in inners:
             inners.append(inner)
-    return "disallowed tools not enforced at launch: " + ", ".join(inners) + UNENFORCED_BOUND
+    scalar = "disallowed tools not enforced at launch: " + ", ".join(inners) + UNENFORCED_BOUND
+    if any("network" in token for token in capability.config_overrides):
+        scalar += (" This Task also launches with its sandbox network turned on, so it reaches "
+                   "every host and not only the tracker, because the sandbox takes no host "
+                   "allowlist.")
+    return scalar
 
 
 def _destructive_finding(findings):
@@ -441,7 +453,7 @@ def _one_task(cfg, task):
     classify.write_digest(digest, store.path("digests", task.id + ".json"))
     extra = {}
     if not capability.enforces_at_launch:
-        extra["unenforced_restrictions"] = _unenforced_scalar(manifest)
+        extra["unenforced_restrictions"] = _unenforced_scalar(manifest, capability)
     store.upsert(task.id, session_id=launched.session_id,
                  transcript_path=launched.transcript_path, wall_seconds=launched.wall_seconds,
                  active_seconds=launched.active_seconds, findings=findings,
