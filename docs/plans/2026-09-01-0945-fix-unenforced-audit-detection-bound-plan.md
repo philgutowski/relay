@@ -45,16 +45,18 @@ Nothing on the operator's surfaces says any of this. `summary._task_entry` (`ski
 
 **What the record and the summary claim**
 
-- R1. The `unenforced_restrictions` scalar on a Task record states that the disallow list reached the process as brief instructions naming operations, that the audit after exit matched command spellings against the process's own tool calls, and that no finding is therefore not proof the operation-level instruction was obeyed.
+- R1. The `unenforced_restrictions` scalar on a Task record states that the disallow list reached the Task process as brief instructions naming operations, that the audit after exit matches command spellings against the commands that process's own log recorded, and that an absent finding therefore does not prove the operation was avoided. It names all three ways an empty result is reached: another spelling, a restriction naming a tool other than a command, and a call the log never recorded.
 - R2. The scalar stays one plain single-line string, and it still names every unenforced inner operation. (inherits KTD7 of `docs/plans/2026-08-30-2244-feat-backends-u10-unenforced-restrictions-plan.md`)
-- R3. The scalar carries the bound whether or not any finding fired, because the empty-findings case is the one the caveat exists for.
-- R7. The run summary's task entry carries the scalar, so the bound appears beside the findings list rather than only in the raw record.
+- R3. The scalar carries the bound whether or not any finding fired, because the empty-findings case is the one the caveat exists for. It is written in the present tense, so it stays true on a Task that never launched or timed out, where the scalar is recorded but no audit ran.
+- R7. The run summary's task entry carries the scalar and `summary.lines` prints it, so the bound appears beside the findings list on the operator's own surface rather than only in the raw JSON.
+- R9. The scalar and `skills/relay/references/backend-rubric.md` both say that the refusal of a destructive landing rests on the same match, because `run._destructive_finding` filters the findings `classify.matches_disallow_pattern` produced. The rubric is where an operator decides whether to route a Task to an unenforced backend, so an unqualified guarantee there outranks the record in what it misleads.
 
 **What the audit is pinned against**
 
 - R4. A regression test pins that a `/bin/zsh -lc "..."` command still matches its disallow pattern when the inner command is spelled literally. The T-65 log carries no literal spelling, so this test's command is a constructed control in the live wrapper shape, not a capture.
-- R5. Regression tests pin that both equivalent-command shapes observed on T-65 produce no finding, so their absence is a recorded bound rather than an unexplained gap.
-- R6. The evasion tests use command strings captured from `logs/T-65.stdout.log` verbatim and whole, including the trailing `&&` segments of log line 64, so the pin exercises `classify._shell_parts` splitting a line whose `&&` sits outside a quoted payload.
+- R5. Regression tests pin that all three equivalent-command shapes observed on T-65 produce no finding, so their absence is a recorded bound rather than an unexplained gap.
+- R6. The evasion tests use command strings captured from `logs/T-65.stdout.log` verbatim and whole: line 45, line 64 including its trailing `&&` segments, and line 49 where one `&&` joins two payloads. Each compound shape asserts the `classify._shell_parts` split it exists to exercise, so the captured tail is load bearing rather than decorative.
+- R10. Every recorded-miss test proves a call was actually audited before it asserts no finding. An empty findings list is otherwise reached by a broken unwrap or by no tool call being synthesized at all, which is the ambiguity this whole plan exists to remove and would reproduce it inside the tests.
 
 ### Acceptance Examples
 
@@ -74,7 +76,7 @@ Nothing on the operator's surfaces says any of this. `summary._task_entry` (`ski
 **Deferred for later**
 
 - Narrowing `brief.UNENFORCED_AUDIT`. That sentence promises the process that "a destructive disallowed call will not land", which holds only at the spelling level: `run._destructive_finding` (`run.py:300`) filters the same findings `classify.matches_disallow_pattern` produced, so an equivalently spelled destructive operation yields no finding and no refusal. Narrowing it is a brief-text change, which is a contract between processes and needs a live backend run under the repo rule in `CLAUDE.md`, and `brief.defang` plus the count assertions in `tests/test_brief.py` move with it. It gets its own tracker issue.
-- A run-specific caveat naming the audited tool-call count and the task log path. Ranked against the fixed sentence and not taken: `tool_calls` lives on the digest and the log path is already on the record, so the operator can reach both, and KTD3's single-line shape is what keeps the scalar cheap to render. Revisit if the fixed sentence proves too abstract to act on.
+- A run-specific caveat carrying the audited tool-call count and the malformed-line count. Ranked against the fixed sentence and not taken here, but the first stated reason for deferring it was wrong and is worth recording: `tool_calls` lives on the digest, and `summary.py`'s own module docstring says the summary points "never at a machine readable file the operator would have to parse to learn anything", so "the operator can reach it on the digest" is not an answer. The real reason is scope. The fixed sentence now names the evidence bound in words, which is what makes the claim true; putting a number behind it means adding two more keys to the summary entry and belongs to its own change.
 - Semantic or behavioral detection of an evading command. Reading intent out of `python3 -c "import unittest; ..."` is a different capability with its own false-positive surface, and it would be an arms race against a process that has read the pattern list.
 
 **Outside this work's identity**

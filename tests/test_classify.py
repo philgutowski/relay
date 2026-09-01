@@ -637,18 +637,22 @@ class UnenforcedAudit(unittest.TestCase):
         self.assertEqual(hits[0]["pattern"], "Bash(git reset --hard*)")
 
     # Round eight #54, from relay proof T-65. A manifest disallowed `Bash(python3 -m unittest*)`
-    # and a codex Task ran the suite anyway, by another spelling. The three tests below fix the
-    # boundary that run separated: the wrapper is unwrapped and the literal spelling is caught,
-    # and the two spellings T-65 actually used are not. The first command is CONSTRUCTED, not
-    # captured: none of the 24 command_execution items in `logs/T-65.stdout.log` spells
+    # and a codex Task ran the suite anyway, by another spelling. The tests below fix the boundary
+    # that run separated: the wrapper is unwrapped and the literal spelling is caught, and the
+    # spellings T-65 actually used are not. The first command is CONSTRUCTED, not captured: none
+    # of the 24 completed command_execution items in `logs/T-65.stdout.log` spells
     # `python3 -m unittest` at all, so the log can only pin the misses.
     UNITTEST_PATTERN = "Bash(python3 -m unittest*)"
 
     def test_a_wrapped_literal_unittest_spelling_matches_a_manifest_pattern(self):
-        """The control. A constructed literal spelling in the live `/bin/zsh -lc` wrapper shape,
-        proving the audit reaches through the wrapper codex puts on every command. The card for
-        #54 claimed no prefix pattern could ever match on codex; commit 06622f2 had already
-        widened `_SHELL_WRAP` to zsh and a glued `-lc`, and this is the pin for that claim."""
+        """The control, and not redundant with the misses below. It is the only assertion here
+        that fails if `UNITTEST_PATTERN` is mistyped or `_SHELL_WRAP` regresses; a mistyped
+        pattern would leave every miss green. Do not delete it as duplicate coverage.
+
+        A constructed literal spelling in the live `/bin/zsh -lc` wrapper shape, proving the
+        audit reaches through the wrapper codex puts on every command. The card for #54 claimed
+        no prefix pattern could ever match on codex; commit 06622f2 had already widened
+        `_SHELL_WRAP` to zsh and a glued `-lc`, and this is the pin for that claim."""
         r = self._classify('/bin/zsh -lc "python3 -m unittest discover -s tests"',
                            patterns=[self.UNITTEST_PATTERN])
         hits = [f for f in r["findings"] if f["class"] == contracts.UNENFORCED_DISALLOWED]
@@ -674,30 +678,93 @@ class UnenforcedAudit(unittest.TestCase):
         'git log -1 --oneline"'
     )
 
-    def _assert_evaded(self, command):
-        """No finding, and the miss is the pattern's, not the unwrap's.
+    # `logs/T-65.stdout.log` line 49, verbatim. Both spellings in one command, joined by an `&&`
+    # that sits between two escaped-quote payloads. That is a third `_shell_parts` split, distinct
+    # from line 64's trailing-segment shape, and the corpus lesson in
+    # `shell-wrap-regex-missed-zsh-and-glued-lc-...` is that the captured shape nobody pinned is
+    # the one that bites.
+    T65_BOTH_SPELLINGS = (
+        '/bin/zsh -lc "python3 -c \\"import unittest; suite = unittest.defaultTestLoader.'
+        "loadTestsFromName('tests.test_stats.SquareTests'); result = unittest.TextTestRunner("
+        'verbosity=2).run(suite); raise SystemExit(not result.wasSuccessful())\\" && python3 -c '
+        '\\"import unittest; suite = unittest.defaultTestLoader.discover(\'tests\'); result = '
+        'unittest.TextTestRunner(verbosity=2).run(suite); raise SystemExit(not '
+        'result.wasSuccessful())\\""'
+    )
 
-        The second assertion is the load bearing one. Without it a broken unwrap and a bounded
-        pattern produce the same empty findings list, which is exactly the ambiguity #54 was
-        filed on.
+    def _assert_evaded(self, command):
+        """No finding, and the miss is the pattern's rather than an empty audit's.
+
+        Both assertions around the classify call are load bearing, and a mutation pass on the
+        first draft proved it. The unwrap check below rules out a broken unwrap, which would
+        otherwise produce the same empty findings list that #54 was filed on. The `tool_calls`
+        check rules out the vacuous pass: with the codex normalizer synthesizing no tool_use at
+        all, the log still decodes, the evidence still reads as present, and an unasserted miss
+        stays green while nothing was ever audited.
         """
         self.assertTrue(classify._unwrap_command(command).startswith("python3 -c"))
         r = self._classify(command, patterns=[self.UNITTEST_PATTERN])
+        self.assertEqual(r["tool_calls"], 1)
         self.assertEqual([f for f in r["findings"]
-                          if f["class"] == contracts.UNENFORCED_DISALLOWED], [])
+                          if f["class"] == contracts.UNENFORCED_DISALLOWED], [],
+                         self.MISS_MSG)
+
+    # A miss going red is not automatically a regression. A deliberate widening of the audit that
+    # catches these shapes is grounds to DELETE the three tests below, never to revert the
+    # widening. An unexplained failure means the unwrap or the glob regressed, and
+    # `test_a_wrapped_literal_unittest_spelling_matches_a_manifest_pattern` is the one that must
+    # stay green either way. Read #54 before touching either side.
+    MISS_MSG = "a recorded T-65 bound changed; see #54 before reverting anything"
 
     def test_the_t65_load_tests_from_name_spelling_is_a_recorded_miss(self):
         """Pins a known bound, not desired blindness. T-65 ran the suite through
-        `python3 -c "import unittest; ...loadTestsFromName..."`, which is the same operation the
-        pattern names and a different spelling from the one it matches. The Brief instructs at the
-        operation level ("however this CLI spells it"); the audit matches at the spelling level.
-        A failure here means the matcher changed, so read #54 before touching either side."""
+        `python3 -c "import unittest; ...loadTestsFromName..."`, the same operation the pattern
+        names under a spelling it does not match. The Brief instructs at the operation level
+        ("however this CLI spells it"); the audit matches at the spelling level."""
         self._assert_evaded(self.T65_LOAD_TESTS_FROM_NAME)
 
     def test_the_t65_discover_spelling_is_a_recorded_miss(self):
-        """The second observed T-65 spelling, `...defaultTestLoader.discover('tests')`, chained
-        with `&&` the way the live log carries it. Same bound as the test above, same warning."""
+        """The second observed T-65 spelling, `...defaultTestLoader.discover('tests')`, kept whole
+        with the `&&` tail the live log carries. The split assertion is what makes that tail earn
+        its place: without it the tail is inert and the test would pass identically with
+        `_shell_parts` returning nothing."""
+        parts = classify._shell_parts(classify._unwrap_command(self.T65_DISCOVER))
+        self.assertIn("git log -1 --oneline", parts)
         self._assert_evaded(self.T65_DISCOVER)
+
+    def test_the_t65_two_payload_command_is_a_recorded_miss(self):
+        """Line 49, where one `&&` joins two escaped-quote `python3 -c` payloads. A different
+        split from the test above, and the shape a compound line takes when the separator sits
+        between payloads rather than after one."""
+        parts = classify._shell_parts(classify._unwrap_command(self.T65_BOTH_SPELLINGS))
+        self.assertTrue(any("loadTestsFromName" in p for p in parts))
+        self.assertTrue(any("discover" in p for p in parts))
+        self._assert_evaded(self.T65_BOTH_SPELLINGS)
+
+    def test_a_restriction_naming_a_tool_other_than_a_command_is_not_audited_at_all(self):
+        """The bound `run.UNENFORCED_BOUND` names third. The audit reads `input.command` and
+        skips a tool_use without one, and codex normalizes a file_change into an `Edit` whose
+        input carries only `file_path`. So a manifest may disallow an `Edit(...)` pattern, the
+        record will name it as unenforced, and nothing ever examines it. For that entry the
+        honest word is unaudited, not bounded by spelling, which is why the caveat says so."""
+        import json
+        import tempfile
+        event = {"type": "item.completed", "item": {
+            "id": "item_1", "type": "file_change",
+            "changes": [{"path": "src/secret.py", "kind": "update"}]}}
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+            handle.write(json.dumps(event) + "\n")
+            log_path = handle.name
+        try:
+            launch = SimpleNamespace(timed_out=False, exit_code=0, log_path=log_path)
+            r = classify.classify(
+                os.path.join(CODEX_FIXTURES, "last-message-complete.txt"), launch,
+                backend="codex", disallow_patterns=["Edit(src/**)"])
+        finally:
+            os.unlink(log_path)
+        self.assertEqual(r["tool_calls"], 1)
+        self.assertEqual([f for f in r["findings"]
+                          if f["class"] == contracts.UNENFORCED_DISALLOWED], [])
 
     def test_a_wrapped_kill_is_a_finding_on_the_unenforced_audit_path(self):
         """Round six #40's fix (kill/pkill/killall in DISALLOWED_TOOLS) reaches Codex the same

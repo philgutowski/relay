@@ -1597,7 +1597,11 @@ class UnenforcedRun(RunCase):
                           if f["class"] == contracts.UNENFORCED_DISALLOWED], [])
         scalar = record["unenforced_restrictions"]
         self.assertIn("git clean", scalar)
-        self.assertIn("no finding is not proof", scalar)
+        # Both halves of the claim, not just the conclusion. Pinning only the conclusion would
+        # let the sentences that say what was actually checked be dropped while the suite stays
+        # green, and those are what an operator acts on.
+        self.assertIn("matches command spellings", scalar)
+        self.assertIn("does not prove the operation was avoided", scalar)
         self.assertNotIn("\n", scalar)
 
     def test_a_destructive_call_refuses_the_landing(self):
