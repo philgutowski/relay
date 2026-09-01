@@ -265,6 +265,19 @@ BACKEND_PINS = {
         # to have cancelled anything. Reproduced five times: two full pipeline runs that died
         # partway through planning, and three single-command probes. `auto` is the mode that
         # runs the task AND still refuses a denied call, so it is the non-bypass posture here.
+        #
+        # Issue #57, observed round eight 2026-09-01 on tasks 45 and 56. Under `auto` mode a
+        # `run_terminal_command` whose argument uses command substitution or a heredoc -- the
+        # `git commit -m "$(cat <<'EOF' ... EOF)"` form the compound-engineering pipeline
+        # teaches -- is cancelled outright rather than executed or refused: the same "User
+        # cancelled the execution for tool `run_terminal_command`" phrasing above, with
+        # `stopReason: cancelled` on the stdout log. This is session-fatal, not a retryable
+        # denial: no retry, no return envelope, whatever the task had in flight is stranded.
+        # `classify.py` surfaces it as a `CANCELLED_TOOL_CALL` finding read off the stdout log;
+        # `commit_message_constraint` below tells the task to avoid the construct, since
+        # instruction is the only enforcement layer this backend has for it -- the demonstrated
+        # `--deny` refusal above never engages, because the matcher does not refuse a shape it
+        # cannot analyze, it cancels the call instead.
         "permission_mode": "auto",
         "forbidden_permission_modes": ("bypassPermissions", "dontAsk"),
         "output_format": ("--output-format", "streaming-json"),
