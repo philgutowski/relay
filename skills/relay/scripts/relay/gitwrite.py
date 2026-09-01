@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 from . import contracts, gitread
 
-TASK_BRANCH_PREFIX = "relay/"
+TASK_BRANCH_PREFIX = contracts.DEFAULT_TASK_BRANCH_PREFIX
 MERGE_MESSAGE = "Merge relay task {task_id} from {branch}"
 
 # `gh pr checks` exit codes, observed on the gh CLI: 0 every check passed, 8 checks still
@@ -333,12 +333,13 @@ def run_gate(repo, command, log_path, timeout_seconds=contracts.DEFAULT_GATE_TIM
 
 def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, gate_log_path,
                      ops=None, env=None, gate_timeout_seconds=None, still_ours=None,
-                     branch_prefix=None):
+                     branch=None):
     """The fixed local merge sequence of R50, from the task process's exit to a pushed default
     branch. Stops at the first refusal and names the halt class; every stop leaves the task
     branch in place so the operator can repair by hand and resume.
     """
-    branch = task_branch_for(task_id, branch_prefix)
+    if branch is None:
+        branch = task_branch_for(task_id, None)
     if gate_timeout_seconds is None:
         gate_timeout_seconds = contracts.DEFAULT_GATE_TIMEOUT_MINUTES * 60
 

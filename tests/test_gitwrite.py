@@ -256,7 +256,7 @@ class CustomPrefixTail(TailBase):
         commit_on_branch(self.repo, branch, {"src/feature.py": "value = 1\n"}, "task work",
                          base="main")
         _repo.git(self.repo, "checkout", "-q", "main")
-        result = self.run_tail(branch_prefix=prefix)
+        result = self.run_tail(branch=branch)
         self.assertTrue(result.ok, result.evidence)
         self.assertIn(gitread.rev_parse(self.repo, branch),
                       [line.split()[0] for line in

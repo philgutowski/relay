@@ -778,7 +778,7 @@ class CustomPrefixRetry(RunCase):
         record = {"baseline_sha": baseline}
         with self.assertRaises(runner._Halt) as raised:
             runner._clear_blocked_branch(store, self.manifest.tasks[0], self.repo, record, None,
-                                         prefix)
+                                         branch)
         self.assertIn(branch, str(raised.exception))
         self.assertNotIn("relay/T-1", str(raised.exception))
 

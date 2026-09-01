@@ -18,7 +18,7 @@ import subprocess
 import tomllib
 from dataclasses import dataclass, field
 
-from . import backends, contracts, gitread, gitwrite
+from . import backends, contracts, gitread
 
 ADAPTERS = ("jira", "github", "markdown")
 # The CLI a Task process runs on (R1). Every backend runs the identical pipeline through the
@@ -49,8 +49,8 @@ class Project:
     default_branch: str | None
     mirror: tuple
     # Optional. Concatenated with the Task id to name the Task branch. Absent key is
-    # gitwrite.TASK_BRANCH_PREFIX, recorded in defaults_applied. An explicit empty string is
-    # the Task id alone.
+    # contracts.DEFAULT_TASK_BRANCH_PREFIX, recorded in defaults_applied. An explicit empty
+    # string is the Task id alone.
     branch_prefix: str
 
 
@@ -217,7 +217,7 @@ def load(path):
         repo=os.path.expanduser(str(p.get("repo", ""))),
         default_branch=p.get("default_branch"),
         mirror=_tuple(p.get("mirror", [])),
-        branch_prefix=pick(p, "project", "branch_prefix", gitwrite.TASK_BRANCH_PREFIX),
+        branch_prefix=pick(p, "project", "branch_prefix", contracts.DEFAULT_TASK_BRANCH_PREFIX),
     )
     tracker = Tracker(
         adapter=t.get("adapter"),

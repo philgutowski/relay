@@ -321,12 +321,11 @@ def _one_task(cfg, task):
         return
     if status == contracts.STATUS_EXCLUDED and record.get("excluded_reason"):
         return
+    branch = gitwrite.task_branch_for(task.id, cfg.manifest.project.branch_prefix)
     if status == contracts.STATUS_BLOCKED:
         if not cfg.retry_blocked:
             return
-        _clear_blocked_branch(store, task, repo, record, env, cfg.manifest.project.branch_prefix)
-
-    branch = gitwrite.task_branch_for(task.id, cfg.manifest.project.branch_prefix)
+        _clear_blocked_branch(store, task, repo, record, env, branch)
 
     # Pre-flight (R16). A failure here is a halt: the repo is not in the state a task process
     # can start from, and no launch may happen until the operator has looked.
@@ -474,10 +473,9 @@ class _Context(_Run):
     findings: list = None
 
 
-def _clear_blocked_branch(store, task, repo, record, env, branch_prefix=None):
+def _clear_blocked_branch(store, task, repo, record, env, branch):
     """R48: `--retry-blocked` may delete a stranded branch only when it carries nothing past the
     baseline. Work that exists only on that branch is the operator's to keep or discard."""
-    branch = gitwrite.task_branch_for(task.id, branch_prefix)
     if not gitread.branch_exists(repo, branch):
         return
     baseline = record.get("baseline_sha")
@@ -554,7 +552,7 @@ def _merge_route(ctx):
             ctx.store.path("gate", ctx.task.id + ".log"), ops=ctx.store, env=ctx.env,
             gate_timeout_seconds=ctx.overrides.get("gate_seconds"),
             still_ours=lambda: not beat.lost,
-            branch_prefix=ctx.manifest.project.branch_prefix)
+            branch=ctx.branch)
     finally:
         beat.stop()
     if not tail.ok:
