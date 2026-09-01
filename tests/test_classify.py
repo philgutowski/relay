@@ -636,6 +636,69 @@ class UnenforcedAudit(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["pattern"], "Bash(git reset --hard*)")
 
+    # Round eight #54, from relay proof T-65. A manifest disallowed `Bash(python3 -m unittest*)`
+    # and a codex Task ran the suite anyway, by another spelling. The three tests below fix the
+    # boundary that run separated: the wrapper is unwrapped and the literal spelling is caught,
+    # and the two spellings T-65 actually used are not. The first command is CONSTRUCTED, not
+    # captured: none of the 24 command_execution items in `logs/T-65.stdout.log` spells
+    # `python3 -m unittest` at all, so the log can only pin the misses.
+    UNITTEST_PATTERN = "Bash(python3 -m unittest*)"
+
+    def test_a_wrapped_literal_unittest_spelling_matches_a_manifest_pattern(self):
+        """The control. A constructed literal spelling in the live `/bin/zsh -lc` wrapper shape,
+        proving the audit reaches through the wrapper codex puts on every command. The card for
+        #54 claimed no prefix pattern could ever match on codex; commit 06622f2 had already
+        widened `_SHELL_WRAP` to zsh and a glued `-lc`, and this is the pin for that claim."""
+        r = self._classify('/bin/zsh -lc "python3 -m unittest discover -s tests"',
+                           patterns=[self.UNITTEST_PATTERN])
+        hits = [f for f in r["findings"] if f["class"] == contracts.UNENFORCED_DISALLOWED]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["pattern"], self.UNITTEST_PATTERN)
+
+    # `logs/T-65.stdout.log` line 45, verbatim.
+    T65_LOAD_TESTS_FROM_NAME = (
+        '/bin/zsh -lc "python3 -c \\"import unittest; suite = unittest.defaultTestLoader.'
+        "loadTestsFromName('tests.test_stats.SquareTests'); result = unittest.TextTestRunner("
+        'verbosity=2).run(suite); raise SystemExit(not result.wasSuccessful())\\""'
+    )
+
+    # `logs/T-65.stdout.log` line 64, verbatim and whole. The trailing `&&` segments are kept on
+    # purpose: they sit outside the quoted `python3 -c` payload, so `_shell_parts` splits a real
+    # compound line here rather than a single command. The neighbouring solutions doc
+    # `shell-wrap-regex-missed-zsh-and-glued-lc-...` records an `&&` line passing for the wrong
+    # reason, so the separator belongs in the pin rather than being trimmed out of it.
+    T65_DISCOVER = (
+        '/bin/zsh -lc "python3 -c \\"import unittest; suite = unittest.defaultTestLoader.'
+        "discover('tests'); result = unittest.TextTestRunner(verbosity=2).run(suite); raise "
+        'SystemExit(not result.wasSuccessful())\\" && git status --short --branch && '
+        'git log -1 --oneline"'
+    )
+
+    def _assert_evaded(self, command):
+        """No finding, and the miss is the pattern's, not the unwrap's.
+
+        The second assertion is the load bearing one. Without it a broken unwrap and a bounded
+        pattern produce the same empty findings list, which is exactly the ambiguity #54 was
+        filed on.
+        """
+        self.assertTrue(classify._unwrap_command(command).startswith("python3 -c"))
+        r = self._classify(command, patterns=[self.UNITTEST_PATTERN])
+        self.assertEqual([f for f in r["findings"]
+                          if f["class"] == contracts.UNENFORCED_DISALLOWED], [])
+
+    def test_the_t65_load_tests_from_name_spelling_is_a_recorded_miss(self):
+        """Pins a known bound, not desired blindness. T-65 ran the suite through
+        `python3 -c "import unittest; ...loadTestsFromName..."`, which is the same operation the
+        pattern names and a different spelling from the one it matches. The Brief instructs at the
+        operation level ("however this CLI spells it"); the audit matches at the spelling level.
+        A failure here means the matcher changed, so read #54 before touching either side."""
+        self._assert_evaded(self.T65_LOAD_TESTS_FROM_NAME)
+
+    def test_the_t65_discover_spelling_is_a_recorded_miss(self):
+        """The second observed T-65 spelling, `...defaultTestLoader.discover('tests')`, chained
+        with `&&` the way the live log carries it. Same bound as the test above, same warning."""
+        self._assert_evaded(self.T65_DISCOVER)
+
     def test_a_wrapped_kill_is_a_finding_on_the_unenforced_audit_path(self):
         """Round six #40's fix (kill/pkill/killall in DISALLOWED_TOOLS) reaches Codex the same
         way every other entry does: through this audit, not only through scan_self_kill."""
