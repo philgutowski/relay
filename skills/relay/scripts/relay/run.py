@@ -287,14 +287,28 @@ def _continue_past(cfg, halt):
     return False
 
 
+# Round eight #54, from relay proof T-65. The Brief forbids these operations "however this CLI
+# spells it", and the audit after exit matches command spellings. T-65 ran a disallowed operation
+# by a spelling the pattern does not match, and the record said only that the operations went
+# unenforced, next to an empty findings list. Read together those two read as a clean run. The
+# caveat is one fixed sentence because the bound belongs to matching by spelling, not to any one
+# pattern, and it is appended after the list so the existing lead still reads the same.
+UNENFORCED_BOUND = (
+    " The Brief carried these to the process as instructions naming operations; the audit after "
+    "exit matched command spellings against the process's own tool calls, so no finding is not "
+    "proof the operation was avoided."
+)
+
+
 def _unenforced_scalar(manifest):
-    """A Cause-line-safe string naming the unenforced disallow patterns."""
+    """One plain single line string naming the unenforced disallow patterns and the bound on
+    what the audit that follows them can prove."""
     inners = []
     for pattern in manifest_module.resolved_disallowed(manifest):
         inner = contracts.disallow_inner(pattern)
         if inner not in inners:
             inners.append(inner)
-    return "disallowed tools not enforced at launch: " + ", ".join(inners)
+    return "disallowed tools not enforced at launch: " + ", ".join(inners) + UNENFORCED_BOUND
 
 
 def _destructive_finding(findings):

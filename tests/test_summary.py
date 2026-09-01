@@ -259,6 +259,22 @@ class CauseLineTable(unittest.TestCase):
         self.assertIn("T-1  landed  [landed]  (codex)", text)
         self.assertIn("T-2  landed  [landed]\n", text)
 
+    def test_the_unenforced_bound_reaches_the_summary_beside_an_empty_findings_list(self):
+        """Round eight #54. A landed codex Task with nothing to report is the shape an operator
+        misreads as proof of compliance, so the bound has to sit on the same entry as the empty
+        findings list. A backend that refuses a denied call itself records no scalar and the key
+        stays None rather than carrying a caveat that does not apply to it."""
+        self.store.upsert("T-1", status=contracts.STATUS_LANDED,
+                          halt_class=contracts.HALT_LANDED, backend="codex", findings=[],
+                          unenforced_restrictions="disallowed tools not enforced at launch: "
+                                                  "git clean*. Bounded by spelling.")
+        self.store.upsert("T-2", status=contracts.STATUS_LANDED,
+                          halt_class=contracts.HALT_LANDED, backend="claude", findings=[])
+        entries = self.summarise([("T-1", "codex"), ("T-2", "claude")])["tasks"]
+        self.assertEqual(entries[0]["findings"], [])
+        self.assertIn("Bounded by spelling.", entries[0]["unenforced_restrictions"])
+        self.assertIsNone(entries[1]["unenforced_restrictions"])
+
     def test_cause_line_keeps_a_backend_scalar_when_other_record_values_are_structured(self):
         original = contracts.HALT_LINES[contracts.HALT_UNEXPECTED_ERROR]
         contracts.HALT_LINES[contracts.HALT_UNEXPECTED_ERROR] = "{backend}: {error}"

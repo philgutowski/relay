@@ -89,6 +89,11 @@ def _task_entry(store, record):
         "wall_seconds": record.get("wall_seconds"),
         "active_seconds": record.get("active_seconds"),
         "verify_failed": failed,
+        # Round eight #54: beside `findings`, not as a Cause line. The empty findings list is
+        # what gets misread on a backend that enforces nothing at launch, and an operator who
+        # only reads the summary would otherwise never meet the bound run._unenforced_scalar
+        # records. None on a backend that refuses a denied call itself.
+        "unenforced_restrictions": record.get("unenforced_restrictions"),
         "findings": findings,
         "log_path": store.path("logs", "%s.stdout.log" % task_id) if task_id else None,
     }
