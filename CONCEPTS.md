@@ -75,7 +75,9 @@ backend differs from the manifest default. A Task that matches the default needs
 The single headless agent invocation that carries one Task from plan to landing. It starts with an
 empty context, knows nothing of any other Task, and its report of its own success is not evidence.
 It creates and stays on a branch named the Manifest's `project.branch_prefix` plus the Task id.
-The prefix defaults to `relay/` when the Manifest omits the key.
+The prefix defaults to `relay/` when the Manifest omits the key. An empty prefix is the Task id
+alone, which is not the same as omitting the key. Retry of a blocked Task looks at the branch
+name stored on that Task's record, so a later prefix edit cannot hide stranded commits.
 
 A Task process owns whatever it spawns. Subagents and gate commands run underneath it and can
 outlive it, so the Runner bounds the whole group rather than the one invocation, and a Task
