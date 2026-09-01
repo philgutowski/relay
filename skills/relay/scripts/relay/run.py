@@ -191,7 +191,8 @@ def run(manifest, adapter=None, store=None, home=None, base_env=None, stream=pri
             # explained the refusal was printed to stdout and never written down.
             store.upsert(halt.task_id, status=contracts.STATUS_HALTED,
                          halt_class=halt.halt_class, halt_evidence=halt.evidence,
-                         halt_message=halt.message, continued_past=continued)
+                         halt_message=halt.message, continued_past=continued,
+                         backend=task.backend)
             if continued:
                 if stream is not None:
                     stream("%s halted with class %s; continuing past it"
