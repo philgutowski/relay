@@ -267,11 +267,26 @@ class Jira(AdapterCase):
 
     def test_the_closeout_tools_are_explicit_and_carry_no_confluence_tool(self):
         tools = self.jira(self.opener()).closeout_allowed_tools()
-        self.assertIn("mcp__atlassian__transitionJiraIssue", tools)
-        self.assertIn("mcp__atlassian__addCommentToJiraIssue", tools)
+        self.assertEqual(tools, jira_adapter.CLOSEOUT_TOOLS)
+        self.assertEqual(tools, (
+            "mcp__atlassian__getJiraIssue",
+            "mcp__atlassian__getTransitionsForJiraIssue",
+            "mcp__atlassian__transitionJiraIssue",
+            "mcp__atlassian__addCommentToJiraIssue",
+        ))
+        self.assertNotIn("mcp__atlassian__getAccessibleAtlassianResources", tools)
         for tool in tools:
             self.assertNotIn("Confluence", tool)
             self.assertNotIn("*", tool)
+
+    def test_closeout_instructions_name_the_site_as_cloud_id(self):
+        adapter = self.jira(self.opener())
+        for outcome in ("landed", "blocked", "halted"):
+            text = adapter.closeout_instructions(outcome)
+            self.assertIn("example.atlassian.net", text, outcome)
+            self.assertIn("cloudId", text, outcome)
+            self.assertIn("getAccessibleAtlassianResources", text, outcome)
+            self.assertRegex(text, r"(?i)never call getAccessibleAtlassianResources")
 
 
 class GitHub(AdapterCase):
