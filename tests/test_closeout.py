@@ -15,6 +15,7 @@ import _paths
 import _repo
 from _fakes import FakeAdapter
 from relay import classify, closeout, contracts, launch, manifest as mf, run as runner, state
+from relay.adapters import jira as jira_adapter
 
 FIXTURE = os.path.join(_paths.FIXTURES_DIR, "manifests", "complete.toml")
 TRANSCRIPTS = os.path.join(_paths.FIXTURES_DIR, "transcripts")
@@ -101,6 +102,20 @@ class CloseoutCase(unittest.TestCase):
 
 
 class LandedBrief(CloseoutCase):
+    def test_a_jira_closeout_brief_carries_the_tracker_site(self):
+        text = self.toml.replace('adapter = "markdown"', 'adapter = "jira"')
+        text = text.replace('file = "tracker.md"',
+                            'site = "example.atlassian.net"\nproject_key = "IW"')
+        text = text.replace('done_statuses = ["done"]', 'done_statuses = ["Done", "Closed"]')
+        manifest = self.load(text, name="jira.toml")
+        adapter = jira_adapter.JiraAdapter(
+            manifest, opener=object(),
+            env={"JIRA_API_TOKEN": "t", "JIRA_EMAIL": "e@x.invalid"})
+        brief = closeout.render(manifest, CARD, "landed", digest_from("success.jsonl"),
+                                [], adapter, mf.completed_allowed_paths(manifest, "docs"),
+                                "claude", landing_ref=MERGE_SHA, branch="relay/T-1")
+        self.assertIn("example.atlassian.net", brief)
+
     def test_the_brief_carries_the_adapter_duty_and_the_landing_reference(self):
         text = self.render()
         self.assertIn("Transition the card to its terminal status", text)

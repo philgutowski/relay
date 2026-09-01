@@ -172,11 +172,15 @@ class JiraAdapter:
         return CLOSEOUT_TOOLS
 
     def closeout_instructions(self, outcome):
+        cloud = (" Pass %s as cloudId on every Atlassian call. Never call "
+                 "getAccessibleAtlassianResources." % self._site)
         if outcome == OUTCOME_LANDED:
             return ("Transition the card to its terminal status, then add one comment naming the "
-                    "landing reference below. Use the Jira tools on your allowlist and nothing else.")
+                    "landing reference below. Use the Jira tools on your allowlist and nothing else."
+                    + cloud)
         if outcome == OUTCOME_HALTED:
             return ("Add one comment naming the halt class and the cause line below. Do not "
-                    "transition the card: a halted task keeps its current status.")
+                    "transition the card: a halted task keeps its current status." + cloud)
         return ("Add one comment carrying the blocker digest below. Do not transition the card: a "
-                "blocked task keeps its current status so the board still shows it as open.")
+                "blocked task keeps its current status so the board still shows it as open."
+                + cloud)
