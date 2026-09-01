@@ -382,11 +382,12 @@ class OneBackendValueReachesEveryConsumer(CloseoutCase):
     third is the one that hides, because the digest's key set is identical whether the backend
     took effect or not, so this asserts on the calls rather than the digest."""
 
-    def go_spied(self, backend):
+    def go_spied(self, backend, task_model=None):
         seen = {}
 
         def fake_launch(manifest, task, text, log_path, timeout_seconds, **kwargs):
             seen["task_backend"] = task.backend
+            seen["task_model"] = task.model
             seen["brief"] = text
             return launch.LaunchResult(session_id="s1", exit_code=0,
                                        transcript_path="/nonexistent.jsonl", log_path=log_path)
@@ -400,7 +401,8 @@ class OneBackendValueReachesEveryConsumer(CloseoutCase):
              mock.patch.object(closeout.classify, "classify", fake_classify):
             closeout.run(self.manifest, CARD, "landed", digest_from("success.jsonl"), [],
                          self.adapter, self.store(), self.allowed_paths(),
-                         backend=backend, landing_ref=MERGE_SHA, branch="relay/T-1",
+                         backend=backend, task_model=task_model,
+                         landing_ref=MERGE_SHA, branch="relay/T-1",
                          timeout_seconds=30)
         return seen
 
@@ -420,6 +422,21 @@ class OneBackendValueReachesEveryConsumer(CloseoutCase):
         self.assertEqual(seen["classify_backend"], mf.DEFAULT_BACKEND)
         self.assertIn(COMPOUND_FORMS["claude"], seen["brief"])
 
+    def test_a_non_claude_closeout_runs_on_the_tasks_own_model(self):
+        """U14 live finding: codex refused the manifest closeout model `sonnet` with a 400 and
+        the Closeout died without a terminal line. The manifest closeout model is claude
+        vocabulary, so a non claude Closeout runs on the Task's model instead."""
+        for backend in COMPOUND_FORMS:
+            seen = self.go_spied(backend, task_model="task-chosen-model")
+            if backend == mf.DEFAULT_BACKEND:
+                self.assertEqual(seen["task_model"], self.manifest.closeout.model)
+            else:
+                self.assertEqual(seen["task_model"], "task-chosen-model")
+
+    def test_a_non_claude_closeout_without_a_task_model_keeps_the_manifest_model(self):
+        seen = self.go_spied("codex")
+        self.assertEqual(seen["task_model"], self.manifest.closeout.model)
+
     def test_run_requires_the_callers_backend(self):
         with self.assertRaises(TypeError):
             closeout.run(self.manifest, CARD, "landed", digest_from("success.jsonl"), [],
@@ -434,7 +451,7 @@ class RunLoopPassesTheTasksBackend(CloseoutCase):
         return SimpleNamespace(
             manifest=self.manifest,
             card=CARD,
-            task=SimpleNamespace(id="T-1", backend=backend),
+            task=SimpleNamespace(id="T-1", backend=backend, model="m1"),
             digest={"envelope": {}},
             adapter=self.adapter,
             store=mock.Mock(),
