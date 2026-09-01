@@ -36,8 +36,9 @@ python3 <runner> validate <manifest> --list     # the same, plus the tracker's c
 python3 <runner> run <manifest>                 # run to completion or to a halt
 python3 <runner> run <manifest> --retry-blocked # the same, retrying records that read blocked
 python3 <runner> run <manifest> --detach        # the same, in its own session, logged to the state dir
+python3 <runner> run <manifest> --detach --notify  # the same, notifying the desktop with nobody attached
 python3 <runner> run <manifest> --follow        # detach, then follow it here; implies --detach
-python3 <runner> status <manifest>              # what the run is doing; never takes the lease
+python3 <runner> status <manifest>              # what the run is doing and how much is left; never takes the lease
 python3 <runner> tail <manifest>                # follow the tasks' activity decoded; never takes the lease
 python3 <runner> summary <manifest>             # the run summary as text
 python3 <runner> summary <manifest> --json      # the same summary as data
@@ -50,6 +51,18 @@ python3 <runner> lease <manifest> --break       # clear it; operator's explicit 
 task activity, `--for <seconds>` stops following at a bound and leaves the run going, and
 `--notify` fires a macOS notification on each phase event. A phase event is a task's log starting,
 a task's status moving, or the run reaching a terminal record.
+
+`--notify` also works on `run` with no follower at all, including under a bare `--detach`, which is
+the case that matters for a launchd or cron launch. There the runner notifies on each task status
+move and once at the terminal record with the run's counts. Only the runner notifies for a run
+this command launched, so `--follow --notify` still fires each event once and keeps notifying
+after the `--for` bound ends the follower. A `tail --notify` you start separately against a run
+somebody else launched notifies from the follower as before.
+
+`status` answers two questions: where the run is, as the cursor plus a line per task, and how far
+along it is, as the landed, running, halted, and todo counts, the elapsed per task and in total,
+and a rough estimate of what is left drawn from the mean of the tasks that have landed. The
+estimate says it has none rather than guessing when no landed task carries a duration.
 
 Exit codes: 0 the run reached the end of the manifest, 1 the manifest or environment is wrong,
 2 the run halted, 3 another runner holds the lease. Under `on_halt.continue_past_task_halt`, 0
@@ -164,7 +177,10 @@ Mac display.
 
 `--phases` is what makes this usable in a session. Without it the follower prints every tool call
 every task makes, which is right in a terminal and would consume this session's context in
-minutes. `--notify` reaches the operator when they have walked away.
+minutes. `--notify` reaches the operator when they have walked away, and it is the runner that
+carries it, so the notifications continue for the whole run rather than stopping when the `--for`
+bound ends the follower. That is the point of the bound: this session lets go after nine minutes
+and the operator's desktop does not.
 
 Three endings, and what to say for each:
 

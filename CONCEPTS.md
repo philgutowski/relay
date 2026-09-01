@@ -22,6 +22,15 @@ The Runner holds no project knowledge of its own. Everything project-specific re
 Manifest data. It reads the Tracker but does not write to it, so a defect in the Runner can never
 move a card.
 
+A Runner reports two of the three Phase event moments when the operator asked for notifications:
+a Task's status moving, and the run reaching its terminal record, which it announces with the
+run's counts. A Task's log starting stays the Follower's alone, because only a Follower reads
+those files; the Runner's nearest equivalent is the same Task's move into running, which it
+writes immediately before it launches the process. Reporting is not participating, so a
+notification that fails, or one that hangs, may not change what the run decides: the Runner
+swallows what the notifier raises and bounds how long it may take, and the two together are what
+replaced keeping the Runner silent.
+
 A Runner is one process for the length of a Manifest, so the code it runs is the code it loaded
 when it started. Where Relay drives its own repository, a Task that lands a change to the Runner's
 own code does not change the Runner already running, and that run's own record is written by the
@@ -60,10 +69,14 @@ run's phase events. It takes no Lease, decides nothing, and writes nothing, so a
 started, stopped, and started again beside a live Runner without touching it.
 
 A Follower reports on a run rather than participating in one, so a run with no Follower is not
-diminished, only unobserved. It is also the only component that notifies, which means the same
-run halting with nobody following it announces itself to nobody. A Follower launched beside a run
-starts from a floor taken before that run began, because the state directory outlives any one run
-and its Task logs are appended to rather than replaced.
+diminished, only unobserved. A Follower launched beside a run starts from a floor taken before
+that run began, because the state directory outlives any one run and its Task logs are appended to
+rather than replaced.
+
+A Follower notifies only for a run somebody else started. One that launched its own run has
+already passed the request for notifications down to that Runner, which outlives it, so it prints
+its lines and stays quiet on the desktop. That is what keeps one phase event to one notification
+while still reaching an operator whose Follower ended at its own bound hours before the run did.
 
 ### Manifest
 The single file, one per project, carrying every project-specific fact a Runner needs: the Task
