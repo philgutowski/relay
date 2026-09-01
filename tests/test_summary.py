@@ -174,6 +174,11 @@ FINDING_ROWS = {
          "tool_use_line": 88},
         "classify.classify, the cancellation scan sibling to the denial scan",
     ),
+    contracts.BACKEND_REASSIGNED: (
+        {"from_backend": "grok", "from_model": "grok-4",
+         "to_backend": "claude", "to_model": "sonnet"},
+        "run._reassignment, when the manifest routes a relaunch away from the recorded backend",
+    ),
 }
 
 
@@ -263,6 +268,39 @@ class CauseLineTable(unittest.TestCase):
         text = summary.render(data)
         self.assertIn("T-1  landed  [landed]  (codex)", text)
         self.assertIn("T-2  landed  [landed]\n", text)
+
+    def test_the_task_head_names_the_model_beside_the_backend(self):
+        """Issue #58. The backend alone tells an operator which CLI ran, not which model, and
+        the model is the other half of a routing choice they can now edit. A record written
+        before `model` joined the fields carries no key, so the head stays as it was."""
+        self.store.upsert("T-1", status=contracts.STATUS_LANDED,
+                          halt_class=contracts.HALT_LANDED, backend="codex",
+                          model="gpt-5-codex", findings=[])
+        self.store.upsert("T-2", status=contracts.STATUS_LANDED,
+                          halt_class=contracts.HALT_LANDED, backend="claude", findings=[])
+        data = self.summarise([("T-1", "codex"), ("T-2", "claude")])
+        self.assertEqual([entry["model"] for entry in data["tasks"]], ["gpt-5-codex", None])
+        text = summary.render(data)
+        self.assertIn("T-1  landed  [landed]  (codex gpt-5-codex)", text)
+        self.assertIn("T-2  landed  [landed]  (claude)\n", text)
+
+    def test_a_reassignment_prints_as_a_finding_and_never_as_a_pending_check(self):
+        """A move the operator asked for is not a chore they owe, so it prints under the task's
+        findings and stays off the check by hand list, unlike the finding classes that block a
+        landing or leave a card unwritten."""
+        self.store.upsert("T-1", status=contracts.STATUS_LANDED,
+                          halt_class=contracts.HALT_LANDED, backend="codex",
+                          model="gpt-5-codex",
+                          findings=[{"class": contracts.BACKEND_REASSIGNED,
+                                     "from_backend": "grok", "from_model": "grok-4",
+                                     "to_backend": "codex", "to_model": "gpt-5-codex"}])
+        data = self.summarise([("T-1", "codex")])
+        text = summary.render(data)
+        self.assertIn("finding: relaunched on codex gpt-5-codex, previously grok grok-4", text)
+        self.assertEqual([check for check in data["pending_checks"]
+                          if check["kind"] == contracts.BACKEND_REASSIGNED], [])
+        self.assertNotIn("relaunched on", text.split("check by hand:")[-1]
+                         if "check by hand:" in text else "")
 
     def test_the_unenforced_bound_reaches_the_summary_beside_an_empty_findings_list(self):
         """Round eight #54. A landed codex Task with nothing to report is the shape an operator

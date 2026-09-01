@@ -81,6 +81,9 @@ def _task_entry(store, record):
         "cause": cause_line(record.get("halt_class"), record, landing, evidence),
         "halt_message": record.get("halt_message"),
         "backend": record.get("backend"),
+        # Issue #58. The other half of a routing choice the operator can edit between runs.
+        # `.get`, because a record written before the field joined RECORD_FIELDS has no key.
+        "model": record.get("model"),
         "landing_ref": record.get("landing_ref"),
         "branch": record.get("branch"),
         "closeout": record.get("closeout"),
@@ -209,7 +212,9 @@ def lines(data):
         if entry["class"]:
             head += "  [%s]" % entry["class"]
         if entry["backend"]:
-            head += "  (%s)" % entry["backend"]
+            # Both halves of the routing when the record carries both, the CLI alone when it
+            # does not. A record that never launched has neither and stays untagged.
+            head += "  (%s)" % " ".join(filter(None, (entry["backend"], entry["model"])))
         out.append((head, source + ".status"))
         if entry["cause"]:
             out.append(("    %s" % entry["cause"], source + ".cause"))
