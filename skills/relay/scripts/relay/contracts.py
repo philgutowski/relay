@@ -217,7 +217,10 @@ BACKEND_PINS = {
         # writable_roots, network_access, exclude_tmpdir_env_var, exclude_slash_tmp, and no host
         # allowlist: `-c 'sandbox_workspace_write.allowed_domains=["api.github.com"]'` is refused
         # with "unknown configuration field". So a codex Task reaches every host, not just the
-        # tracker, and run._unenforced_scalar says so on the record.
+        # tracker, holding whatever the child env carries, and run._unenforced_scalar says both
+        # halves on the record. It is also unconditional across tracker adapters: a markdown
+        # adapter run needs no network and gets the reach anyway, because gating the emit on the
+        # adapter would put a launch fact outside this table.
         "config_overrides": ("sandbox_workspace_write.network_access=true",),
         # Rides with the override rather than standing on its own. Without it, a key this CLI
         # does not recognize is accepted and ignored: the process runs, the sandbox stays fenced,

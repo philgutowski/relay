@@ -87,7 +87,7 @@ path outside the target repo, since Relay adds nothing to a project it runs agai
    commit scope only, and the evidence audit detects after the fact. Say in the same breath that
    a `codex` Task launches with its sandbox network on, granted so it can write to the tracker at
    all, and that the sandbox takes no host allowlist, so the reach is every host and not only the
-   tracker. Ask the operator to write
+   tracker, held with the operator's own `gh` login and its account scope. Ask the operator to write
    `permissions.unenforced_acceptance` in their own words, and to set `permissions.task_allowed_paths`.
    Write only what they supply. Never invent either sentence or list, including to make validate
    pass.

@@ -1617,6 +1617,9 @@ class UnenforcedRun(RunCase):
         scalar = self.store().get("T-1")["unenforced_restrictions"]
         self.assertIn("network", scalar)
         self.assertIn("not only the tracker", scalar)
+        # Host scope alone understates it. The reach is held with the operator's own account
+        # scoped credential, which is the half an acceptance sentence has to cover.
+        self.assertIn("gh login", scalar)
         # Still one line: summary.line_fields hoists this into the namespace cause_line formats
         # halt templates against.
         self.assertNotIn("\n", scalar)

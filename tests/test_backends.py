@@ -103,6 +103,17 @@ class CapabilityRecord(unittest.TestCase):
             self.assertFalse(backends.build(name).CAPABILITY.strict_config, name)
             self.assertFalse(backends.build(name).CAPABILITY.grants_network, name)
 
+    def test_no_backend_grants_network_while_enforcing_at_launch(self):
+        """`run._one_task` writes the `unenforced_restrictions` scalar only for a backend that
+        does not enforce at launch, and that scalar is where the network grant is disclosed. A
+        backend pinned to grant network while enforcing at launch would lose the disclosure with
+        nothing failing, so the two conditions are pinned together here rather than left to
+        agree by luck."""
+        for name in mf.BACKENDS:
+            cap = backends.build(name).CAPABILITY
+            if cap.grants_network:
+                self.assertFalse(cap.enforces_at_launch, name)
+
     def test_codex_allow_and_deny_flags_may_be_none(self):
         cap = backends.build("codex").CAPABILITY
         self.assertIsNone(cap.allow_flag)

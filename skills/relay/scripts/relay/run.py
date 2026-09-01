@@ -326,12 +326,16 @@ def _unenforced_scalar(manifest, capability):
     """One plain string naming the unenforced disallow patterns, the bound on what the audit that
     follows them can prove, and any sandbox network grant the backend launches with.
 
-    The network clause is written off the capability's own `grants_network`, not off
-    `enforces_at_launch`, so a backend that enforces nothing and reaches no network never
-    inherits a sentence that is false for it. It belongs on the record and not only in
-    `SKILL.md`, because the skill speaks when a manifest is authored: an operator running a
-    manifest written before the grant existed would otherwise never be told, and `validate` only
-    checks that `permissions.unenforced_acceptance` is non empty (issue #51).
+    The network clause is chosen off the capability's own `grants_network`, so a backend that
+    enforces nothing and reaches no network never inherits a sentence that is false for it. The
+    whole scalar is still written only for a backend that does not enforce at launch, because
+    that is what the record key means; `test_no_backend_grants_network_while_enforcing_at_launch`
+    is what keeps the two conditions from drifting apart into a silently lost disclosure.
+
+    It belongs on the record and not only in `SKILL.md`, because the skill speaks when a manifest
+    is authored: an operator running a manifest written before the grant existed would otherwise
+    never be told, and `validate` only checks that `permissions.unenforced_acceptance` is non
+    empty (issue #51).
 
     Single line, and the newline ban is not a style preference: `summary.line_fields` hoists
     every non-container record field into the namespace `cause_line` formats halt templates
@@ -346,7 +350,10 @@ def _unenforced_scalar(manifest, capability):
     if capability.grants_network:
         scalar += (" This Task also launches with its sandbox network turned on, so it reaches "
                    "every host and not only the tracker, because the sandbox takes no host "
-                   "allowlist.")
+                   "allowlist. It reaches them holding whatever credentials the child env "
+                   "carries, which for the github adapter is the operator's own gh login, scoped "
+                   "to their account rather than to this card, and no argv restriction narrows "
+                   "that.")
     return scalar
 
 
