@@ -100,12 +100,12 @@ def normalize_transcript(transcript_path, log_path=None):
             elif contracts.CANCELLED_TOOL_REGEX.search(body.strip()):
                 # Issue #57. Grok's own permission layer cancelled the call outright rather
                 # than refusing it (no user present in a headless run): "User cancelled the
-                # execution for tool `run_terminal_command`", captured verbatim in `body` and
-                # already the shape `contracts.CANCELLED_TOOL_REGEX` expects, so it is passed
-                # through rather than reconstructed the way the denial sentence above is.
-                # `.strip()` matches classify.py's own normalization before it re-matches the
-                # same regex, so the two sites agree by construction rather than by accident.
-                content = body
+                # execution for tool `run_terminal_command`". Reconstructed with the already-
+                # mapped `tool` (e.g. "Bash"), mirroring the denial sentence above, rather than
+                # passed through verbatim: if classify.py's own tool_uses lookup ever misses
+                # (the originating tool_call line absent from the parsed evidence), its fallback
+                # reads the display name this line already resolved, not grok's raw internal verb.
+                content = "User cancelled the execution for tool `%s`" % tool
             else:
                 continue
             lines.append((number, {

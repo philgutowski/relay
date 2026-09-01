@@ -903,7 +903,7 @@ class GrokEvidence(unittest.TestCase):
 
     def test_a_cancelled_tool_call_is_a_finding_not_a_silent_no_envelope(self):
         """Issue #57. `updates.jsonl` carries the cancellation verbatim, the same shape as a
-        denial (`status: "failed"`), distinguished only by the body text -- confirmed against
+        denial (`status: "failed"`), distinguished only by the body text. Confirmed against
         the real capture in task 45's own session file. Names the cancelled command instead of
         falling through to the generic no-envelope text."""
         r = run_grok_updates([

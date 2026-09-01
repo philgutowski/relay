@@ -96,7 +96,14 @@ DENIAL_REGEX = re.compile(r"^Permission to use (\w+)\b.*has been denied")
 # quoted verbatim in the grok BACKEND_PINS comment below. Distinct from DENIAL_REGEX above: no
 # "User" is present to have cancelled anything in a headless run, and the shape carries no
 # `has been denied` clause, so a shared regex would either miss this or misread a real denial.
-CANCELLED_TOOL_REGEX = re.compile(r"^User cancelled the execution for tool `?(\w+)`?")
+# Unanchored, unlike DENIAL_REGEX: DENIAL_REGEX only ever matches text grok.py reconstructs
+# itself at a known position, but this one matches Grok's own body text passed through verbatim,
+# and code review found no evidence the phrase always leads the body. Matched with `.search()`
+# at both call sites (this file's classify.py and backends/grok.py) rather than `.match()`, so a
+# future capture that puts other content first still fires this finding instead of silently
+# reverting to the pre-fix no_envelope/unclean_exit reading, the same way `_DENIAL_MARKER in
+# body` already tolerates surrounding text on the sibling denial path.
+CANCELLED_TOOL_REGEX = re.compile(r"User cancelled the execution for tool `?(\w+)`?")
 # Under dontAsk an Edit or Write on a path under .claude/ is denied regardless of the allowlist.
 CLAUDE_DIR_PATH_REGEX = re.compile(r"(^|/)\.claude/")
 # The pre-flight scan form from the solutions doc: catches the path inside prose, quotes,
@@ -271,21 +278,26 @@ BACKEND_PINS = {
         #
         # Issue #57, observed round eight 2026-09-01 on tasks 45 and 56, confirmed live against
         # grok 1.0.13 the same day. Under `auto` mode a `run_terminal_command` whose argument
-        # uses command substitution or a heredoc -- the `git commit -m "$(cat <<'EOF' ...
-        # EOF)"` form the compound-engineering pipeline teaches -- is cancelled outright rather
+        # uses command substitution or a heredoc, the `git commit -m "$(cat <<'EOF' ...
+        # EOF)"` form the compound-engineering pipeline teaches, is cancelled outright rather
         # than executed or refused: `updates.jsonl` carries the exact same shape as the
         # demonstrated `--deny` refusal above, a `tool_call_update` with `status: "failed"`, but
         # the body reads "User cancelled the execution for tool `run_terminal_command`" instead
-        # of a permission-policy denial. This is session-fatal, not a retryable denial: no
+        # of a permission-policy denial. This is session-fatal, not a retryable denial. No
         # retry, no return envelope, whatever the task had in flight is stranded.
         # `classify.py` surfaces it as a `CANCELLED_TOOL_CALL` finding, a sibling check beside
         # the denial scan on the same file; `commit_message_constraint` below tells the task to
         # avoid the construct, since instruction is the only enforcement layer this backend has
-        # for it -- the demonstrated `--deny` refusal above never engages, because the matcher
-        # does not refuse a shape it cannot analyze, it cancels the call instead. Not reliably
-        # reproducible from a single trivial `-p` probe outside a real multi-turn task; the
-        # live probe that confirmed the marker text and `status` value used the real capture
-        # from task 45's own session file rather than a fresh reproduction attempt.
+        # for it. The demonstrated `--deny` refusal above never engages here, because the
+        # matcher does not refuse a shape it cannot analyze, it cancels the call instead. Not
+        # reliably reproducible from a single trivial `-p` probe outside a real multi-turn task;
+        # the live probe that confirmed the marker text and `status` value used the real
+        # capture from task 45's own session file rather than a fresh reproduction attempt.
+        # Code review found the compound-engineering plugin's own `ce-commit-push-pr` skill
+        # (outside this repo) shows a worked commit example using this exact heredoc form. That
+        # path is unreachable under this manifest's `local_merge` shipping mode (`ce-work`'s
+        # return-to-caller mode never loads it), but would defeat this brief instruction outright
+        # if `pr_terminal` mode is ever enabled for a grok task; re-check before that switch.
         "permission_mode": "auto",
         "forbidden_permission_modes": ("bypassPermissions", "dontAsk"),
         "output_format": ("--output-format", "streaming-json"),

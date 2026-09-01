@@ -425,10 +425,10 @@ def classify(transcript_path, launch_result, write_tool_patterns=None, backend="
                     result["findings"].append(finding)
                     continue
                 # Issue #57: a cancelled tool call, sibling to the denial branch above. No
-                # promotion to HALT_PATH_GATE or HALT_TRACKER_WRITE_DENIED -- a cancelled call
+                # promotion to HALT_PATH_GATE or HALT_TRACKER_WRITE_DENIED. A cancelled call
                 # was never permitted to run, so it never touched a path to gate or a tracker
                 # write to flag.
-                cancelled = contracts.CANCELLED_TOOL_REGEX.match(body)
+                cancelled = contracts.CANCELLED_TOOL_REGEX.search(body)
                 if not (block.get("is_error") and cancelled):
                     continue
                 use = tool_uses.get(block.get("tool_use_id"), {})

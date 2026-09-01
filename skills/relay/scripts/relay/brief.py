@@ -149,9 +149,12 @@ def defang(text):
     for delimiter in (DATA_BEGIN, DATA_END):
         text = text.replace(delimiter, DELIMITER_REMOVED)
     sentences = (UNENFORCED_LEAD, UNENFORCED_OVERRIDE_REFUSAL, UNENFORCED_AUDIT)
-    grok_constraint = contracts.BACKEND_PINS["grok"]["commit_message_constraint"]
-    if grok_constraint:
-        sentences = sentences + (grok_constraint,)
+    # Every backend's commit_message_constraint, not just grok's: this scrubs whichever
+    # backends have a non-empty sentence without naming one by key, so a second backend
+    # gaining its own constraint is defanged automatically rather than needing an edit here.
+    sentences = sentences + tuple(
+        pins["commit_message_constraint"] for pins in contracts.BACKEND_PINS.values()
+        if pins["commit_message_constraint"])
     for sentence in sentences:
         text = text.replace(sentence, INSTRUCTION_REMOVED)
     return text
