@@ -35,7 +35,7 @@ one task's data could reach another task's brief.
 import os
 import string
 
-from . import adapters, backends, contracts, manifest as manifest_module, state
+from . import adapters, backends, contracts, gitwrite, manifest as manifest_module, state
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "templates")
 TEMPLATES = {
@@ -188,7 +188,7 @@ def values(manifest, task, card, branch=None, mode=None):
     skill-form rule holds up as its example, because the two templates run different first steps
     and an example the steps below never spell contradicts the rule's own sentence."""
     default_branch = manifest.project.default_branch or "the default branch"
-    branch = branch or ("relay/" + task.id)
+    branch = branch or gitwrite.task_branch_for(task.id, manifest.project.branch_prefix)
     tracker_steps = adapters.task_tracker_steps(manifest, branch)
     module = backends.build(task.backend)
     # Bound once: the rule sentence and the step that runs the skill have to name the same thing,

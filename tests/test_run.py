@@ -118,12 +118,17 @@ save(out)
 '''
 
 TASK_BRANCH_SH = """set -e
-git checkout -q -b relay/%s main
+git checkout -q -b %s main
 mkdir -p src
 echo "value = 1" > src/%s.py
 git add -A
 git commit -q -m "%s work"
 """
+
+
+def task_branch_sh(task_id, prefix="relay/"):
+    """The stub git.sh that creates the Task branch. First argument is the full name."""
+    return TASK_BRANCH_SH % (prefix + task_id, task_id.lower().replace("-", "_"), task_id)
 
 CLOSE_SH = """set -e
 git checkout -q main
@@ -194,10 +199,10 @@ class RunCase(unittest.TestCase):
                 handle.write(git_sh)
 
     def task_success(self, task_id):
-        self.queue_entry("success.jsonl", TASK_BRANCH_SH % (task_id, task_id.lower().replace("-", "_"), task_id))
+        self.queue_entry("success.jsonl", task_branch_sh(task_id, self.manifest.project.branch_prefix))
 
     def task_blocked(self, task_id):
-        self.queue_entry("blocked.jsonl", TASK_BRANCH_SH % (task_id, task_id.lower().replace("-", "_"), task_id))
+        self.queue_entry("blocked.jsonl", task_branch_sh(task_id, self.manifest.project.branch_prefix))
 
     def closeout_landed(self, task_id):
         self.queue_entry("closeout_skipped.jsonl", CLOSE_SH % (task_id, task_id))
@@ -452,7 +457,7 @@ class BlockedByPathGate(RunCase):
     def test_a_path_gate_exit_blocks_that_task_and_the_run_continues(self):
         self.task_success("T-1")
         self.closeout_landed("T-1")
-        self.queue_entry("path_gate.jsonl", TASK_BRANCH_SH % ("T-2", "t_2", "T-2"))
+        self.queue_entry("path_gate.jsonl", task_branch_sh("T-2"))
         self.closeout_blocked("T-2")
         self.task_success("T-3")
         self.closeout_landed("T-3")
@@ -520,7 +525,7 @@ class UnreadableEvidenceNeverRescues(RunCase):
     def test_a_task_that_left_no_transcript_is_a_runner_fault_and_its_branch_is_not_merged(self):
         """End to end: the class on the record is the runner fault one, and the commits the
         process did leave behind stay on the stranded branch."""
-        self.queue_entry(None, TASK_BRANCH_SH % ("T-1", "t_1", "T-1"))
+        self.queue_entry(None, task_branch_sh("T-1"))
         self.closeout_blocked("T-1")
         self.task_success("T-2")
         self.closeout_landed("T-2")
@@ -753,6 +758,29 @@ class RetryBlocked(RunCase):
         outcome = self.go(retry_blocked=True)
         self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
         self.assertIn("relay/T-2", outcome.message)
+
+
+class CustomPrefixRetry(RunCase):
+    def test_retry_refuses_commits_on_the_manifest_prefix_branch(self):
+        from test_gitwrite import commit_on_branch
+        with open(self.manifest_path) as handle:
+            text = handle.read().replace("mirror = []", 'mirror = []\nbranch_prefix = "IW-"')
+        with open(self.manifest_path, "w") as handle:
+            handle.write(text)
+        self.manifest = mf.load(self.manifest_path)
+        prefix = self.manifest.project.branch_prefix
+        task_id = "T-1"
+        branch = gitwrite.task_branch_for(task_id, prefix)
+        baseline = gitread.rev_parse(self.repo, "main")
+        commit_on_branch(self.repo, branch, {"src/t1.py": "x = 1\n"}, "work", base="main")
+        _repo.git(self.repo, "checkout", "-q", "main")
+        store = self.store()
+        record = {"baseline_sha": baseline}
+        with self.assertRaises(runner._Halt) as raised:
+            runner._clear_blocked_branch(store, self.manifest.tasks[0], self.repo, record, None,
+                                         prefix)
+        self.assertIn(branch, str(raised.exception))
+        self.assertNotIn("relay/T-1", str(raised.exception))
 
 
 if __name__ == "__main__":
@@ -1438,7 +1466,7 @@ class UnenforcedRun(RunCase):
         return path
 
     def queue_codex(self, command="/bin/zsh -lc 'pwd'", git_sh=None):
-        self.queue_entry(CODEX_LAST_MESSAGE, git_sh or TASK_BRANCH_SH % ("T-1", "t_1", "T-1"),
+        self.queue_entry(CODEX_LAST_MESSAGE, git_sh or task_branch_sh("T-1"),
                          stream=self.stream(command))
 
     def test_a_claude_task_is_unaffected_by_the_bound_and_the_audit(self):

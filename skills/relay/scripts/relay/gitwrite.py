@@ -8,9 +8,10 @@ call and one `result` entry after, so a crash between them is a named state rath
 mystery (R55, the plan's System-Wide Impact note).
 
 The tail is the part of the pipeline the task process does not own (KTD5). In local merge mode
-the task process exits on `relay/<task-id>`, and the runner then runs the project's gate on that
-branch head, merges to the default branch, and pushes. A gate refusal strands the branch instead
-of diverging the default branch, which is the whole reason the merge lives here.
+the task process exits on the Task branch (the Manifest prefix plus the Task id, default
+`relay/<task-id>`), and the runner then runs the project's gate on that branch head, merges to
+the default branch, and pushes. A gate refusal strands the branch instead of diverging the
+default branch, which is the whole reason the merge lives here.
 
 Nothing here writes to a tracker (R19), and nothing here decides whether a task landed. That
 verdict is verify.py, from git and the tracker alone.
@@ -57,8 +58,12 @@ def _kill_group(proc, grace_seconds):
     return True
 
 
-def task_branch_for(task_id):
-    return TASK_BRANCH_PREFIX + task_id
+def task_branch_for(task_id, prefix=None):
+    """Prefix plus Task id. `prefix is None` uses TASK_BRANCH_PREFIX. An empty string is the
+    Task id alone, not an omit."""
+    if prefix is None:
+        prefix = TASK_BRANCH_PREFIX
+    return prefix + task_id
 
 
 def _record(ops, task_id, op, phase, detail=None):
@@ -327,12 +332,13 @@ def run_gate(repo, command, log_path, timeout_seconds=contracts.DEFAULT_GATE_TIM
 # The tail.
 
 def local_merge_tail(repo, task_id, default_branch, baseline_sha, gate_command, gate_log_path,
-                     ops=None, env=None, gate_timeout_seconds=None, still_ours=None):
+                     ops=None, env=None, gate_timeout_seconds=None, still_ours=None,
+                     branch_prefix=None):
     """The fixed local merge sequence of R50, from the task process's exit to a pushed default
     branch. Stops at the first refusal and names the halt class; every stop leaves the task
     branch in place so the operator can repair by hand and resume.
     """
-    branch = task_branch_for(task_id)
+    branch = task_branch_for(task_id, branch_prefix)
     if gate_timeout_seconds is None:
         gate_timeout_seconds = contracts.DEFAULT_GATE_TIMEOUT_MINUTES * 60
 

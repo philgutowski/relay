@@ -61,6 +61,29 @@ class TailBase(unittest.TestCase):
         )
 
 
+class TaskBranchName(unittest.TestCase):
+    def test_the_default_prefix_is_relay_slash(self):
+        self.assertEqual(gitwrite.task_branch_for("55"), "relay/55")
+
+    def test_an_override_prefix_is_concatenated(self):
+        self.assertEqual(gitwrite.task_branch_for("55", "IW-"), "IW-55")
+
+    def test_an_empty_prefix_is_the_task_id_alone(self):
+        self.assertEqual(gitwrite.task_branch_for("55", ""), "55")
+
+    def test_production_namer_calls_pass_a_prefix(self):
+        import re
+        pack = os.path.join(_paths.SCRIPTS_DIR, "relay")
+        one_arg = re.compile(r"task_branch_for\(([^,\n]+)\)")
+        hits = []
+        for name in ("run.py", "verify.py", "gitwrite.py"):
+            with open(os.path.join(pack, name), encoding="utf-8") as handle:
+                text = handle.read()
+            for match in one_arg.finditer(text):
+                hits.append("%s: %s" % (name, match.group(0)))
+        self.assertEqual(hits, [], hits)
+
+
 class PassingTail(TailBase):
     def test_merge_and_push_land_the_commit_on_the_remote_default(self):
         head = self.make_task_commit()
@@ -224,6 +247,21 @@ class PreFlight(TailBase):
         commit_on_branch(self.repo, "main", {"ahead.txt": "unpushed\n"}, "unpushed work")
         result = gitwrite.preflight(self.repo, "main", self.branch)
         self.assertEqual(result.failed, "head_equals_remote")
+
+
+class CustomPrefixTail(TailBase):
+    def test_local_merge_tail_merges_the_prefixed_branch_not_relay_slash(self):
+        prefix = "IW-"
+        branch = gitwrite.task_branch_for(self.task_id, prefix)
+        commit_on_branch(self.repo, branch, {"src/feature.py": "value = 1\n"}, "task work",
+                         base="main")
+        _repo.git(self.repo, "checkout", "-q", "main")
+        result = self.run_tail(branch_prefix=prefix)
+        self.assertTrue(result.ok, result.evidence)
+        self.assertIn(gitread.rev_parse(self.repo, branch),
+                      [line.split()[0] for line in
+                       _repo.git(self.repo, "log", "--format=%H", "origin/main").stdout.split()])
+        self.assertFalse(gitread.branch_exists(self.repo, gitwrite.task_branch_for(self.task_id)))
 
 
 class BlockedAndTimeout(TailBase):
