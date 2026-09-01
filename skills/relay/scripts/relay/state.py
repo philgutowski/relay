@@ -33,7 +33,7 @@ RECORD_FIELDS = (
     "status", "baseline_sha", "baseline_tracker_status", "baseline_comment_id", "session_id",
     "branch", "landing_ref", "verify", "halt_class", "halt_evidence", "findings", "closeout",
     "started_at", "ended_at", "wall_seconds", "active_seconds", "transcript_path", "brief_sha256",
-    "excluded_reason", "continued_past", "backend", "binary_path", "args",
+    "excluded_reason", "continued_past", "backend", "model", "binary_path", "args",
 )
 
 
@@ -153,10 +153,11 @@ class StateStore:
                 terminal.get("cli_version_observed"))
         if state.get("schema_version", 0) < contracts.STATE_SCHEMA_VERSION:
             # Before pluggable backends every task was Claude, so for a genuinely legacy file
-            # this is evidence, not a guess, and it keeps a resumed task on the CLI that
-            # produced its first run. A current schema record with no backend is different: it
-            # halted before anything launched, and backfilling claude onto it made run.py's
-            # record wins rule swap a resumed grok task onto claude (U14, T-35).
+            # this is evidence, not a guess: that task really did run on claude. A current
+            # schema record with no backend is different. It halted before anything launched,
+            # so there is no attempt for a backend to be evidence of, and filling one in would
+            # put a CLI on the summary that never ran and report a reassignment away from it on
+            # the next relaunch. Found as U14, T-35, when the fill reached that case too.
             for record in (state.get("tasks") or {}).values():
                 if isinstance(record, dict) and not record.get("backend"):
                     record["backend"] = "claude"
