@@ -61,11 +61,13 @@ list rather than the exit code alone.
 Start from what the tracker already holds rather than from a blank file. Write the manifest to a
 path outside the target repo, since Relay adds nothing to a project it runs against.
 
-1. Ask which repo and which tracker (jira, github, or markdown), then write a draft manifest and
-   run `validate <manifest> --list` to read the candidate tasks back. Ask whether this repo names
-   Task branches as a prefix plus the Task id. The default is `relay/`. Write
-   `project.branch_prefix` only when the operator names a different prefix. An empty string is
-   the Task id alone.
+1. Ask which repo and which tracker (jira, github, or markdown). Ask for the Task branch prefix,
+   default `relay/`. An empty string is the Task id alone. When the tracker is jira, Task ids
+   already look like `ABC-12`, so empty is the usual escape. Write `project.branch_prefix` only
+   when the operator names a value other than the default. Point at the commented
+   `branch_prefix` lines under `[project]` in `docs/examples/` rather than inventing a new table.
+   Then write a draft manifest and run `validate <manifest> --list` to read the candidate tasks
+   back.
 2. Confirm with the operator, one question at a time: which tasks to include and in what order;
    the model, effort, and backend for each; any task to exclude and why; and the three degraded path
    answers, `on_blocked.merge_partial`, `on_blocked.open_followup`, and
@@ -127,7 +129,8 @@ See Backend readiness below.
 
 Launching starts an unattended process that will merge and push to the operator's repository.
 After validate passes, show the manifest path, the task list with model, effort, and backend,
-and the gate command, then ask for an explicit go. Do not launch on the strength of the manifest being
+the gate command, and `project.branch_prefix` (name the default when the key was omitted) with
+one example branch, prefix plus the first Task id, then ask for an explicit go. Do not launch on the strength of the manifest being
 valid, and do not launch when the operator has said to stop before launch.
 
 ## Launch

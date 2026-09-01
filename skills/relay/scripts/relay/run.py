@@ -325,7 +325,9 @@ def _one_task(cfg, task):
     if status == contracts.STATUS_BLOCKED:
         if not cfg.retry_blocked:
             return
-        _clear_blocked_branch(store, task, repo, record, env, branch)
+        # Prefer the name recorded when the task blocked. A later prefix edit must not hide
+        # a stranded branch that still carries commits.
+        _clear_blocked_branch(store, task, repo, record, env, record.get("branch") or branch)
 
     # Pre-flight (R16). A failure here is a halt: the repo is not in the state a task process
     # can start from, and no launch may happen until the operator has looked.

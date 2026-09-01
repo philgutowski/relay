@@ -55,6 +55,7 @@ class TailBase(unittest.TestCase):
         )
 
     def run_tail(self, gate=("true",), **kwargs):
+        kwargs.setdefault("branch", self.branch)
         return gitwrite.local_merge_tail(
             self.repo, self.task_id, "main", self.baseline, list(gate), self.gate_log,
             ops=self.ops, **kwargs
@@ -261,6 +262,16 @@ class CustomPrefixTail(TailBase):
         self.assertIn(gitread.rev_parse(self.repo, branch),
                       [line.split()[0] for line in
                        _repo.git(self.repo, "log", "--format=%H", "origin/main").stdout.split()])
+        self.assertFalse(gitread.branch_exists(self.repo, gitwrite.task_branch_for(self.task_id)))
+
+    def test_local_merge_tail_merges_an_empty_prefix_branch(self):
+        prefix = ""
+        branch = gitwrite.task_branch_for(self.task_id, prefix)
+        commit_on_branch(self.repo, branch, {"src/feature.py": "value = 1\n"}, "task work",
+                         base="main")
+        _repo.git(self.repo, "checkout", "-q", "main")
+        result = self.run_tail(branch=branch)
+        self.assertTrue(result.ok, result.evidence)
         self.assertFalse(gitread.branch_exists(self.repo, gitwrite.task_branch_for(self.task_id)))
 
 

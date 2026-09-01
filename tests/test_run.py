@@ -760,6 +760,70 @@ class RetryBlocked(RunCase):
         self.assertIn("relay/T-2", outcome.message)
 
 
+class CustomPrefixEndToEnd(RunCase):
+    def set_prefix(self, prefix):
+        with open(self.manifest_path) as handle:
+            text = handle.read()
+        value = '""' if prefix == "" else '"%s"' % prefix
+        lines = []
+        replaced = False
+        for line in text.splitlines(True):
+            if line.startswith("branch_prefix ="):
+                lines.append("branch_prefix = %s\n" % value)
+                replaced = True
+            else:
+                lines.append(line)
+        text = "".join(lines)
+        if not replaced:
+            text = text.replace("mirror = []", "mirror = []\nbranch_prefix = %s" % value)
+        with open(self.manifest_path, "w") as handle:
+            handle.write(text)
+        self.manifest = mf.load(self.manifest_path)
+
+    def test_a_custom_prefix_lands_and_strands_without_relay_slash(self):
+        self.set_prefix("IW-")
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_blocked("T-2")
+        self.closeout_blocked("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+        outcome = self.go()
+        self.assertEqual(outcome.exit_code, runner.EXIT_OK, outcome.message)
+        self.assertFalse(gitread.branch_exists(self.repo, "relay/T-1"))
+        self.assertFalse(gitread.branch_exists(self.repo, "relay/T-2"))
+        self.assertTrue(gitread.branch_exists(self.repo, "IW-T-2"))
+        self.assertEqual(self.store().get("T-2")["branch"], "IW-T-2")
+
+    def test_retry_blocked_names_the_recorded_prefix_branch(self):
+        self.set_prefix("IW-")
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_blocked("T-2")
+        self.closeout_blocked("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+        self.go()
+        outcome = self.go(retry_blocked=True)
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
+        self.assertIn("IW-T-2", outcome.message)
+        self.assertNotIn("relay/T-2", outcome.message)
+
+    def test_retry_still_sees_a_stranded_branch_after_a_prefix_edit(self):
+        self.set_prefix("IW-")
+        self.task_success("T-1")
+        self.closeout_landed("T-1")
+        self.task_blocked("T-2")
+        self.closeout_blocked("T-2")
+        self.task_success("T-3")
+        self.closeout_landed("T-3")
+        self.go()
+        self.set_prefix("other/")
+        outcome = self.go(retry_blocked=True)
+        self.assertEqual(outcome.exit_code, runner.EXIT_HALTED)
+        self.assertIn("IW-T-2", outcome.message)
+
+
 class CustomPrefixRetry(RunCase):
     def test_retry_refuses_commits_on_the_manifest_prefix_branch(self):
         from test_gitwrite import commit_on_branch
@@ -878,7 +942,8 @@ class LeaseOwnership(RunCase):
         _repo.git(self.repo, "checkout", "-q", "main")
         result = gw.local_merge_tail(
             self.repo, "T-1", "main", gitread.rev_parse(self.repo, "origin/main"),
-            ["true"], os.path.join(self.tmp.name, "gate.log"), still_ours=lambda: False)
+            ["true"], os.path.join(self.tmp.name, "gate.log"), still_ours=lambda: False,
+            branch=gitwrite.task_branch_for("T-1"))
         self.assertFalse(result.ok)
         self.assertEqual(result.halt_class, contracts.HALT_RUNNER_CRASHED)
         self.assertEqual(gitread.rev_parse(self.repo, "origin/main"),
