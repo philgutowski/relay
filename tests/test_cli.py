@@ -33,6 +33,35 @@ def resolve(data, source):
 
 
 class CliCase(RunCase):
+    def setUp(self):
+        super().setUp()
+        self._spawned = []
+        real_popen = cli.subprocess.Popen
+
+        def tracking_popen(*args, **kwargs):
+            proc = real_popen(*args, **kwargs)
+            self._spawned.append(proc)
+            return proc
+
+        self._real_popen = real_popen
+        cli.subprocess.Popen = tracking_popen
+
+    def tearDown(self):
+        """`run --detach`/`--follow` spawn a real child through `cli._detach` (skills/relay/
+        scripts/relay/cli.py) that production code deliberately never waits on: a detached run is
+        meant to outlive the CLI call that launched it. That leaves the Popen object's returncode
+        unset, so Python warns `ResourceWarning: subprocess N is still running` once it is
+        collected. Every case reaches a terminal state (directly, via `--follow`, or via
+        `wait_for_terminal()`) before its test method returns, so the child is already done or
+        finishing by here; reap it so the wrapper object is not left dangling."""
+        cli.subprocess.Popen = self._real_popen
+        try:
+            for proc in self._spawned:
+                if proc.poll() is None:
+                    proc.wait(timeout=30)
+        finally:
+            super().tearDown()
+
     def call(self, *argv):
         out = io.StringIO()
         code = cli.main(list(argv), env=self.base_env(), out=out)
