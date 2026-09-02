@@ -55,10 +55,12 @@ class CliCase(RunCase):
         `wait_for_terminal()`) before its test method returns, so the child is already done or
         finishing by here; reap it so the wrapper object is not left dangling."""
         cli.subprocess.Popen = self._real_popen
-        for proc in self._spawned:
-            if proc.poll() is None:
-                proc.wait(timeout=30)
-        super().tearDown()
+        try:
+            for proc in self._spawned:
+                if proc.poll() is None:
+                    proc.wait(timeout=30)
+        finally:
+            super().tearDown()
 
     def call(self, *argv):
         out = io.StringIO()

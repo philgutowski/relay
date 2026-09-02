@@ -24,7 +24,7 @@ find the test and clean it up.`
 Confirmed with `python3 -X tracemalloc=25 -m unittest discover -s tests`, which prints the
 allocation traceback for every warning. Every single warning traces back to the same allocation
 site: `skills/relay/scripts/relay/cli.py:211`, the `subprocess.Popen(...)` call inside
-`_detach()`, reached through `tests/test_cli.py:38` — the `CliCase.call()` helper that every
+`_detach()`, reached through `tests/test_cli.py:38`, the `CliCase.call()` helper that every
 `--detach`/`--follow` case in that file uses to invoke `cli.main(...)`.
 
 `_detach()` deliberately does not join the process: a real `relay run --detach` is meant to
@@ -49,7 +49,7 @@ touching `cli.py`.
 **In scope:** `tests/test_cli.py`'s `CliCase` base class, which every `--detach`/`--follow` case
 in that file inherits from.
 
-**Out of scope:** `skills/relay/scripts/relay/cli.py` (`_detach`/`_follow` stay as they are —
+**Out of scope:** `skills/relay/scripts/relay/cli.py` (`_detach`/`_follow` stay as they are;
 their job is genuinely to leave a process running past the caller's return). No other test file
 showed up in the tracemalloc allocation traces, so no other file needs a change.
 
@@ -92,17 +92,17 @@ class CliCase(RunCase):
 
 `WhoNotifies.detach_argv()` saves `original = cli.subprocess.Popen` (which will be
 `tracking_popen` once this lands), installs its own `fake`, and restores `original` in a
-`finally` — that still leaves `tracking_popen` active afterward, and `fake`'s real branch
+`finally`, that still leaves `tracking_popen` active afterward, and `fake`'s real branch
 (`return original(command, **kwargs)`) calls through `tracking_popen`, so those processes get
 recorded too. No change needed there.
 
 ## Files
 
-- `tests/test_cli.py` — add `setUp`/`tearDown` to `CliCase` (around line 35-39).
+- `tests/test_cli.py`, add `setUp`/`tearDown` to `CliCase` (around line 35-39).
 
 ## Test Scenarios
 
-No new test is warranted for a test-harness cleanup with no behavior change — there is no
+No new test is warranted for a test-harness cleanup with no behavior change. There is no
 observable outcome to assert beyond "the suite no longer warns." Verification is the gate itself:
 
 1. Run the full suite (`python3 -m unittest discover -s tests`) and confirm it still passes with
