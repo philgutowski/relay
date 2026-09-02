@@ -198,9 +198,10 @@ session transcript plus git and Tracker evidence. Every class carries the eviden
 needs, so an operator learns why a Task did not land without reading a transcript.
 
 Because a class is decided from what the exit left behind, the set can only name causes the
-evidence records. A cause lying outside the Task process, such as the account's model allowance
-running out mid run, leaves the same absence as a crash and is classified as one, so the Cause
-line reads as though the Task misbehaved. The set is closed deliberately, so the answer to such a
+evidence records. A cause lying outside the Task process leaves the same evidence as a Task fault
+and is classified as one, so the Cause line reads as though the Task misbehaved: the account's
+model allowance running out mid run reads as a crash, and another session writing an untracked
+file into the working tree reads as the Task leaving the tree dirty. The set is closed deliberately, so the answer to such a
 cause is a finding attached to the record, or a check made before the run starts, rather than a
 new class.
 
